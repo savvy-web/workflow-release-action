@@ -1,0 +1,74 @@
+name: Release Action Setup
+description: Sets up the environment for release workflows including app token generation, checkout, and Node.js setup
+
+inputs:
+  app-id:
+    description: GitHub App ID for authentication
+    required: true
+  app-private-key:
+    description: GitHub App private key for authentication
+    required: true
+  node-version:
+    description: Node.js version to use
+    required: false
+    default: ""
+  package-manager:
+    description: Package manager to use (npm, pnpm, yarn, bun)
+    required: false
+    default: pnpm
+  turbo-token:
+    description: Turbo cache token
+    required: false
+    default: ""
+  turbo-team:
+    description: Turbo team name
+    required: false
+    default: ""
+
+outputs:
+  token:
+    description: Generated GitHub App token
+    value: ${{ steps.app-token.outputs.token }}
+  is-single-private-package:
+    description: Whether this is a single-package private repo (requires manual tag creation)
+    value: ${{ steps.detect-repo-type.outputs.is-single-private-package }}
+  package-manager:
+    description: Detected package manager name (npm, pnpm, yarn, bun)
+    value: ${{ steps.detect-repo-type.outputs.package-manager }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate GitHub App token
+      id: app-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        # Permissions for release workflows
+        permission-actions: write
+        permission-contents: write
+        permission-pull-requests: write
+        permission-issues: write
+
+    - name: Checkout Repo
+      uses: actions/checkout@v5
+      with:
+        # Use the generated token for subsequent git operations
+        token: ${{ steps.app-token.outputs.token }}
+        # Fetch tags so we can check if version tags already exist
+        fetch-tags: true
+
+    - name: Setup Node
+      uses: savvy-web/workflow-release-action/.github/actions/node@main
+      with:
+        turbo_token: ${{ inputs.turbo-token }}
+        turbo_team: ${{ inputs.turbo-team }}
+
+    - name: Detect repository type
+      id: detect-repo-type
+      uses: actions/github-script@v8
+      with:
+        script: |
+          const { default: detectRepoType } = await import('${{ github.action_path }}/.github/actions/setup-release/detect-repo-type.ts');
+          await detectRepoType({ core, exec });
