@@ -2,7 +2,7 @@
 
 A GitHub Action that sets up the environment for release workflows including app token generation, checkout, and Node.js setup.
 
-## Usage
+## Quick Start
 
 ```yaml
 steps:
@@ -14,6 +14,8 @@ steps:
       app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
       package-manager: pnpm
 ```
+
+📚 **For more examples, see [EXAMPLES.md](EXAMPLES.md)**
 
 ## Inputs
 
