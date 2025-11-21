@@ -41,7 +41,7 @@
 		"@octokit/core": "^5.0.1",
 		"@octokit/types": "^16.0.0",
 		"@types/node": "^24.10.1",
-		"@typescript/native-preview": "7.0.0-dev.20251111.1",
+		"@typescript/native-preview": "7.0.0-dev.20251120.1",
 		"@vitest/coverage-v8": "^4.0.10",
 		"husky": "^9.1.7",
 		"lint-staged": "^16.2.6",
