@@ -70,5 +70,6 @@ runs:
       uses: actions/github-script@v8
       with:
         script: |
+          const workspaceTools = await import('workspace-tools');
           const { default: detectRepoType } = await import('${{ github.action_path }}/.github/actions/setup-release/detect-repo-type.ts');
-          await detectRepoType({ core, exec });
+          await detectRepoType({ core, workspaceTools });
