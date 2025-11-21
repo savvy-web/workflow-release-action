@@ -1,0 +1,92 @@
+[
+	{
+		"name": "ai",
+		"description": "AI/ML related features or improvements",
+		"color": "7057ff"
+	},
+	{
+		"name": "automated",
+		"description": "Automated changes (bots, scripts, CI)",
+		"color": "0075ca"
+	},
+	{
+		"name": "bug",
+		"description": "Something isn't working",
+		"color": "d73a4a"
+	},
+	{
+		"name": "breaking",
+		"description": "Introduces breaking changes",
+		"color": "b60205"
+	},
+	{
+		"name": "ci",
+		"description": "Continuous integration and deployment",
+		"color": "0e8a16"
+	},
+	{
+		"name": "dependencies",
+		"description": "Dependency updates",
+		"color": "0366d6"
+	},
+	{
+		"name": "docs",
+		"description": "Documentation improvements",
+		"color": "0075ca"
+	},
+	{
+		"name": "duplicate",
+		"description": "Duplicate of another issue or PR",
+		"color": "cfd3d7"
+	},
+	{
+		"name": "enhancement",
+		"description": "New feature or request",
+		"color": "a2eeef"
+	},
+	{
+		"name": "good first issue",
+		"description": "Good for newcomers",
+		"color": "7057ff"
+	},
+	{
+		"name": "help wanted",
+		"description": "Extra attention is needed",
+		"color": "008672"
+	},
+	{
+		"name": "invalid",
+		"description": "This doesn't seem right",
+		"color": "e4e669"
+	},
+	{
+		"name": "performance",
+		"description": "Performance improvements",
+		"color": "fbca04"
+	},
+	{
+		"name": "question",
+		"description": "Further information is requested",
+		"color": "d876e3"
+	},
+	{
+		"name": "refactor",
+		"description": "Code refactoring",
+		"color": "0366d6"
+	},
+	{
+		"name": "security",
+		"description": "Security-related changes",
+		"color": "d73a4a"
+	},
+	{
+		"name": "test",
+		"description": "Testing improvements",
+		"color": "0075ca"
+	},
+	{
+		"name": "wontfix",
+		"description": "This will not be worked on",
+		"color": "ffffff"
+	}
+]

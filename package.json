@@ -1,0 +1,60 @@
+{
+	"name": "@savvy-web/workflow-release-action",
+	"version": "0.0.0",
+	"private": true,
+	"description": "A private repository for GitHub-related tools and utilities.",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/savvy-web/workflow-release-action.git"
+	},
+	"type": "module",
+	"scripts": {
+		"ci:publish": "changeset publish",
+		"ci:test": "echo 'all tests passed!'",
+		"ci:version": "changeset version && biome format --write .",
+		"lint": "biome check --max-diagnostics=none",
+		"lint:fix": "biome check --write --max-diagnostics=none",
+		"lint:fix:unsafe": "biome check --write --unsafe --max-diagnostics=none",
+		"lint:md": "markdownlint-cli2 '**/*.{md,mdx}' '!**/node_modules' '!**/dist' --config .markdownlint.json",
+		"lint:md:fix": "markdownlint-cli2 '**/*.{md,mdx}' '!**/node_modules' '!**/dist' --config .markdownlint.json --fix",
+		"lint:md:fix:file": "markdownlint-cli2 '**/*.{md,mdx}' '!**/node_modules' '!**/dist' --config .markdownlint.json --fix",
+		"prepare": "husky",
+		"test": "vitest --run --reporter=verbose",
+		"typecheck": "turbo run typecheck:all --log-prefix=none",
+		"typecheck:all": "tsgo --noEmit"
+	},
+	"dependencies": {
+		"jsonc-parser": "^3.3.1",
+		"workspace-tools": "0.38.6"
+	},
+	"devDependencies": {
+		"@actions/core": "^1.10.1",
+		"@actions/exec": "^1.1.1",
+		"@actions/github": "^6.0.0",
+		"@actions/glob": "^0.4.0",
+		"@actions/io": "^1.1.3",
+		"@anthropic-ai/sdk": "^0.70.1",
+		"@biomejs/biome": "2.3.6",
+		"@changesets/cli": "^2.29.7",
+		"@commitlint/cli": "^20.1.0",
+		"@commitlint/config-conventional": "^20.0.0",
+		"@octokit/core": "^5.0.1",
+		"@octokit/types": "^16.0.0",
+		"@types/node": "^24.10.1",
+		"@typescript/native-preview": "7.0.0-dev.20251111.1",
+		"@vitest/coverage-v8": "^4.0.10",
+		"husky": "^9.1.7",
+		"lint-staged": "^16.2.6",
+		"markdownlint-cli2": "^0.19.0",
+		"minimatch": "^10.1.1",
+		"prettier": "^3.6.2",
+		"sort-package-json": "3.4.0",
+		"tsx": "^4.20.6",
+		"turbo": "^2.6.1",
+		"type-fest": "^5.2.0",
+		"vitest": "^4.0.10",
+		"yaml": "^2.8.1",
+		"yaml-lint": "^1.7.0"
+	},
+	"packageManager": "pnpm@10.20.0"
+}

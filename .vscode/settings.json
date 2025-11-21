@@ -1,0 +1,111 @@
+{
+	"biome.enabled": true,
+	"biome.requireConfiguration": true,
+	"editor.codeActionsOnSave": {
+		"source.fixAll.biome": "explicit",
+		"source.fixAll.markdownlint": "explicit",
+		"source.fixAll.ts": "explicit",
+		"source.organizeImports.biome": "explicit"
+	},
+	"editor.defaultFormatter": "biomejs.biome",
+	"[javascript]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[typescript]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[json]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[jsonc]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[yaml]": {
+		"editor.defaultFormatter": "redhat.vscode-yaml"
+	},
+	"eslint.enable": false,
+	"explorer.sortOrder": "foldersNestsFiles",
+	"explorer.sortOrderLexicographicOptions": "unicode",
+	"geminicodeassist.enable": false,
+	"files.exclude": {
+		"**/.coverage": true,
+		"**/.rslib": true,
+		"**/.turbo": true,
+		"**/.vitest": true,
+		"**/*.tsbuildinfo": true,
+		"**/dist": true,
+		"**/node_modules": true
+	},
+	"gitlens.statusBar.pullRequests.enabled": true,
+	"typescript.experimental.useTsgo": true,
+	"gitlens.gitkraken.cli.integration.enabled": true,
+	"github-actions.workflows.pinned.refresh.enabled": true,
+	// GitHub Actions IDE configuration
+	"github-actions.workflows.pinned.workflows": [".github/workflows/validate.yml", ".github/workflows/claude.yml"],
+	"js/ts.implicitProjectConfig.target": "ES2023",
+	"json.schemas": [
+		{
+			"fileMatch": ["**/_meta.json"],
+			"url": "./node_modules/@rspress/core/meta-json-schema.json"
+			// or "url": "https://unpkg.com/@rspress/core@2.0.0-beta.21/meta-json-schema.json"
+		},
+		{
+			"fileMatch": ["**/_nav.json"],
+			"url": "./node_modules/@rspress/core/nav-json-schema.json"
+			// or "url": "https://unpkg.com/@rspress/core@2.0.0-beta.22/nav-json-schema.json"
+		},
+		{
+			"fileMatch": ["**/.github/workflows/*.yml", "**/.github/workflows/*.yaml"],
+			"url": "https://json.schemastore.org/github-workflow.json"
+		},
+		{
+			"filesMatch": ["**/.github/actions/**/action.yml", "**/.github/actions/**/action.yaml"],
+			"url": "https://www.schemastore.org/github-action.json"
+		}
+	],
+	"markdown-preview-github-styles.colorTheme": "light",
+	"markdownlint.configFile": ".markdownlint.json",
+	"markdownlint.lintWorkspaceGlobs": [
+		"**/*.{md}",
+		"!**/*.code-search",
+		"!**/dist",
+		"!**/node_modules",
+		"!**/.git",
+		"!**/vendor"
+	],
+	"prettier.enable": false,
+	"search.exclude": {
+		"**/.coverage": true,
+		"**/.rslib": true,
+		"**/.turbo": true,
+		"**/.vitest": true,
+		"**/*.tsbuildinfo": true,
+		"**/dist": true,
+		"**/node_modules": true,
+		"pnpm-lock.yaml": true
+	},
+	"formattingToggle.affects": [
+		"editor.formatOnSave",
+		"editor.formatOnPaste",
+		"editor.formatOnType",
+		"editor.codeActionsOnSave"
+	],
+	"formattingToggle.statusBarText": {
+		"formattingEnabled": "Formatting: $(check)",
+		"formattingDisabled": "Formatting: $(x)"
+	},
+	"turbo.useLocalTurbo": true,
+	"typescript.enablePromptUseWorkspaceTsdk": true,
+	"yaml.completion": true,
+	"yaml.hover": true,
+	"yaml.schemaStore.enable": true,
+	// YAML schema and validation
+	"yaml.schemas": {
+		"https://json.schemastore.org/github-workflow.json": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
+		"https://json.schemastore.org/pnpm-workspace.json": ["pnpm-workspace.yaml"]
+	},
+	"yaml.validate": true,
+	"[github-actions-workflow]": {
+		"editor.defaultFormatter": "redhat.vscode-yaml"
+	}
+}

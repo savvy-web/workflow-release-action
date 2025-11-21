@@ -1,0 +1,53 @@
+name: "Setup Biome"
+description: "Detects Biome version from config file and installs it using biomejs/setup-biome"
+
+inputs:
+  version:
+    description: "Biome version to install (optional). If not provided, version is auto-detected from biome.jsonc or biome.json config file."
+    required: false
+
+outputs:
+  version:
+    description: "The Biome version that was installed (either provided, detected from config, or 'latest')"
+    value: ${{ steps.detect-version.outputs.version }}
+  config-file:
+    description: "The Biome config file that was detected (biome.jsonc, biome.json, or empty if not found or version was provided)"
+    value: ${{ steps.detect-version.outputs.config-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Detect Biome version
+      id: detect-version
+      if: inputs.version == ''
+      uses: actions/github-script@v8
+      env:
+        NODE_PATH: ${{ github.workspace }}/node_modules
+      with:
+        script: |
+          const { parse } = require('jsonc-parser');
+          const { default: detectBiomeVersion } = await import('${{ github.action_path }}/detect-biome-version.ts');
+          await detectBiomeVersion({ core, parse }, '${{ inputs.version }}');
+
+    - name: Display detected Biome configuration
+      if: inputs.version == '' && steps.detect-version.outputs.config-file != ''
+      shell: bash
+      run: |
+        echo "::notice title=Biome Configuration::Detected version ${{ steps.detect-version.outputs.version }} from ${{ steps.detect-version.outputs.config-file }}"
+
+    - name: Display provided Biome version
+      if: inputs.version != ''
+      shell: bash
+      run: |
+        echo "::notice title=Biome Configuration::Using provided version ${{ inputs.version }}"
+
+    - name: Install Biome global CLI
+      uses: biomejs/setup-biome@v2
+      with:
+        version: ${{ steps.detect-version.outputs.version }}
+
+    - name: Verify Biome installation
+      shell: bash
+      run: |
+        BIOME_VERSION=$(biome --version)
+        echo "::notice title=Biome CLI::Biome $BIOME_VERSION installed successfully"

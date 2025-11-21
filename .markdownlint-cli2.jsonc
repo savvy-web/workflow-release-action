@@ -1,0 +1,14 @@
+{
+	"globs": ["**/*.md"],
+	"ignores": [
+		"node_modules",
+		"**/node_modules",
+		".cache",
+		"**/.cache",
+		"coverage",
+		"**/coverage",
+		"dist",
+		"**/dist",
+		"**/CHANGELOG.md"
+	]
+}

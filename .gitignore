@@ -1,0 +1,37 @@
+**/.DS_Store
+**/node_modules
+**/*.tsbuildinfo
+**/dist
+**/build
+**/.rslib
+**/.artifacts
+**/.turbo
+**/.coverage
+**/.vitest
+**/.cache
+coverage/
+**/*.asc
+pnpm-publish-summary.json
+pnpm-release.json
+.changeset/status.json
+# Environment files (keep .example files committed)
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+.env.workflow
+.env.workflow-cli
+!.env.example
+!.env.*.example
+
+.pnpm-release.json
+**/*.api.json
+**/yo-rc.json
+**/savvy.config.toml
+pkgs/generators/test.ts
+# Temporary api-extractor files created during build
+**/src/api-extractor-*.ts
+test.ts
+.claude/settings.local.json
+**/coverage-debug

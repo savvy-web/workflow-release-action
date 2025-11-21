@@ -1,0 +1,21 @@
+name: "Detect Turbo"
+description: "Detects if Turbo is configured in the repository"
+
+outputs:
+  enabled:
+    description: "Whether Turbo is configured (true | false)"
+    value: ${{ steps.detect.outputs.enabled }}
+  config-file:
+    description: "Path to Turbo config file (turbo.json or empty)"
+    value: ${{ steps.detect.outputs.config-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Detect Turbo configuration
+      id: detect
+      uses: actions/github-script@v8
+      with:
+        script: |
+          const { default: detectTurbo } = await import('${{ github.action_path }}/detect-turbo.ts');
+          await detectTurbo({ core });

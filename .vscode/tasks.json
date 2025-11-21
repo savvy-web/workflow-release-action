@@ -1,0 +1,35 @@
+{
+	"$schema": "vscode://schemas/tasks",
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Debug Build: @savvy-web/tsconfig",
+			"type": "shell",
+			"command": "NODE_OPTIONS='--inspect-brk' pnpm turbo run build --filter=@savvy-web/tsconfig",
+			"isBackground": true,
+			"group": "build",
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared"
+			},
+			"problemMatcher": {
+				"pattern": {
+					"regexp": "^([^\\s].*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"severity": 4,
+					"message": 5
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "Debugger listening on",
+					"endsPattern": "For help, see:"
+				}
+			},
+			"detail": "Build tsconfig package with Node.js debugger enabled"
+		}
+	]
+}
