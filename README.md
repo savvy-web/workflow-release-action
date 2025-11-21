@@ -90,3 +90,17 @@ Your GitHub App must have these repository permissions:
 ## Development
 
 This repository contains additional GitHub Actions and reusable workflows in the `.github/actions/` and `.github/workflows/` directories. See the respective README files for more information.
+
+### Repository Structure
+
+* **Root `action.yml`** - The main release action setup that can be used directly as `uses: savvy-web/workflow-release-action@main`
+* **`.github/actions/`** - Individual composite actions that can be used independently:
+  * `setup-release/` - The underlying setup components used by the root action
+  * `node/` - Node.js environment setup with package manager support
+  * `biome/` - Biome linter detection and setup
+  * `detect-runtime/` - Runtime environment detection
+  * `detect-turbo/` - Turborepo configuration detection
+* **`.github/workflows/`** - Reusable workflows for common CI/CD patterns
+* **TypeScript Actions** - All actions use TypeScript with `actions/github-script@v8` for type-safe execution without a build step
+
+For detailed information about developing TypeScript actions in this repository, see [TYPESCRIPT_ACTIONS.md](TYPESCRIPT_ACTIONS.md).

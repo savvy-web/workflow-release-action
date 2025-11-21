@@ -1,5 +1,10 @@
 name: Release Action Setup
 description: Sets up the environment for release workflows including app token generation, checkout, and Node.js setup
+author: Savvy Web Systems
+
+branding:
+  icon: package
+  color: blue
 
 inputs:
   app-id:
