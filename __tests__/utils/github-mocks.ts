@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import type { AsyncFunctionArguments } from "../../.github/actions/shared/types.js";
 
 /**
  * Type for mocked @actions/core module
@@ -15,15 +14,9 @@ export interface MockCore {
 	setFailed: ReturnType<typeof vi.fn>;
 	startGroup: ReturnType<typeof vi.fn>;
 	endGroup: ReturnType<typeof vi.fn>;
-	summary: {
-		addHeading: ReturnType<typeof vi.fn>;
-		addRaw: ReturnType<typeof vi.fn>;
-		addEOL: ReturnType<typeof vi.fn>;
-		addTable: ReturnType<typeof vi.fn>;
-		addCodeBlock: ReturnType<typeof vi.fn>;
-		stringify: ReturnType<typeof vi.fn>;
-		write: ReturnType<typeof vi.fn>;
-	};
+	saveState: ReturnType<typeof vi.fn>;
+	getState: ReturnType<typeof vi.fn>;
+	addPath: ReturnType<typeof vi.fn>;
 }
 
 /**
@@ -34,78 +27,64 @@ export interface MockExec {
 }
 
 /**
- * Type for mocked GitHub client
+ * Type for mocked @actions/cache module
  */
-export interface MockGithub {
-	rest: {
-		checks: {
-			create: ReturnType<typeof vi.fn>;
-		};
-		issues: {
-			listComments: ReturnType<typeof vi.fn>;
-			createComment: ReturnType<typeof vi.fn>;
-			updateComment: ReturnType<typeof vi.fn>;
-		};
-	};
+export interface MockCache {
+	restoreCache: ReturnType<typeof vi.fn>;
+	saveCache: ReturnType<typeof vi.fn>;
 }
 
 /**
- * Type for mocked GitHub context
+ * Type for mocked @actions/tool-cache module
  */
-export interface MockContext {
-	repo: {
-		owner: string;
-		repo: string;
+export interface MockToolCache {
+	find: ReturnType<typeof vi.fn>;
+	downloadTool: ReturnType<typeof vi.fn>;
+	extractTar: ReturnType<typeof vi.fn>;
+	extractZip: ReturnType<typeof vi.fn>;
+	cacheDir: ReturnType<typeof vi.fn>;
+	cacheFile: ReturnType<typeof vi.fn>;
+}
+
+/**
+ * Type for mocked @actions/glob module
+ */
+export interface MockGlob {
+	create: ReturnType<typeof vi.fn>;
+}
+
+/**
+ * Type for globber instance returned by glob.create
+ */
+export interface MockGlobber {
+	glob: ReturnType<typeof vi.fn>;
+}
+
+/**
+ * Type for mocked @actions/http-client module
+ */
+export interface MockHttpClient {
+	HttpClient: new (
+		userAgent: string,
+	) => {
+		get: ReturnType<typeof vi.fn>;
 	};
-	sha: string;
 }
 
 /**
  * Creates a mock @actions/core module with all commonly used methods
  *
- * @returns Mock core module with chainable summary methods
+ * @returns Mock core module
  *
  * @example
  * ```typescript
  * const mockCore = createMockCore();
- * await myAction({ core: mockCore as never });
- * expect(mockCore.setOutput).toHaveBeenCalledWith("result", "success");
+ * vi.mocked(core).getInput.mockReturnValue("test-value");
  * ```
  */
 export function createMockCore(): MockCore {
-	// Create chainable summary mock that builds a simple markdown string
-	let summaryContent = "";
-	const summaryChain = {
-		addHeading: vi.fn().mockImplementation((text: string) => {
-			summaryContent += `## ${text}\n`;
-			return summaryChain;
-		}),
-		addRaw: vi.fn().mockImplementation((text: string) => {
-			summaryContent += `${text}\n`;
-			return summaryChain;
-		}),
-		addEOL: vi.fn().mockImplementation(() => {
-			summaryContent += "\n";
-			return summaryChain;
-		}),
-		addTable: vi.fn().mockImplementation((table: unknown[][]) => {
-			summaryContent += `Table with ${table.length} rows\n`;
-			return summaryChain;
-		}),
-		addCodeBlock: vi.fn().mockImplementation((code: string) => {
-			summaryContent += `\`\`\`\n${code}\n\`\`\`\n`;
-			return summaryChain;
-		}),
-		addList: vi.fn().mockImplementation((items: string[]) => {
-			summaryContent += `${items.map((item) => `- ${item}`).join("\n")}\n`;
-			return summaryChain;
-		}),
-		stringify: vi.fn().mockImplementation(() => summaryContent),
-		write: vi.fn().mockResolvedValue(undefined),
-	};
-
 	return {
-		getInput: vi.fn(),
+		getInput: vi.fn().mockReturnValue(""),
 		setOutput: vi.fn(),
 		info: vi.fn(),
 		notice: vi.fn(),
@@ -115,7 +94,9 @@ export function createMockCore(): MockCore {
 		setFailed: vi.fn(),
 		startGroup: vi.fn(),
 		endGroup: vi.fn(),
-		summary: summaryChain,
+		saveState: vi.fn(),
+		getState: vi.fn().mockReturnValue(""),
+		addPath: vi.fn(),
 	};
 }
 
@@ -128,8 +109,8 @@ export function createMockCore(): MockCore {
  * @example
  * ```typescript
  * const mockExec = createMockExec();
- * await myAction({ exec: mockExec as never });
- * expect(mockExec.exec).toHaveBeenCalledWith("npm", ["build"]);
+ * await exec.exec("npm", ["install"]);
+ * expect(mockExec.exec).toHaveBeenCalledWith("npm", ["install"]);
  * ```
  */
 export function createMockExec(defaultReturnValue: number = 0): MockExec {
@@ -139,83 +120,99 @@ export function createMockExec(defaultReturnValue: number = 0): MockExec {
 }
 
 /**
- * Creates a mock GitHub client with checks and issues APIs
+ * Creates a mock @actions/cache module
  *
- * @param options - Optional configuration for mock responses
- * @param options.checkId - Check run ID to return (default: 12345)
- * @param options.checkUrl - Check run URL to return
- * @param options.commentId - Comment ID to return (default: 67890)
- * @param options.commentUrl - Comment URL to return
- * @returns Mock GitHub client
+ * @returns Mock cache module
  *
  * @example
  * ```typescript
- * const mockGithub = createMockGithub({ checkId: 999 });
- * await myAction({ github: mockGithub as never });
- * expect(mockGithub.rest.checks.create).toHaveBeenCalled();
+ * const mockCache = createMockCache();
+ * mockCache.restoreCache.mockResolvedValue("cache-key-123");
  * ```
  */
-export function createMockGithub(
-	options: { checkId?: number; checkUrl?: string; commentId?: number; commentUrl?: string } = {},
-): MockGithub {
-	const checkId = options.checkId ?? 12345;
-	const checkUrl = options.checkUrl ?? `https://github.com/owner/repo/runs/${checkId}`;
-	const commentId = options.commentId ?? 67890;
-	const commentUrl = options.commentUrl ?? `https://github.com/owner/repo/issues/1#issuecomment-${commentId}`;
-
+export function createMockCache(): MockCache {
 	return {
-		rest: {
-			checks: {
-				create: vi.fn().mockResolvedValue({
-					data: {
-						id: checkId,
-						html_url: checkUrl,
-					},
-				}),
-			},
-			issues: {
-				listComments: vi.fn().mockResolvedValue({
-					data: [],
-				}),
-				createComment: vi.fn().mockResolvedValue({
-					data: {
-						id: commentId,
-						html_url: commentUrl,
-					},
-				}),
-				updateComment: vi.fn().mockResolvedValue({
-					data: {
-						id: commentId,
-						html_url: commentUrl,
-					},
-				}),
-			},
-		},
+		restoreCache: vi.fn().mockResolvedValue(undefined),
+		saveCache: vi.fn().mockResolvedValue(1),
 	};
 }
 
 /**
- * Creates a mock GitHub context
+ * Creates a mock @actions/tool-cache module
  *
- * @param options - Optional configuration for context
- * @param options.owner - Repository owner (default: "test-owner")
- * @param options.repo - Repository name (default: "test-repo")
- * @param options.sha - Commit SHA (default: "abc123")
- * @returns Mock GitHub context
+ * @returns Mock tool-cache module
  *
  * @example
  * ```typescript
- * const mockContext = createMockContext({ owner: "my-org", repo: "my-repo" });
- * await myAction({ context: mockContext as never });
+ * const mockToolCache = createMockToolCache();
+ * mockToolCache.find.mockReturnValue("/path/to/cached/tool");
  * ```
  */
-export function createMockContext(options: { owner?: string; repo?: string; sha?: string } = {}): MockContext {
+export function createMockToolCache(): MockToolCache {
 	return {
-		repo: {
-			owner: options.owner ?? "test-owner",
-			repo: options.repo ?? "test-repo",
-		},
-		sha: options.sha ?? "abc123",
+		find: vi.fn().mockReturnValue(""),
+		downloadTool: vi.fn().mockResolvedValue("/tmp/downloaded-tool"),
+		extractTar: vi.fn().mockResolvedValue("/tmp/extracted"),
+		extractZip: vi.fn().mockResolvedValue("/tmp/extracted"),
+		cacheDir: vi.fn().mockResolvedValue("/cached/dir"),
+		cacheFile: vi.fn().mockResolvedValue("/cached/file"),
+	};
+}
+
+/**
+ * Creates a mock globber instance
+ *
+ * @param files - Files to return from glob() (default: [])
+ * @returns Mock globber instance
+ */
+export function createMockGlobber(files: string[] = []): MockGlobber {
+	return {
+		glob: vi.fn().mockResolvedValue(files),
+	};
+}
+
+/**
+ * Creates a mock @actions/glob module
+ *
+ * @param files - Files to return from globber.glob() (default: [])
+ * @returns Mock glob module
+ *
+ * @example
+ * ```typescript
+ * const mockGlob = createMockGlob(["pnpm-lock.yaml"]);
+ * const globber = await glob.create("**\/pnpm-lock.yaml");
+ * const files = await globber.glob();
+ * expect(files).toEqual(["pnpm-lock.yaml"]);
+ * ```
+ */
+export function createMockGlob(files: string[] = []): MockGlob {
+	return {
+		create: vi.fn().mockResolvedValue(createMockGlobber(files)),
+	};
+}
+
+/**
+ * Creates a mock @actions/http-client module
+ *
+ * @param responseBody - Response body to return from get() (default: "{}")
+ * @returns Mock http-client module
+ *
+ * @example
+ * ```typescript
+ * const mockHttp = createMockHttpClient('{"versions": []}');
+ * const client = new HttpClient("my-agent");
+ * const response = await client.get("https://example.com");
+ * const body = await response.readBody();
+ * expect(body).toBe('{"versions": []}');
+ * ```
+ */
+export function createMockHttpClient(responseBody: string = "{}"): MockHttpClient {
+	return {
+		HttpClient: vi.fn().mockImplementation(() => ({
+			get: vi.fn().mockResolvedValue({
+				readBody: vi.fn().mockResolvedValue(responseBody),
+			}),
+		})),
 	};
 }
 
@@ -284,39 +281,4 @@ export function setupTestEnvironment(options: { suppressOutput?: boolean } = {})
  */
 export function cleanupTestEnvironment(): void {
 	vi.restoreAllMocks();
-}
-
-/**
- * Creates a complete mock AsyncFunctionArguments object
- *
- * @param overrides - Optional overrides for specific properties
- * @returns Mock AsyncFunctionArguments with all required properties
- *
- * @example
- * ```typescript
- * const args = createMockAsyncFunctionArguments({
- *   core: customMockCore,
- *   context: createMockContext({ owner: "my-org" })
- * });
- * await myAction(args as never);
- * ```
- */
-/* v8 ignore next -- @preserve */
-export function createMockAsyncFunctionArguments(
-	overrides: Partial<AsyncFunctionArguments> = {},
-): AsyncFunctionArguments {
-	const defaultArgs: AsyncFunctionArguments = {
-		context: createMockContext() as never,
-		core: createMockCore() as never,
-		github: createMockGithub() as never,
-		octokit: createMockGithub() as never,
-		exec: createMockExec() as never,
-		glob: { create: vi.fn() } as never,
-		io: { cp: vi.fn(), mv: vi.fn(), rmRF: vi.fn(), mkdirP: vi.fn(), which: vi.fn() } as never,
-	};
-
-	return {
-		...defaultArgs,
-		...overrides,
-	};
 }

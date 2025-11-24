@@ -1,9 +1,0 @@
-node_modules/
-**/node_modules/
-plugins/*/node_modules/
-.cache/
-**/.cache/
-coverage/
-**/coverage/
-dist/
-**/dist/

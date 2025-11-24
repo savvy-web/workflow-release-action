@@ -23,6 +23,11 @@
 	"[yaml]": {
 		"editor.defaultFormatter": "redhat.vscode-yaml"
 	},
+	"[md]": {
+		"editor.defaultFormatter": "DavidAnson.vscode-markdownlint",
+		"editor.formatOnSave": true,
+		"editor.formatOnPaste": true
+	},
 	"eslint.enable": false,
 	"explorer.sortOrder": "foldersNestsFiles",
 	"explorer.sortOrderLexicographicOptions": "unicode",
@@ -30,10 +35,11 @@
 	"files.exclude": {
 		"**/.coverage": true,
 		"**/.rslib": true,
-		"**/.turbo": true,
+		".turbo": true,
+		"src/.turbo": true,
 		"**/.vitest": true,
 		"**/*.tsbuildinfo": true,
-		"**/dist": true,
+		"**/dist": false,
 		"**/node_modules": true
 	},
 	"gitlens.statusBar.pullRequests.enabled": true,
@@ -63,16 +69,9 @@
 			"url": "https://www.schemastore.org/github-action.json"
 		}
 	],
+	"markdownlint.configFile": "./lib/configs/.markdownlint-cli2.jsonc",
 	"markdown-preview-github-styles.colorTheme": "light",
-	"markdownlint.configFile": ".markdownlint.json",
-	"markdownlint.lintWorkspaceGlobs": [
-		"**/*.{md}",
-		"!**/*.code-search",
-		"!**/dist",
-		"!**/node_modules",
-		"!**/.git",
-		"!**/vendor"
-	],
+	"markdown-preview-github-styles.lightTheme": "light",
 	"prettier.enable": false,
 	"search.exclude": {
 		"**/.coverage": true,
@@ -107,5 +106,9 @@
 	"yaml.validate": true,
 	"[github-actions-workflow]": {
 		"editor.defaultFormatter": "redhat.vscode-yaml"
-	}
+	},
+	"[markdown]": {
+		"editor.defaultFormatter": "DavidAnson.vscode-markdownlint"
+	},
+	"markdown.styles": [".vscode/static/github-markdown.css"]
 }

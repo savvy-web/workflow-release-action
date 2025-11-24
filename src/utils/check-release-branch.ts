@@ -1,0 +1,169 @@
+import * as core from "@actions/core";
+import { context, getOctokit } from "@actions/github";
+
+/**
+ * Release branch check result
+ */
+interface ReleaseBranchCheckResult {
+	/** Whether the release branch exists */
+	exists: boolean;
+	/** Whether there's an open PR to main */
+	hasOpenPr: boolean;
+	/** PR number if open PR exists */
+	prNumber: number | null;
+	/** GitHub check run ID */
+	checkId: number;
+}
+
+/**
+ * Checks if the release branch exists and has an open PR
+ *
+ * @param releaseBranch - Release branch name (default: changeset-release/main)
+ * @param targetBranch - Target branch for PR (default: main)
+ * @param dryRun - Whether this is a dry-run
+ * @returns Release branch check result
+ *
+ * @remarks
+ * This function:
+ * 1. Checks if the release branch exists in the repository
+ * 2. Searches for an open PR from release branch to target branch
+ * 3. Creates a GitHub check run to report findings
+ * 4. Returns branch status and PR information
+ */
+export async function checkReleaseBranch(
+	releaseBranch: string,
+	targetBranch: string,
+	dryRun: boolean,
+): Promise<ReleaseBranchCheckResult> {
+	// Check if branch exists
+	let branchExists = false;
+
+	const token = core.getInput("token", { required: true });
+	const github = getOctokit(token);
+
+	try {
+		await github.rest.repos.getBranch({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			branch: releaseBranch,
+		});
+		branchExists = true;
+		core.info(`✓ Release branch '${releaseBranch}' exists`);
+	} catch (error) {
+		if ((error as { status?: number }).status === 404) {
+			core.info(`Release branch '${releaseBranch}' does not exist`);
+		} else {
+			core.warning(
+				`Failed to check if branch '${releaseBranch}' exists: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
+	// Check for open PR
+	let hasOpenPr = false;
+	let prNumber: number | null = null;
+
+	if (branchExists) {
+		try {
+			const { data: prs } = await github.rest.pulls.list({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				state: "open",
+				head: `${context.repo.owner}:${releaseBranch}`,
+				base: targetBranch,
+			});
+
+			if (prs.length > 0) {
+				hasOpenPr = true;
+				prNumber = prs[0].number;
+				core.info(`✓ Open PR found: #${prNumber} (${prs[0].html_url})`);
+			} else {
+				core.info(`No open PR found from '${releaseBranch}' to '${targetBranch}'`);
+			}
+		} catch (error) {
+			core.warning(`Failed to check for open PRs: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	// Create GitHub check run
+	const checkTitle = dryRun ? "🧪 Check Release Branch (Dry Run)" : "Check Release Branch";
+	const checkSummary = branchExists
+		? hasOpenPr
+			? `Release branch exists with open PR #${prNumber}`
+			: `Release branch exists without open PR`
+		: `Release branch does not exist`;
+
+	// Build check details using core.summary methods
+	const checkSummaryBuilder = core.summary
+		.addHeading("Release Branch Status", 2)
+		.addEOL()
+		.addTable([
+			[
+				{ data: "Property", header: true },
+				{ data: "Value", header: true },
+			],
+			["Branch", `\`${releaseBranch}\``],
+			["Target", `\`${targetBranch}\``],
+			["Exists", branchExists ? "✅ Yes" : "❌ No"],
+			["Open PR", hasOpenPr ? `✅ Yes (#${prNumber})` : "❌ No"],
+		])
+		.addEOL()
+		.addHeading("Next Steps", 3)
+		.addEOL();
+
+	if (hasOpenPr) {
+		checkSummaryBuilder.addRaw(
+			`An open release PR already exists. The workflow will update it with the latest changes from \`${targetBranch}\`.`,
+		);
+	} else if (branchExists) {
+		checkSummaryBuilder.addRaw("The release branch exists but has no open PR. A new PR will be created.");
+	} else {
+		checkSummaryBuilder.addRaw("No release branch exists. A new branch and PR will be created.");
+	}
+
+	if (dryRun) {
+		checkSummaryBuilder.addEOL().addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
+	}
+
+	const checkDetails = checkSummaryBuilder.stringify();
+
+	const { data: checkRun } = await github.rest.checks.create({
+		owner: context.repo.owner,
+		repo: context.repo.repo,
+		name: checkTitle,
+		head_sha: context.sha,
+		status: "completed",
+		conclusion: "success",
+		output: {
+			title: checkSummary,
+			summary: checkDetails,
+		},
+	});
+
+	core.info(`Created check run: ${checkRun.html_url}`);
+
+	// Write job summary
+	await core.summary
+		.addHeading(checkTitle, 2)
+		.addRaw(checkSummary)
+		.addEOL()
+		.addHeading("Release Branch Status", 3)
+		.addTable([
+			[
+				{ data: "Property", header: true },
+				{ data: "Value", header: true },
+			],
+			["Branch", `\`${releaseBranch}\``],
+			["Target", `\`${targetBranch}\``],
+			["Exists", branchExists ? "✅ Yes" : "❌ No"],
+			["Open PR", hasOpenPr ? `✅ Yes (#${prNumber})` : "❌ No"],
+		])
+		.write();
+
+	return {
+		exists: branchExists,
+		hasOpenPr,
+		prNumber,
+		checkId: checkRun.id,
+	};
+}
