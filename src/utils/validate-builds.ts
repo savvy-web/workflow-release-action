@@ -48,7 +48,7 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 	core.startGroup("Validating builds");
 
 	// Determine build command
-	const buildCmd = buildCommand || (packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm");
+	const buildCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
 	const buildArgs =
 		buildCommand === ""
 			? packageManager === "pnpm"
@@ -56,7 +56,7 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 				: packageManager === "yarn"
 					? ["ci:build"]
 					: ["run", "ci:build"]
-			: buildCommand.split(" ");
+			: ["run", buildCommand];
 
 	core.info(`Running build command: ${buildCmd} ${buildArgs.join(" ")}`);
 

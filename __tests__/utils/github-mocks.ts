@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { MockOctokit } from "./test-types.js";
 
 /**
  * Type for mocked @actions/core module
@@ -281,4 +282,40 @@ export function setupTestEnvironment(options: { suppressOutput?: boolean } = {})
  */
 export function cleanupTestEnvironment(): void {
 	vi.restoreAllMocks();
+}
+
+/**
+ * Creates a mock Octokit instance with all commonly used API methods
+ *
+ * @returns Mock Octokit instance with fully initialized rest API
+ *
+ * @example
+ * ```typescript
+ * const mockOctokit = createMockOctokit();
+ * mockOctokit.rest.repos.getBranch.mockResolvedValue({
+ *   data: { name: "main" }
+ * });
+ * vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
+ * ```
+ */
+export function createMockOctokit(): MockOctokit {
+	return {
+		rest: {
+			checks: {
+				create: vi.fn().mockResolvedValue({ data: { id: 12345 } }),
+				update: vi.fn().mockResolvedValue({ data: { id: 12345 } }),
+			},
+			repos: {
+				getBranch: vi.fn(),
+			},
+			pulls: {
+				list: vi.fn(),
+			},
+			issues: {
+				listComments: vi.fn(),
+				createComment: vi.fn(),
+				updateComment: vi.fn(),
+			},
+		},
+	};
 }

@@ -13,6 +13,20 @@ This is a private repository for creating **shared GitHub Actions, reusable work
 3. **GitHub Project Management** - Automation for managing GitHub Projects, issues, and routing
 4. **Internal Tooling** - Scripts and utilities for GitHub-related operations
 
+## Active Development: Setup Flow Action
+
+**Tracking Issue:** [#9 - Implement setup-flow TypeScript action](https://github.com/savvy-web/workflow-release-action/issues/9)
+
+The `setup-flow` action is being refactored from `actions/github-script@v8` inline scripts to direct TypeScript modules. This provides better type safety, testability, and maintainability.
+
+**When working on this feature:**
+
+1. Consult issue #9 for current status and architecture decisions
+2. Update the issue with progress as modules are completed
+3. Follow the type-safe patterns established in `src/utils/` and `__tests__/`
+
+**Current status:** Core utility modules implemented with 85%+ test coverage. See issue #9 for detailed progress.
+
 **Technical stack:**
 
 * **Package manager:** pnpm 10.20.0 (enforced via `packageManager` field)
@@ -647,6 +661,40 @@ pnpm test --watch
 pnpm test --coverage
 ```
 
+## Test Utilities and Mocking
+
+Tests use type-safe mock factories from `__tests__/utils/`:
+
+* **`github-mocks.ts`** - Factory functions for creating properly typed mocks
+* **`test-types.ts`** - TypeScript interfaces for mock types
+
+### Key Patterns
+
+1. **No `any` types** - Use `createMockOctokit()` instead of manual mock objects
+2. **Factory functions** - `createMockOctokit()`, `createMockCore()`, `createMockExec()`, etc.
+3. **Type-safe assertions** - Use `as unknown as Type` pattern for Octokit mock
+
+```typescript
+import { createMockOctokit, setupTestEnvironment, cleanupTestEnvironment } from "./utils/github-mocks.js";
+import type { MockOctokit } from "./utils/test-types.js";
+
+describe("my-feature", () => {
+  let mockOctokit: MockOctokit;
+
+  beforeEach(() => {
+    setupTestEnvironment({ suppressOutput: true });
+    mockOctokit = createMockOctokit();
+    vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
+  });
+
+  afterEach(() => {
+    cleanupTestEnvironment();
+  });
+});
+```
+
+**See [**tests**/CLAUDE.md](__tests__/CLAUDE.md) for comprehensive testing documentation.**
+
 ## Environment Variables
 
 The repository uses strict environment mode in Turbo. When adding new environment variables:
@@ -711,3 +759,4 @@ The workflows in this repository rely on a GitHub App for authentication (prefer
 6. **Organization-wide workflows:** Place in `workflow-release-action` repository for automatic deployment across all repos
 7. **Repository custom properties:** Used for dynamic routing and configuration (see org-issue-router workflow)
 8. **GraphQL for Projects:** ProjectsV2 requires GraphQL API; REST API only supports legacy Projects (Classic)
+9. **Track active work in issues:** When working on features tracked by GitHub issues, consult and update the issue with progress. See [Active Development](#active-development-setup-flow-action) for current work.

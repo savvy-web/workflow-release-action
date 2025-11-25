@@ -8,6 +8,7 @@ import { detectPublishableChanges } from "./utils/detect-publishable-changes.js"
 import { generateReleaseNotesPreview } from "./utils/generate-release-notes-preview.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
 import { updateReleaseBranch } from "./utils/update-release-branch.js";
+import { updateStickyComment } from "./utils/update-sticky-comment.js";
 import { validateBuilds } from "./utils/validate-builds.js";
 import { validatePublishGitHubPackages } from "./utils/validate-publish-github-packages.js";
 import { validateNPMPublish } from "./utils/validate-publish-npm.js";
@@ -82,16 +83,16 @@ async function run(): Promise<void> {
 		}
 
 		// Determine which phase to run based on context
-		const isReleaseBranch = context.ref === `refs/heads/\${inputs.releaseBranch}`;
-		const isMainBranch = context.ref === `refs/heads/\${inputs.targetBranch}`;
+		const isReleaseBranch = context.ref === `refs/heads/${inputs.releaseBranch}`;
+		const isMainBranch = context.ref === `refs/heads/${inputs.targetBranch}`;
 		const commitMessage = context.payload.head_commit?.message || "";
 		const isReleaseCommit = commitMessage.includes("chore: version packages");
 
-		core.info(`Branch: \${context.ref}`);
-		core.info(`Commit message: \${commitMessage}`);
-		core.info(`Is release branch: \${isReleaseBranch}`);
-		core.info(`Is main branch: \${isMainBranch}`);
-		core.info(`Is release commit: \${isReleaseCommit}`);
+		core.info(`Branch: ${context.ref}`);
+		core.info(`Commit message: ${commitMessage}`);
+		core.info(`Is release branch: ${isReleaseBranch}`);
+		core.info(`Is main branch: ${isMainBranch}`);
+		core.info(`Is release commit: ${isReleaseCommit}`);
 
 		// Phase 3: Release Publishing (on merge to main with version commit)
 		if (isMainBranch && isReleaseCommit) {
@@ -197,7 +198,7 @@ async function runPhase1BranchManagement(inputs: {
 
 		core.notice("✅ Phase 1 completed successfully");
 	} catch (error) {
-		core.setFailed(`Phase 1 failed: \${error instanceof Error ? error.message : String(error)}`);
+		core.setFailed(`Phase 1 failed: ${error instanceof Error ? error.message : String(error)}`);
 		throw error;
 	}
 }
@@ -238,7 +239,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				octokit.rest.checks.create({
 					owner: context.repo.owner,
 					repo: context.repo.repo,
-					name: inputs.dryRun ? `🧪 \${name} (Dry Run)` : name,
+					name: inputs.dryRun ? `🧪 ${name} (Dry Run)` : name,
 					head_sha: context.sha,
 					status: "queued",
 				}),
@@ -277,15 +278,25 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			status: "in_progress",
 		});
 
+		// Note: generate-pr-description is designed for github-script execution
+		// and requires Anthropic SDK integration. For now, we skip this step
+		// if no API key is provided, or implement it via github-script in the workflow.
+		if (inputs.anthropicApiKey) {
+			core.info("Anthropic API key provided, but generate-pr-description requires github-script integration");
+			// TODO: Integrate via github-script action in workflow
+		}
+
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
 			check_run_id: checkIds[1],
 			status: "completed",
-			conclusion: "skipped",
+			conclusion: inputs.anthropicApiKey ? "neutral" : "skipped",
 			output: {
-				title: "Skipped",
-				summary: "Anthropic API key not provided",
+				title: inputs.anthropicApiKey ? "Not Implemented" : "Skipped",
+				summary: inputs.anthropicApiKey
+					? "PR description generation requires github-script integration (not yet implemented)"
+					: "Anthropic API key not provided",
 			},
 		});
 		core.endGroup();
@@ -409,6 +420,56 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 	// Step 8: Update sticky comment on PR
 	core.startGroup("Step 8: Update Sticky Comment");
+
+	try {
+		// Find the PR for the release branch
+		const { data: prs } = await octokit.rest.pulls.list({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			state: "open",
+			head: `${context.repo.owner}:${inputs.releaseBranch}`,
+			base: inputs.targetBranch,
+		});
+
+		if (prs.length > 0) {
+			const pr = prs[0];
+			core.info(`Found release PR #${pr.number}`);
+
+			// Generate validation summary
+			const allSuccess = validationResults.every((r) => r.success);
+			const failedChecks = validationResults.filter((r) => !r.success);
+
+			const commentBody = `<!-- sticky-comment-id: release-validation -->
+## 📦 Release Validation ${allSuccess ? "✅" : "❌"}
+
+${inputs.dryRun ? "> 🧪 **DRY RUN MODE** - No actual publishing will occur\n\n" : ""}
+
+### Validation Results
+
+| Check | Status |
+|-------|--------|
+${validationResults.map((r) => `| ${r.name} | ${r.success ? "✅ Passed" : "❌ Failed"} |`).join("\n")}
+
+${
+	failedChecks.length > 0
+		? `### ❌ Failed Checks\n\n${failedChecks.map((c) => `- **${c.name}**`).join("\n")}\n\nPlease resolve the issues above before merging.`
+		: "### ✅ All Validations Passed\n\nThis PR is ready to merge!"
+}
+
+---
+
+<sub>Updated at ${new Date().toISOString()}</sub>
+`;
+
+			await updateStickyComment(pr.number, commentBody, "release-validation");
+			core.info("✅ Updated sticky comment on PR");
+		} else {
+			core.warning("No open PR found for release branch - skipping sticky comment update");
+		}
+	} catch (error) {
+		core.warning(`Failed to update sticky comment: ${error instanceof Error ? error.message : String(error)}`);
+		// Don't fail the entire workflow if sticky comment update fails
+	}
 
 	core.endGroup();
 

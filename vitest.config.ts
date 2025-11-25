@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
 	test: {
-		include: ["**/__tests__/*.test.ts"],
+		include: ["**/__tests__/**/*.test.ts"],
 		exclude: ["**/node_modules/**", "**/dist/**"],
 		globalSetup: "./vitest.setup.ts",
 		testTimeout: 30000,
@@ -16,7 +16,7 @@ export default defineConfig({
 			exclude: ["__tests__/utils/**/*.ts"],
 			enabled: true,
 			thresholds: {
-				perFile: false, // Enforce thresholds per file instead of globally
+				perFile: true, // Enforce thresholds per file instead of globally
 				lines: 85,
 				functions: 85,
 				branches: 85,
