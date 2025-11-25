@@ -109,24 +109,7 @@ jobs:
 
       - name: Detect runtime
         id: detect-runtime
-        uses: ./.github/actions/detect-runtime
-
-      - name: Validate runtime
-        if: steps.detect-runtime.outputs.runtime != 'node'
-        run: |
-          echo "::error::Unsupported runtime: ${{ steps.detect-runtime.outputs.runtime }}"
-          echo "::error::This workflow only supports Node.js runtime. Detected: ${{ steps.detect-runtime.outputs.runtime }}"
-          exit 1
-
-      - name: Setup Node.js and dependencies
-        id: setup-node
-        if: steps.detect-runtime.outputs.runtime == 'node'
-        uses: ./.github/actions/node
-        with:
-          package-manager: ${{ steps.detect-runtime.outputs.package-manager }}
-
-      - name: Setup Biome
-        uses: ./.github/actions/biome
+        uses: savvy-web/workflow-runtime-action@main
 
       - name: Fetch base branch for comparison
         run: git fetch origin ${{ github.base_ref }}
