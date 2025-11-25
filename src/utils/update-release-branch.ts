@@ -72,16 +72,33 @@ async function execWithRetry(
  * @param dryRun - Whether this is a dry-run
  * @returns Update release branch result
  */
-export async function updateReleaseBranch(
-	releaseBranch: string,
-	targetBranch: string,
-	prNumber: number | null,
-	packageManager: string,
-	versionCommand: string,
-	dryRun: boolean,
-): Promise<UpdateReleaseBranchResult> {
+export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> {
+	// Read all inputs
 	const token = core.getInput("token", { required: true });
+	const releaseBranch = core.getInput("release-branch") || "changeset-release/main";
+	const targetBranch = core.getInput("target-branch") || "main";
+	const packageManager = core.getInput("package-manager") || "pnpm";
+	const versionCommand = core.getInput("version-command") || "";
+	const dryRun = core.getBooleanInput("dry-run") || false;
+
 	const github = getOctokit(token);
+	// Find the open PR for this release branch
+	let prNumber: number | null = null;
+	try {
+		const { data: prs } = await github.rest.pulls.list({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			state: "open",
+			head: `${context.repo.owner}:${releaseBranch}`,
+			base: targetBranch,
+		});
+		if (prs.length > 0) {
+			prNumber = prs[0].number;
+		}
+	} catch (error) {
+		core.warning(`Could not find open PR: ${error instanceof Error ? error.message : String(error)}`);
+	}
+
 	core.startGroup("Updating release branch");
 
 	// Configure git

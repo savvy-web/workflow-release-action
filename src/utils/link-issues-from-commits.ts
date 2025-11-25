@@ -68,12 +68,13 @@ function extractIssueReferences(message: string): number[] {
  * @param dryRun - Whether this is a dry-run
  * @returns Link issues result
  */
-export async function linkIssuesFromCommits(
-	releaseBranch: string,
-	targetBranch: string,
-	dryRun: boolean,
-): Promise<LinkIssuesResult> {
+export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
+	// Read all inputs
 	const token = core.getInput("token", { required: true });
+	const releaseBranch = core.getInput("release-branch") || "changeset-release/main";
+	const targetBranch = core.getInput("target-branch") || "main";
+	const dryRun = core.getBooleanInput("dry-run") || false;
+
 	const github = getOctokit(token);
 	core.startGroup("Linking issues from commits");
 

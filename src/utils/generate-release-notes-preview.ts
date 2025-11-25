@@ -162,11 +162,11 @@ function extractVersionSection(changelogContent: string, version: string): strin
  * @param dryRun - Whether this is a dry-run
  * @returns Release notes preview result
  */
-export async function generateReleaseNotesPreview(
-	packageManager: string,
-	workspaceRoot: string,
-	dryRun: boolean,
-): Promise<ReleaseNotesPreviewResult> {
+export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreviewResult> {
+	// Read all inputs
+	const packageManager = core.getInput("package-manager") || "pnpm";
+	const workspaceRoot = process.cwd();
+	const dryRun = core.getBooleanInput("dry-run") || false;
 	const token = core.getInput("token", { required: true });
 	const github = getOctokit(token);
 	core.startGroup("Generating release notes preview");

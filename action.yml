@@ -46,47 +46,34 @@ outputs:
   # Phase 1: Detection outputs
   has_changes:
     description: Whether publishable changes were detected
-    value: ${{ steps.main.outputs.has_changes }}
   publishable_packages:
     description: JSON array of packages with changes
-    value: ${{ steps.main.outputs.publishable_packages }}
 
   # Phase 1: Branch outputs
   release_branch_exists:
     description: Whether the release branch exists
-    value: ${{ steps.main.outputs.release_branch_exists }}
   release_branch_has_open_pr:
     description: Whether there's an open PR
-    value: ${{ steps.main.outputs.release_branch_has_open_pr }}
   release_pr_number:
     description: PR number if PR exists
-    value: ${{ steps.main.outputs.release_pr_number }}
   release_branch_created:
     description: Whether a new release branch was created
-    value: ${{ steps.main.outputs.release_branch_created }}
   release_branch_updated:
     description: Whether the release branch was updated
-    value: ${{ steps.main.outputs.release_branch_updated }}
   has_conflicts:
     description: Whether the update resulted in conflicts
-    value: ${{ steps.main.outputs.has_conflicts }}
 
   # Phase 2: Validation outputs
   linked_issues:
     description: JSON array of linked issues
-    value: ${{ steps.main.outputs.linked_issues }}
   pr_description:
     description: Generated PR description
-    value: ${{ steps.main.outputs.pr_description }}
   builds_passed:
     description: Whether all builds passed
-    value: ${{ steps.main.outputs.builds_passed }}
   npm_publish_ready:
     description: Whether packages are ready for NPM publish
-    value: ${{ steps.main.outputs.npm_publish_ready }}
   github_packages_ready:
     description: Whether packages are ready for GitHub Packages
-    value: ${{ steps.main.outputs.github_packages_ready }}
 
 runs:
   using: node24

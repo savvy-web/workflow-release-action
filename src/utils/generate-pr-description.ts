@@ -1,6 +1,21 @@
-import * as core from "@actions/core";
-import { context, getOctokit } from "@actions/github";
-import Anthropic from "@anthropic-ai/sdk";
+import type * as core from "@actions/core";
+import type { Context } from "@actions/github/lib/context";
+import type { GitHub } from "@actions/github/lib/utils";
+import type Anthropic from "@anthropic-ai/sdk";
+
+/**
+ * Custom arguments for this action including external Anthropic module
+ */
+interface AsyncFunctionArguments {
+	/** GitHub Actions core module */
+	core: typeof core;
+	/** GitHub API client */
+	github: InstanceType<typeof GitHub>;
+	/** GitHub Actions context */
+	context: Context;
+	/** Anthropic SDK */
+	Anthropic: typeof Anthropic;
+}
 
 /**
  * Linked issue information
@@ -93,6 +108,7 @@ async function withRetry<T>(
 /**
  * Generates PR description using Claude API
  *
+ * @param coreModule - GitHub Actions core module
  * @param AnthropicClass - Anthropic SDK class
  * @param linkedIssues - Linked issues from commits
  * @param commits - Commit information
@@ -100,10 +116,14 @@ async function withRetry<T>(
  * @returns Generated description
  */
 async function generateDescriptionWithClaude(
+	coreModule: typeof core,
+	AnthropicClass: typeof Anthropic,
 	linkedIssues: LinkedIssue[],
 	commits: CommitInfo[],
 	apiKey: string,
 ): Promise<string> {
+	const core = coreModule;
+
 	core.info("Calling Claude API to generate PR description");
 
 	// Build prompt
@@ -134,7 +154,7 @@ Do not include any preamble or explanation - just output the bulleted list.`;
 	core.debug(`Prompt sent to Claude:\n${prompt}`);
 
 	// Call Claude API with retry
-	const anthropic = new Anthropic({ apiKey });
+	const anthropic = new AnthropicClass({ apiKey });
 
 	const response = await withRetry(async () => {
 		return await anthropic.messages.create({
@@ -166,6 +186,10 @@ Do not include any preamble or explanation - just output the bulleted list.`;
 /**
  * Generates PR description and updates the pull request
  *
+ * @param coreModule - GitHub Actions core module
+ * @param AnthropicClass - Anthropic SDK class
+ * @param github - GitHub API client
+ * @param context - GitHub Actions context
  * @param linkedIssues - Linked issues from commits
  * @param commits - Commits in the release
  * @param prNumber - Pull request number
@@ -173,27 +197,31 @@ Do not include any preamble or explanation - just output the bulleted list.`;
  * @param dryRun - Whether this is a dry-run
  * @returns PR description result
  */
-export async function generatePRDescription(
+async function generatePRDescription(
+	coreModule: typeof core,
+	AnthropicClass: typeof Anthropic,
+	github: InstanceType<typeof GitHub>,
+	context: Context,
 	linkedIssues: LinkedIssue[],
 	commits: CommitInfo[],
 	prNumber: number,
 	apiKey: string,
 	dryRun: boolean,
 ): Promise<PRDescriptionResult> {
-	const token = core.getInput("token", { required: true });
-	const github = getOctokit(token);
+	const core = coreModule;
+
 	core.startGroup("Generating PR description");
 
 	let description = "";
 
+	// Handle empty inputs
 	if (linkedIssues.length === 0 && commits.length === 0) {
-		// Handle empty inputs
 		core.warning("No linked issues or commits provided");
 		description = "## Changes\n\n_No changes detected_";
 	} else {
 		// Generate description with Claude
 		try {
-			description = await generateDescriptionWithClaude(linkedIssues, commits, apiKey);
+			description = await generateDescriptionWithClaude(core, AnthropicClass, linkedIssues, commits, apiKey);
 		} catch (error) {
 			core.warning(
 				`Failed to generate description with Claude: ${error instanceof Error ? error.message : String(error)}`,
@@ -215,8 +243,8 @@ export async function generatePRDescription(
 
 	core.endGroup();
 
+	// Update PR description
 	if (!dryRun) {
-		// Update PR description
 		core.info(`Updating PR #${prNumber} description`);
 
 		await withRetry(async () => {
@@ -307,3 +335,105 @@ export async function generatePRDescription(
 		checkId: checkRun.id,
 	};
 }
+
+/**
+ * Main action entrypoint: Generates PR description with Claude and sets GitHub Actions outputs
+ *
+ * @param args - Function arguments from github-script
+ * @param args.core - GitHub Actions core module
+ * @param args.github - GitHub API client
+ * @param args.context - GitHub Actions context
+ * @param args.Anthropic - Anthropic SDK class
+ *
+ * @remarks
+ * This action uses Claude AI to generate a comprehensive PR description based on
+ * linked issues and commits. It updates the PR description and creates a check run.
+ *
+ * The action respects environment variables:
+ * - `LINKED_ISSUES`: JSON array of linked issues (from link-issues-from-commits action)
+ * - `COMMITS`: JSON array of commit information
+ * - `PR_NUMBER`: Pull request number to update
+ * - `ANTHROPIC_API_KEY`: Anthropic API key for Claude access
+ * - `DRY_RUN`: Whether this is a dry-run (true | false)
+ *
+ * Outputs:
+ * - `description`: Generated PR description
+ * - `check_id`: GitHub check run ID
+ *
+ * @example
+ * ```yaml
+ * - uses: actions/github-script@v8
+ *   env:
+ *     LINKED_ISSUES: ${{ steps.link-issues.outputs.linked_issues }}
+ *     COMMITS: ${{ steps.link-issues.outputs.commits }}
+ *     PR_NUMBER: ${{ github.event.pull_request.number }}
+ *     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+ *     DRY_RUN: ${{ inputs.dry_run }}
+ *   with:
+ *     script: |
+ *       const Anthropic = require("@anthropic-ai/sdk").default;
+ *       const { default: generatePRDescription } = await import('${{ github.workspace }}/.github/actions/setup-release/generate-pr-description.ts');
+ *       await generatePRDescription({ core, github, context, Anthropic });
+ * ```
+ */
+export default async ({ core, github, context, Anthropic }: AsyncFunctionArguments): Promise<void> => {
+	try {
+		const linkedIssuesJson = process.env.LINKED_ISSUES || "[]";
+		const commitsJson = process.env.COMMITS || "[]";
+		const prNumberStr = process.env.PR_NUMBER;
+		const apiKey = process.env.ANTHROPIC_API_KEY;
+		const dryRun = process.env.DRY_RUN === "true";
+
+		if (dryRun) {
+			core.notice("🧪 Running in dry-run mode (preview only)");
+		}
+
+		// Validate required inputs
+		if (!prNumberStr) {
+			throw new Error("PR_NUMBER environment variable is required");
+		}
+
+		if (!apiKey) {
+			core.warning("ANTHROPIC_API_KEY not provided, will use fallback description generation");
+		}
+
+		const prNumber = Number.parseInt(prNumberStr, 10);
+		if (Number.isNaN(prNumber)) {
+			throw new Error(`Invalid PR_NUMBER: ${prNumberStr}`);
+		}
+
+		// Parse inputs
+		const linkedIssues: LinkedIssue[] = JSON.parse(linkedIssuesJson);
+		const commits: CommitInfo[] = JSON.parse(commitsJson);
+
+		core.info(
+			`Generating PR description for #${prNumber} with ${linkedIssues.length} linked issue(s) and ${commits.length} commit(s)`,
+		);
+
+		const result = await generatePRDescription(
+			core,
+			Anthropic,
+			github,
+			context,
+			linkedIssues,
+			commits,
+			prNumber,
+			apiKey || "",
+			dryRun,
+		);
+
+		// Set outputs
+		core.setOutput("description", result.description);
+		core.setOutput("check_id", result.checkId.toString());
+
+		// Log summary
+		core.notice(`✓ Generated PR description (${result.description.length} characters)`);
+
+		// Debug outputs
+		core.debug(`Set output 'description' to: ${result.description}`);
+		core.debug(`Set output 'check_id' to: ${result.checkId}`);
+	} catch (error) {
+		/* v8 ignore next -- @preserve */
+		core.setFailed(`Failed to generate PR description: ${error instanceof Error ? error.message : String(error)}`);
+	}
+};

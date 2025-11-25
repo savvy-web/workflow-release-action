@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import * as core from "@actions/core";
 import { getWorkspaces } from "workspace-tools";
 
 /**

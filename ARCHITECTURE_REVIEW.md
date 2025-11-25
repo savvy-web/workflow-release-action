@@ -68,7 +68,7 @@ export async function helperFunction(
 
 ## File Structure
 
-```
+```text
 src/
 ├── main.ts                 # NEW: Main entry point (orchestrates 3 phases)
 ├── pre.ts                  # NEW: Pre-action setup (empty for now)

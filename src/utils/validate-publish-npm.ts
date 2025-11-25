@@ -106,7 +106,7 @@ async function isPackagePublishable(packagePath: string, packageName: string): P
  * @param dryRun - Whether this is a dry-run
  * @returns Promise resolving to validation result
  */
-async function validatePackageNPMPublish(
+export async function validatePackageNPMPublish(
 	packagePath: string,
 	packageName: string,
 	packageVersion: string,
@@ -231,7 +231,7 @@ async function validatePackageNPMPublish(
  * @param dryRun - Whether this is a dry-run
  * @returns Promise resolving to validation result
  */
-async function validateNPMPublish(packageManager: string, dryRun: boolean): Promise<NPMPublishValidationResult> {
+export async function validateNPMPublish(packageManager: string, dryRun: boolean): Promise<NPMPublishValidationResult> {
 	const token = core.getInput("token", { required: true });
 	const github = getOctokit(token);
 	core.startGroup("Validating NPM publish");

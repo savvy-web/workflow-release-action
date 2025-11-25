@@ -13,7 +13,10 @@ permissions:
 jobs:
   release:
     name: Release
-    uses: ./.github/workflows/workflow-release.yml
-    secrets:
-      APP_ID: ${{ secrets.APP_ID }}
-      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run release action
+        uses: ./.github/actions/release
+        with:
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}

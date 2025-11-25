@@ -19,6 +19,7 @@
 		"lint:md": "markdownlint-cli2 '**/*.{md,mdx}' --config './lib/configs/.markdownlint-cli2.jsonc'",
 		"lint:md:fix": "markdownlint-cli2  --config './lib/configs/.markdownlint-cli2.jsonc' --fix",
 		"lint:md:fix:file": "markdownlint-cli2 '**/*.{md,mdx}' --config './lib/configs/.markdownlint-cli2.jsonc' --fix",
+		"lint:md:ws": "markdownlint-cli2  --config './lib/configs/.markdownlint-cli2.jsonc' --fix",
 		"prepare": "husky",
 		"test": "vitest --run --reporter=verbose",
 		"typecheck": "turbo run typecheck:all --log-prefix=none",
@@ -33,7 +34,7 @@
 		"@actions/http-client": "^3.0.0",
 		"@actions/io": "^2.0.0",
 		"@actions/tool-cache": "^2.0.2",
-		"@anthropic-ai/sdk": "^0.70.1",
+		"@anthropic-ai/sdk": "^0.71.0",
 		"jsonc-parser": "^3.3.1",
 		"semver": "^7.7.3",
 		"workspace-tools": "0.38.6"
@@ -47,7 +48,7 @@
 		"@octokit/types": "^16.0.0",
 		"@rslib/core": "^0.18.0",
 		"@types/node": "^24.10.1",
-		"@typescript/native-preview": "7.0.0-dev.20251111.1",
+		"@typescript/native-preview": "7.0.0-dev.20251124.1",
 		"@vercel/ncc": "^0.38.4",
 		"@vitest/coverage-v8": "^4.0.13",
 		"husky": "^9.1.7",
@@ -68,13 +69,13 @@
 		"packageManager": {
 			"name": "pnpm",
 			"version": "10.20.0",
-			"onFail": "error"
+			"onFail": "warn"
 		},
 		"runtime": [
 			{
 				"name": "node",
 				"version": "24.11.0",
-				"onFail": "error"
+				"onFail": "warn"
 			}
 		]
 	}

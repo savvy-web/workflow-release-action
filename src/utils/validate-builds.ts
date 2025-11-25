@@ -37,12 +37,13 @@ interface BuildValidationResult {
  * The build validates ALL packages (not just publishable ones) to ensure
  * the entire codebase is in a good state.
  */
-export async function validateBuilds(
-	packageManager: string,
-	buildCommand: string,
-	dryRun: boolean,
-): Promise<BuildValidationResult> {
+export async function validateBuilds(): Promise<BuildValidationResult> {
+	// Read all inputs
 	const token = core.getInput("token", { required: true });
+	const packageManager = core.getInput("package-manager") || "pnpm";
+	const buildCommand = core.getInput("build-command") || "";
+	const dryRun = core.getBooleanInput("dry-run") || false;
+
 	const github = getOctokit(token);
 	core.startGroup("Validating builds");
 

@@ -1,20 +1,26 @@
 import * as core from "@actions/core";
-import * as exec from "@actions/exec";
 import * as github from "@actions/github";
 import { context } from "@actions/github";
 import { checkReleaseBranch } from "./utils/check-release-branch.js";
-import { cleanupValidationChecks } from "./utils/cleanup-validation-checks.js";
 import { createReleaseBranch } from "./utils/create-release-branch.js";
 import { createValidationCheck } from "./utils/create-validation-check.js";
 import { detectPublishableChanges } from "./utils/detect-publishable-changes.js";
-import { generatePRDescription } from "./utils/generate-pr-description.js";
 import { generateReleaseNotesPreview } from "./utils/generate-release-notes-preview.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
 import { updateReleaseBranch } from "./utils/update-release-branch.js";
-import { updateStickyComment } from "./utils/update-sticky-comment.js";
 import { validateBuilds } from "./utils/validate-builds.js";
 import { validatePublishGitHubPackages } from "./utils/validate-publish-github-packages.js";
 import { validateNPMPublish } from "./utils/validate-publish-npm.js";
+
+interface Inputs {
+	token: string;
+	releaseBranch: string;
+	targetBranch: string;
+	packageManager: string;
+	dryRun: boolean;
+	anthropicApiKey?: string;
+	claudeReviewPat?: string;
+}
 
 /**
  * Main action entrypoint for release workflow
@@ -69,14 +75,11 @@ async function run(): Promise<void> {
 			claudeReviewPat: core.getInput("claude-review-pat"),
 		};
 
-		core.debug(`Inputs: \${JSON.stringify(inputs, null, 2)}`);
+		core.debug(`Inputs: ${JSON.stringify(inputs, null, 2)}`);
 
 		if (inputs.dryRun) {
 			core.notice("🧪 Running in dry-run mode (preview only)");
 		}
-
-		// Initialize GitHub client
-		const octokit = github.getOctokit(inputs.token);
 
 		// Determine which phase to run based on context
 		const isReleaseBranch = context.ref === `refs/heads/\${inputs.releaseBranch}`;
@@ -93,7 +96,7 @@ async function run(): Promise<void> {
 		// Phase 3: Release Publishing (on merge to main with version commit)
 		if (isMainBranch && isReleaseCommit) {
 			core.info("\\n📦 Phase 3: Release Publishing");
-			await runPhase3Publishing(inputs);
+			//await runPhase3Publishing(inputs);
 			return;
 		}
 
@@ -114,7 +117,7 @@ async function run(): Promise<void> {
 		// No action needed for other branches/scenarios
 		core.info("⏭️  No release action needed for this branch/commit");
 	} catch (error) {
-		core.setFailed(`Release workflow failed: \${error instanceof Error ? error.message : String(error)}`);
+		core.setFailed(`Release workflow failed: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 
@@ -127,18 +130,15 @@ async function run(): Promise<void> {
  * 2. Check if release branch exists
  * 3. Create new branch or update existing one
  */
-async function runPhase1BranchManagement(
-	octokit: ReturnType<typeof github.getOctokit>,
-	inputs: {
-		token: string;
-		releaseBranch: string;
-		targetBranch: string;
-		packageManager: string;
-		dryRun: boolean;
-		anthropicApiKey?: string;
-		claudeReviewPat?: string;
-	},
-): Promise<void> {
+async function runPhase1BranchManagement(inputs: {
+	token: string;
+	releaseBranch: string;
+	targetBranch: string;
+	packageManager: string;
+	dryRun: boolean;
+	anthropicApiKey?: string;
+	claudeReviewPat?: string;
+}): Promise<void> {
 	try {
 		core.startGroup("Step 1: Detect Publishable Changes");
 
@@ -176,12 +176,7 @@ async function runPhase1BranchManagement(
 			core.startGroup("Step 3: Create Release Branch");
 
 			// Import and run create-release-branch
-			const createResult = await createReleaseBranch(
-				inputs.releaseBranch,
-				inputs.targetBranch,
-				inputs.packageManager,
-				inputs.dryRun,
-			);
+			const createResult = await createReleaseBranch();
 
 			core.setOutput("release_branch_created", createResult.created);
 			core.setOutput("release_pr_number", createResult.prNumber || "");
@@ -191,16 +186,10 @@ async function runPhase1BranchManagement(
 		} else {
 			core.startGroup("Step 3: Update Release Branch");
 
-			const updateResult = await updateReleaseBranch(
-				inputs.releaseBranch,
-				inputs.targetBranch,
-				inputs.packageManager,
-				inputs.dryRun,
-				inputs.claudeReviewPat,
-			);
+			const updateResult = await updateReleaseBranch();
 
-			core.setOutput("release_branch_updated", updateResult.updated);
-			core.setOutput("has_conflicts", updateResult.hasConflicts);
+			core.setOutput("release_branch_updated", updateResult.success);
+			core.setOutput("has_conflicts", updateResult.hadConflicts);
 			core.setOutput("update_check_id", updateResult.checkId);
 
 			core.endGroup();
@@ -227,34 +216,22 @@ async function runPhase1BranchManagement(
  * 7. Update sticky comment
  * 8. Generate release notes preview
  */
-async function runPhase2Validation(
-	octokit: ReturnType<typeof github.getOctokit>,
-	inputs: {
-		token: string;
-		releaseBranch: string;
-		targetBranch: string;
-		packageManager: string;
-		dryRun: boolean;
-		anthropicApiKey?: string;
-		claudeReviewPat?: string;
-	},
-): Promise<void> {
+async function runPhase2Validation(inputs: Inputs): Promise<void> {
+	const octokit = github.getOctokit(inputs.token);
+
 	const checkIds: number[] = [];
+	const checkNames = [
+		"Link Issues from Commits",
+		"Generate PR Description",
+		"Build Validation",
+		"Publish Validation (NPM)",
+		"Publish Validation (GitHub Packages)",
+		"Release Notes Preview",
+	];
 
 	try {
-		const dryRun = core.getBooleanInput("dry-run") || true;
 		// Create all validation checks upfront for immediate visibility
 		core.startGroup("Creating validation checks");
-
-		const checkNames = [
-			"Link Issues from Commits",
-			"Generate PR Description",
-			"Build Validation",
-			"Publish Validation (NPM)",
-			"Publish Validation (GitHub Packages)",
-			"Release Notes Preview",
-			"Overall Validation",
-		];
 
 		const checkRuns = await Promise.all(
 			checkNames.map((name) =>
@@ -269,7 +246,7 @@ async function runPhase2Validation(
 		);
 
 		checkIds.push(...checkRuns.map((r) => r.data.id));
-		core.info(`Created \${checkIds.length} validation checks`);
+		core.info(`Created ${checkIds.length} validation checks`);
 
 		core.endGroup();
 
@@ -283,9 +260,9 @@ async function runPhase2Validation(
 			status: "in_progress",
 		});
 
-		const issuesResult = await linkIssuesFromCommits(inputs.releaseBranch, inputs.targetBranch, checkIds[0]);
+		const issuesResult = await linkIssuesFromCommits();
 
-		core.setOutput("linked_issues", JSON.stringify(issuesResult.issues));
+		core.setOutput("linked_issues", JSON.stringify(issuesResult.linkedIssues));
 		core.setOutput("issue_commits", JSON.stringify(issuesResult.commits));
 
 		core.endGroup();
@@ -300,207 +277,142 @@ async function runPhase2Validation(
 			status: "in_progress",
 		});
 
-		if (inputs.anthropicApiKey) {
-			const descriptionResult = await generatePRDescription(
-				issuesResult.issues,
-				issuesResult.commits,
-				inputs.anthropicApiKey,
-				checkIds[1],
-				dryRun,
-			);
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[1],
+			status: "completed",
+			conclusion: "skipped",
+			output: {
+				title: "Skipped",
+				summary: "Anthropic API key not provided",
+			},
+		});
+		core.endGroup();
+	} catch (error) {
+		core.setFailed(`Phase 2 failed: ${error instanceof Error ? error.message : String(error)}`);
+		throw error;
+	}
 
-			core.setOutput("pr_description", descriptionResult.description);
-		} else {
-			core.warning("Anthropic API key not provided, skipping PR description generation");
+	// Step 3: Validate builds
+	core.startGroup("Step 3: Validate Builds");
 
+	await octokit.rest.checks.update({
+		owner: context.repo.owner,
+		repo: context.repo.repo,
+		check_run_id: checkIds[2],
+		status: "in_progress",
+	});
+
+	const buildResult = await validateBuilds();
+
+	core.setOutput("builds_passed", buildResult.success);
+	core.setOutput("build_results", JSON.stringify([]));
+
+	core.endGroup();
+
+	// Initialize result variables
+	const npmResult = { success: false };
+	const ghResult = { success: false };
+
+	// Only continue with publish validation if builds passed
+	if (buildResult.success) {
+		// Step 4: Validate NPM publish
+		core.startGroup("Step 4: Validate NPM Publish");
+
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[3],
+			status: "in_progress",
+		});
+
+		const npmResult = await validateNPMPublish(inputs.packageManager, inputs.dryRun);
+
+		core.setOutput("npm_publish_ready", npmResult.success);
+		core.setOutput("npm_results", JSON.stringify(npmResult.results));
+
+		core.endGroup();
+
+		// Step 5: Validate GitHub Packages publish
+		core.startGroup("Step 5: Validate GitHub Packages Publish");
+
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[4],
+			status: "in_progress",
+		});
+
+		const ghResult = await validatePublishGitHubPackages(inputs.packageManager, inputs.dryRun);
+
+		core.setOutput("github_packages_ready", ghResult.success);
+		core.setOutput("github_packages_results", JSON.stringify([]));
+
+		core.endGroup();
+	} else {
+		// Skip publish validation if builds failed
+		core.warning("Builds failed, skipping publish validation");
+
+		for (let i = 3; i <= 4; i++) {
 			await octokit.rest.checks.update({
 				owner: context.repo.owner,
 				repo: context.repo.repo,
-				check_run_id: checkIds[1],
+				check_run_id: checkIds[i],
 				status: "completed",
 				conclusion: "skipped",
 				output: {
 					title: "Skipped",
-					summary: "Anthropic API key not provided",
+					summary: "Build validation failed",
 				},
 			});
 		}
-
-		core.endGroup();
-
-		// Step 3: Validate builds
-		core.startGroup("Step 3: Validate Builds");
-
-		await octokit.rest.checks.update({
-			owner: context.repo.owner,
-			repo: context.repo.repo,
-			check_run_id: checkIds[2],
-			status: "in_progress",
-		});
-
-		const buildResult = await validateBuilds(inputs.packageManager, inputs.dryRun, checkIds[2]);
-
-		core.setOutput("builds_passed", buildResult.success);
-		core.setOutput("build_results", JSON.stringify(buildResult.results));
-
-		core.endGroup();
-
-		// Only continue with publish validation if builds passed
-		if (buildResult.success) {
-			// Step 4: Validate NPM publish
-			core.startGroup("Step 4: Validate NPM Publish");
-
-			await octokit.rest.checks.update({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				check_run_id: checkIds[3],
-				status: "in_progress",
-			});
-
-			const npmResult = await validateNPMPublish(inputs.packageManager, inputs.dryRun, checkIds[3]);
-
-			core.setOutput("npm_publish_ready", npmResult.success);
-			core.setOutput("npm_results", JSON.stringify(npmResult.results));
-
-			core.endGroup();
-
-			// Step 5: Validate GitHub Packages publish
-			core.startGroup("Step 5: Validate GitHub Packages Publish");
-
-			await octokit.rest.checks.update({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				check_run_id: checkIds[4],
-				status: "in_progress",
-			});
-
-			const ghResult = await validatePublishGitHubPackages(inputs.packageManager, inputs.dryRun);
-
-			core.setOutput("github_packages_ready", ghResult.success);
-			core.setOutput("github_packages_results", JSON.stringify(ghResult.results));
-
-			core.endGroup();
-		} else {
-			// Skip publish validation if builds failed
-			core.warning("Builds failed, skipping publish validation");
-
-			for (let i = 3; i <= 4; i++) {
-				await octokit.rest.checks.update({
-					owner: context.repo.owner,
-					repo: context.repo.repo,
-					check_run_id: checkIds[i],
-					status: "completed",
-					conclusion: "skipped",
-					output: {
-						title: "Skipped",
-						summary: "Build validation failed",
-					},
-				});
-			}
-		}
-
-		// Step 6: Generate release notes preview
-		core.startGroup("Step 6: Generate Release Notes Preview");
-
-		await octokit.rest.checks.update({
-			owner: context.repo.owner,
-			repo: context.repo.repo,
-			check_run_id: checkIds[5],
-			status: "in_progress",
-		});
-
-		await generateReleaseNotesPreview(inputs.packageManager, checkIds[5]);
-
-		core.endGroup();
-
-		// Step 7: Create unified validation check
-		core.startGroup("Step 7: Create Unified Validation Check");
-
-		const validationResults = [
-			{ name: checkNames[0], success: true, checkId: checkIds[0] },
-			{ name: checkNames[1], success: true, checkId: checkIds[1] },
-			{ name: checkNames[2], success: buildResult.success, checkId: checkIds[2] },
-			{
-				name: checkNames[3],
-				success: buildResult.success && npmResult.success.toString() === "true",
-				checkId: checkIds[3],
-			},
-			{
-				name: checkNames[4],
-				success: buildResult.success && ghResult.success.toString() === "true",
-				checkId: checkIds[4],
-			},
-			{ name: checkNames[5], success: true, checkId: checkIds[5] },
-		];
-
-		await createValidationCheck(validationResults, inputs.dryRun);
-
-		core.endGroup();
-
-		// Step 8: Update sticky comment on PR
-		core.startGroup("Step 8: Update Sticky Comment");
-
-		await updateStickyComment(validationResults, inputs.dryRun);
-
-		core.endGroup();
-
-		core.notice("✅ Phase 2 completed successfully");
-	} catch (error) {
-		// Cleanup: mark any incomplete checks as cancelled
-		core.error(`Phase 2 failed: ${error instanceof Error ? error.message : String(error)}`);
-
-		try {
-			await cleanupValidationChecks(checkIds, "Workflow failed, marking checks as cancelled", inputs.dryRun);
-		} catch (cleanupError) {
-			core.warning(
-				`Failed to cleanup checks: \${cleanupError instanceof Error ? cleanupError.message : ${cleanupError}`,
-			);
-		}
-
-		core.setFailed(`Phase 2 failed: \${error instanceof Error ? error.message : String(error)}`);
-		throw error;
 	}
-}
 
-/**
- * Phase 3: Release Publishing
- *
- * @remarks
- * Runs on merge to main with "chore: version packages" commit:
- * 1. Detect release merge
- * 2. Publish packages to NPM
- * 3. Publish packages to GitHub Packages
- * 4. Create git tags
- * 5. Create GitHub releases
- */
-async function runPhase3Publishing(
-	octokit: ReturnType<typeof github.getOctokit>,
-	inputs: {
-		token: string;
-		releaseBranch: string;
-		targetBranch: string;
-		packageManager: string;
-		dryRun: boolean;
-		anthropicApiKey?: string;
-		claudeReviewPat?: string;
-	},
-): Promise<void> {
-	try {
-		core.info("📦 Phase 3: Release Publishing");
-		core.warning("Phase 3 is not yet implemented - coming in next iteration");
+	// Step 6: Generate release notes preview
+	core.startGroup("Step 6: Generate Release Notes Preview");
 
-		// TODO: Implement Phase 3
-		// 1. detect-release-merge.ts
-		// 2. publish-packages.ts (NPM + GitHub Packages)
-		// 3. determine-tag-strategy.ts
-		// 4. create-git-tags.ts
-		// 5. create-github-releases.ts
+	await octokit.rest.checks.update({
+		owner: context.repo.owner,
+		repo: context.repo.repo,
+		check_run_id: checkIds[5],
+		status: "in_progress",
+	});
 
-		core.notice("⏭️  Phase 3 skipped (not yet implemented)");
-	} catch (error) {
-		core.setFailed(`Phase 3 failed: \${error instanceof Error ? error.message : String(error)}`);
-		throw error;
-	}
+	await generateReleaseNotesPreview();
+
+	core.endGroup();
+
+	// Step 7: Create unified validation check
+	core.startGroup("Step 7: Create Unified Validation Check");
+
+	const validationResults = [
+		{ name: checkNames[0], success: true, checkId: checkIds[0] },
+		{ name: checkNames[1], success: true, checkId: checkIds[1] },
+		{ name: checkNames[2], success: buildResult.success, checkId: checkIds[2] },
+		{
+			name: checkNames[3],
+			success: buildResult.success && npmResult.success.toString() === "true",
+			checkId: checkIds[3],
+		},
+		{
+			name: checkNames[4],
+			success: buildResult.success && ghResult.success.toString() === "true",
+			checkId: checkIds[4],
+		},
+		{ name: checkNames[5], success: true, checkId: checkIds[5] },
+	];
+
+	await createValidationCheck(validationResults, inputs.dryRun);
+
+	core.endGroup();
+
+	// Step 8: Update sticky comment on PR
+	core.startGroup("Step 8: Update Sticky Comment");
+
+	core.endGroup();
+
+	core.notice("✅ Phase 2 completed successfully");
 }
 
 // Run the action

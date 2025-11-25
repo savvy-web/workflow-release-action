@@ -75,15 +75,16 @@ async function execWithRetry(
  * @param dryRun - Whether this is a dry-run
  * @returns Create release branch result
  */
-export async function createReleaseBranch(
-	releaseBranch: string,
-	targetBranch: string,
-	packageManager: string,
-	versionCommand: string,
-	prTitlePrefix: string,
-	dryRun: boolean,
-): Promise<CreateReleaseBranchResult> {
+export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> {
+	// Read all inputs
 	const token = core.getInput("token", { required: true });
+	const releaseBranch = core.getInput("release-branch") || "changeset-release/main";
+	const targetBranch = core.getInput("target-branch") || "main";
+	const packageManager = core.getInput("package-manager") || "pnpm";
+	const versionCommand = core.getInput("version-command") || "";
+	const prTitlePrefix = core.getInput("pr-title-prefix") || "chore: release";
+	const dryRun = core.getBooleanInput("dry-run") || false;
+
 	const github = getOctokit(token);
 
 	core.startGroup("Creating release branch");

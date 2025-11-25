@@ -143,7 +143,7 @@ Based on Biome configuration and common patterns:
 This repository provides several reusable GitHub Actions. Each action has its own documentation with usage examples and implementation details.
 
 | Action | Description | Documentation |
-|--------|-------------|---------------|
+| ------ | ----------- | ------------- |
 | **node** | Node.js development environment setup with package manager detection, dependency caching, and Turbo/Biome configuration | [CLAUDE.md](.github/actions/node/CLAUDE.md) \| [README.md](.github/actions/node/README.md) |
 | **biome** | Automatic Biome version detection and installation from repository configuration | [CLAUDE.md](.github/actions/biome/CLAUDE.md) \| [README.md](.github/actions/biome/README.md) |
 | **setup-release** | Complete release environment setup with GitHub App token generation and Node.js configuration | [CLAUDE.md](.github/actions/setup-release/CLAUDE.md) \| [README.md](.github/actions/setup-release/README.md) |

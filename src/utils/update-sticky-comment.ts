@@ -16,9 +16,9 @@ interface StickyCommentResult {
 /**
  * Updates or creates a sticky comment on a PR
  *
-
-
-
+ * @param core - GitHub Actions core module
+ * @param github - GitHub API client
+ * @param context - GitHub Actions context
  * @param prNumber - Pull request number
  * @param commentBody - Comment body content
  * @param commentIdentifier - Unique identifier to find existing comment
