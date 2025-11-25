@@ -142,4 +142,26 @@ describe("check-release-branch", () => {
 			}),
 		);
 	});
+
+	it("should handle non-Error throw when checking branch", async () => {
+		mockOctokit.rest.repos.getBranch.mockRejectedValue("String error from API"); // Non-Error throw
+
+		const result = await checkReleaseBranch("changeset-release/main", "main", false);
+
+		expect(result.exists).toBe(false);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("String error from API"));
+	});
+
+	it("should handle non-Error throw when checking for open PRs", async () => {
+		mockOctokit.rest.repos.getBranch.mockResolvedValue({
+			data: { name: "changeset-release/main", commit: { sha: "abc123" } },
+		});
+		mockOctokit.rest.pulls.list.mockRejectedValue("String error from PR list"); // Non-Error throw
+
+		const result = await checkReleaseBranch("changeset-release/main", "main", false);
+
+		expect(result.exists).toBe(true);
+		expect(result.hasOpenPr).toBe(false);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("String error from PR list"));
+	});
 });

@@ -298,4 +298,134 @@ describe("generate-release-notes-preview", () => {
 
 		expect(exec.exec).toHaveBeenCalledWith("npm", ["run", "changeset", "status", "--output=json"], expect.any(Object));
 	});
+
+	it("should handle error when reading CHANGELOG throws", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			if (options?.listeners?.stdout) {
+				options.listeners.stdout(
+					Buffer.from(
+						JSON.stringify({
+							releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+							changesets: [],
+						}),
+					),
+				);
+			}
+			return 0;
+		});
+
+		vi.mocked(fs.existsSync).mockReturnValue(true);
+		vi.mocked(fs.readFileSync).mockImplementation((path) => {
+			const pathStr = String(path);
+			if (pathStr.includes("package.json")) {
+				return JSON.stringify({ name: "@test/pkg" });
+			}
+			if (pathStr.includes("CHANGELOG.md")) {
+				throw new Error("Permission denied");
+			}
+			return "";
+		});
+
+		const result = await generateReleaseNotesPreview();
+
+		expect(result.packages).toHaveLength(1);
+		expect(result.packages[0].hasChangelog).toBe(false);
+		expect(result.packages[0].error).toBe("Permission denied");
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Permission denied"));
+	});
+
+	it("should handle non-Error throw when reading CHANGELOG", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			if (options?.listeners?.stdout) {
+				options.listeners.stdout(
+					Buffer.from(
+						JSON.stringify({
+							releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+							changesets: [],
+						}),
+					),
+				);
+			}
+			return 0;
+		});
+
+		vi.mocked(fs.existsSync).mockReturnValue(true);
+		vi.mocked(fs.readFileSync).mockImplementation((path) => {
+			const pathStr = String(path);
+			if (pathStr.includes("package.json")) {
+				return JSON.stringify({ name: "@test/pkg" });
+			}
+			if (pathStr.includes("CHANGELOG.md")) {
+				throw "String error"; // Non-Error throw
+			}
+			return "";
+		});
+
+		const result = await generateReleaseNotesPreview();
+
+		expect(result.packages).toHaveLength(1);
+		expect(result.packages[0].error).toBe("String error");
+	});
+
+	it("should show 'no release notes' when notes are empty", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			if (options?.listeners?.stdout) {
+				options.listeners.stdout(
+					Buffer.from(
+						JSON.stringify({
+							releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+							changesets: [],
+						}),
+					),
+				);
+			}
+			return 0;
+		});
+
+		vi.mocked(fs.existsSync).mockReturnValue(true);
+		vi.mocked(fs.readFileSync).mockImplementation((path) => {
+			const pathStr = String(path);
+			if (pathStr.includes("package.json")) {
+				return JSON.stringify({ name: "@test/pkg" });
+			}
+			if (pathStr.includes("CHANGELOG.md")) {
+				// Version header exists but has empty content before next header
+				return `# Changelog
+
+## 1.0.0
+
+## 0.9.0
+
+Previous notes`;
+			}
+			return "";
+		});
+
+		const result = await generateReleaseNotesPreview();
+
+		expect(result.packages).toHaveLength(1);
+		// Notes should be empty string (after trim)
+		expect(result.packages[0].notes).toBe("");
+		// The summary should show "No release notes available"
+		expect(core.summary.addRaw).toHaveBeenCalledWith("_No release notes available_");
+	});
+
+	it("should capture stderr from changeset status command", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			// Emit stderr first (warning from changeset)
+			if (options?.listeners?.stderr) {
+				options.listeners.stderr(Buffer.from("Warning: changeset config issue\n"));
+			}
+			// Then emit stdout with valid JSON
+			if (options?.listeners?.stdout) {
+				options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
+			}
+			return 0;
+		});
+
+		const result = await generateReleaseNotesPreview();
+
+		expect(result.packages).toEqual([]);
+		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("changeset config issue"));
+	});
 });

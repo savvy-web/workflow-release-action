@@ -217,4 +217,41 @@ describe("link-issues-from-commits", () => {
 
 		expect(result.linkedIssues).toHaveLength(1);
 	});
+
+	it("should use default branch names when inputs are empty", async () => {
+		vi.mocked(core.getInput).mockImplementation((name: string) => {
+			if (name === "token") return "test-token";
+			if (name === "release-branch") return ""; // Empty to trigger default
+			if (name === "target-branch") return ""; // Empty to trigger default
+			return "";
+		});
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: { commits: [] },
+		});
+
+		await linkIssuesFromCommits();
+
+		// Verify the default branch names were used
+		expect(mockOctokit.rest.repos.compareCommits).toHaveBeenCalledWith(
+			expect.objectContaining({
+				base: "main", // Default target-branch
+				head: "changeset-release/main", // Default release-branch
+			}),
+		);
+	});
+
+	it("should handle non-Error throw from issues.get", async () => {
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: {
+				commits: [{ sha: "abc123", commit: { message: "Fixes #42", author: { name: "Test" } } }],
+			},
+		});
+		// Throw a non-Error value to hit the String(error) path
+		mockOctokit.rest.issues.get.mockRejectedValue("String error");
+
+		const result = await linkIssuesFromCommits();
+
+		expect(result.linkedIssues).toEqual([]);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("String error"));
+	});
 });

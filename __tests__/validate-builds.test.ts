@@ -145,6 +145,17 @@ describe("validate-builds", () => {
 		expect(exec.exec).toHaveBeenCalledWith("yarn", ["ci:build"], expect.any(Object));
 	});
 
+	it("should handle non-Error throw from build command", async () => {
+		vi.mocked(exec.exec).mockImplementation(async () => {
+			throw "String error thrown"; // Non-Error throw to hit String(error) path
+		});
+
+		const result = await validateBuilds();
+
+		expect(result.success).toBe(false);
+		expect(core.error).toHaveBeenCalledWith(expect.stringContaining("String error thrown"));
+	});
+
 	it("should capture stdout during build", async () => {
 		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
 			if (options?.listeners?.stdout) {
@@ -156,5 +167,73 @@ describe("validate-builds", () => {
 		const result = await validateBuilds();
 
 		expect(result.success).toBe(true);
+	});
+
+	it("should parse generic ERROR in file.ts pattern", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			if (options?.listeners?.stderr) {
+				options.listeners.stderr(Buffer.from("ERROR in src/utils/helper.ts: Cannot find module\n"));
+			}
+			// Don't throw - let the ERROR substring in stderr trigger failure via success check
+			return 0;
+		});
+
+		const result = await validateBuilds();
+
+		expect(result.success).toBe(false);
+		expect(result.errors).toContain("ERROR in src/utils/helper.ts");
+	});
+
+	it("should ignore non-TypeScript files in generic error pattern", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			if (options?.listeners?.stderr) {
+				options.listeners.stderr(Buffer.from("ERROR in webpack.config.js: Invalid configuration\n"));
+			}
+			// Don't throw - let the ERROR substring in stderr trigger failure
+			return 0;
+		});
+
+		const result = await validateBuilds();
+
+		expect(result.success).toBe(false);
+		// Non-TS files should be skipped in annotations (the .js file won't create an annotation)
+		expect(result.errors).toContain("ERROR in webpack.config.js");
+	});
+
+	it("should handle generic error pattern without message", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			if (options?.listeners?.stderr) {
+				options.listeners.stderr(Buffer.from("ERROR in src/broken.ts\n"));
+			}
+			// Don't throw - let the ERROR substring in stderr trigger failure
+			return 0;
+		});
+
+		const result = await validateBuilds();
+
+		expect(result.success).toBe(false);
+		expect(result.errors).toContain("ERROR in src/broken.ts");
+	});
+
+	it("should show truncation message when more than 20 errors", async () => {
+		// Generate more than 20 TypeScript errors
+		const errors = Array.from(
+			{ length: 25 },
+			(_, i) => `src/file${i}.ts:${i + 1}:5 - error TS2322: Type error ${i}\n`,
+		).join("");
+
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			if (options?.listeners?.stderr) {
+				options.listeners.stderr(Buffer.from(errors));
+			}
+			// Don't throw - let the "error" substring in stderr trigger failure via success check
+			return 0;
+		});
+
+		const result = await validateBuilds();
+
+		expect(result.success).toBe(false);
+		// The summary should indicate truncation when annotations.length > 20
+		expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("Showing first 20"));
 	});
 });

@@ -119,6 +119,8 @@ describe("create-release-branch", () => {
 	});
 
 	it("should retry PR creation on failure", async () => {
+		vi.useFakeTimers(); // PR retry uses setTimeout with 2000ms delay
+
 		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
 			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
 				if (options?.listeners?.stdout) {
@@ -133,7 +135,9 @@ describe("create-release-branch", () => {
 			.mockRejectedValueOnce(new Error("API Error"))
 			.mockResolvedValueOnce({ data: { number: 456, html_url: "https://github.com/test/pull/456" } });
 
-		const result = await createReleaseBranch();
+		const actionPromise = createReleaseBranch();
+		await vi.advanceTimersByTimeAsync(5000); // Advance past the 2s retry delay
+		const result = await actionPromise;
 
 		expect(result.created).toBe(true);
 		expect(result.prNumber).toBe(456);

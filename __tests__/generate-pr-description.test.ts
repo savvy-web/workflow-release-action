@@ -285,4 +285,77 @@ describe("generate-pr-description", () => {
 			}),
 		);
 	});
+
+	it("should retry on retryable errors with exponential backoff", async () => {
+		vi.useFakeTimers();
+		process.env.COMMITS = JSON.stringify([{ sha: "abc123", message: "test", author: "Test" }]);
+
+		// Use ECONNRESET which is in the retryable errors list
+		let callCount = 0;
+		mockAnthropicCreate.mockImplementation(() => {
+			callCount++;
+			if (callCount < 3) {
+				return Promise.reject(new Error("ECONNRESET: Connection reset"));
+			}
+			return Promise.resolve({
+				content: [{ type: "text", text: "- Fixed after retry" }],
+			});
+		});
+
+		const mockContext = {
+			repo: { owner: "test-owner", repo: "test-repo" },
+			sha: "abc123",
+		};
+
+		const actionPromise = generatePRDescription({
+			core: mockCore,
+			github: mockOctokit as unknown as InstanceType<typeof import("@actions/github/lib/utils").GitHub>,
+			context: mockContext as unknown as import("@actions/github/lib/context").Context,
+			Anthropic: MockAnthropic as unknown as typeof import("@anthropic-ai/sdk").default,
+		});
+
+		// Advance time to allow retries
+		await vi.advanceTimersByTimeAsync(60000);
+		await actionPromise;
+
+		// Should have retried and succeeded
+		expect(callCount).toBe(3);
+		expect(mockCore.setOutput).toHaveBeenCalledWith("description", expect.stringContaining("Fixed after retry"));
+
+		vi.useRealTimers();
+	});
+
+	it("should fallback after exhausting all retries on retryable errors", async () => {
+		vi.useFakeTimers();
+		process.env.COMMITS = JSON.stringify([{ sha: "abc123", message: "test", author: "Test" }]);
+
+		// Always fail with retryable error
+		mockAnthropicCreate.mockRejectedValue(new Error("ETIMEDOUT: Connection timed out"));
+
+		const mockContext = {
+			repo: { owner: "test-owner", repo: "test-repo" },
+			sha: "abc123",
+		};
+
+		const actionPromise = generatePRDescription({
+			core: mockCore,
+			github: mockOctokit as unknown as InstanceType<typeof import("@actions/github/lib/utils").GitHub>,
+			context: mockContext as unknown as import("@actions/github/lib/context").Context,
+			Anthropic: MockAnthropic as unknown as typeof import("@anthropic-ai/sdk").default,
+		});
+
+		// Advance time to exhaust all retries
+		await vi.advanceTimersByTimeAsync(120000);
+		await actionPromise;
+
+		// Should have tried 4 times (initial + 3 retries) and fallen back
+		expect(mockAnthropicCreate).toHaveBeenCalledTimes(4);
+		expect(mockCore.warning).toHaveBeenCalledWith(
+			expect.stringContaining("Failed to generate description with Claude"),
+		);
+		// Should still succeed with fallback description
+		expect(mockCore.setOutput).toHaveBeenCalledWith("description", expect.any(String));
+
+		vi.useRealTimers();
+	});
 });

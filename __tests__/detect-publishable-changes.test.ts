@@ -302,4 +302,26 @@ describe("detect-publishable-changes", () => {
 
 		expect(result.hasChanges).toBe(false);
 	});
+
+	it("should handle non-Error throw when reading package.json", async () => {
+		const changesetStatus = {
+			releases: [{ name: "@test/non-error-pkg", newVersion: "1.0.0", type: "minor" }],
+			changesets: [],
+		};
+
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			if (options?.listeners?.stdout) {
+				options.listeners.stdout(Buffer.from(JSON.stringify(changesetStatus)));
+			}
+			return 0;
+		});
+
+		vi.mocked(existsSync).mockReturnValue(true);
+		vi.mocked(readFile).mockRejectedValue("String error thrown"); // Non-Error throw to hit String(error) path
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(result.hasChanges).toBe(false);
+		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("String error thrown"));
+	});
 });

@@ -185,6 +185,28 @@ describe("update-release-branch", () => {
 		expect(exec.exec).toHaveBeenCalledWith("npm", ["run", "ci:version"], expect.any(Object));
 	});
 
+	it("should use yarn command for yarn package manager", async () => {
+		vi.mocked(core.getInput).mockImplementation((name: string) => {
+			if (name === "token") return "test-token";
+			if (name === "package-manager") return "yarn";
+			if (name === "version-command") return "";
+			return "";
+		});
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		await updateReleaseBranch();
+
+		expect(exec.exec).toHaveBeenCalledWith("yarn", ["ci:version"], expect.any(Object));
+	});
+
 	it("should handle errors when checking for open PR", async () => {
 		mockOctokit.rest.pulls.list.mockRejectedValue(new Error("API Error"));
 

@@ -669,5 +669,98 @@ describe("validate-publish-github-packages", () => {
 
 			expect(result.success).toBe(false);
 		});
+
+		it("should handle npm list throwing non-Error", async () => {
+			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+				// Changeset status
+				if (cmd === "npx" && args?.includes("changeset")) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(
+							Buffer.from(
+								JSON.stringify({
+									releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor", changesets: [] }],
+								}),
+							),
+						);
+					}
+					return 0;
+				}
+				// npm list - throws non-Error
+				if (cmd === "npm" && args?.includes("list")) {
+					throw "String error from npm list"; // Non-Error throw to hit String(error) path
+				}
+				// test for package.json - fail all common paths
+				if (cmd === "test") {
+					return 1;
+				}
+				return 0;
+			});
+
+			const result = await validatePublishGitHubPackages("npm", false);
+
+			expect(result.packages).toHaveLength(1);
+			expect(result.packages[0].canPublish).toBe(false);
+			expect(result.packages[0].message).toContain("not found");
+		});
+
+		it("should find package in deeply nested npm list dependencies", async () => {
+			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+				// Changeset status
+				if (cmd === "npx" && args?.includes("changeset")) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(
+							Buffer.from(
+								JSON.stringify({
+									releases: [{ name: "@test/nested-pkg", newVersion: "1.0.0", type: "minor", changesets: [] }],
+								}),
+							),
+						);
+					}
+					return 0;
+				}
+				// npm list - nested structure where target is in nested deps
+				if (cmd === "npm" && args?.includes("list")) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(
+							Buffer.from(
+								JSON.stringify({
+									dependencies: {
+										"@other/pkg": {
+											dependencies: {
+												"@test/nested-pkg": {},
+											},
+										},
+									},
+								}),
+							),
+						);
+					}
+					return 0;
+				}
+				// cat for package.json
+				if (cmd === "cat") {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(
+							Buffer.from(
+								JSON.stringify({
+									name: "@test/nested-pkg",
+									publishConfig: { registry: "https://npm.pkg.github.com" },
+								}),
+							),
+						);
+					}
+					return 0;
+				}
+				// npm publish
+				if (cmd === "npm" && args?.includes("publish")) {
+					return 0;
+				}
+				return 0;
+			});
+
+			const result = await validatePublishGitHubPackages("npm", false);
+
+			expect(result.packages).toHaveLength(1);
+		});
 	});
 });
