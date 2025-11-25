@@ -260,6 +260,119 @@ beforeEach(() => {
 });
 ```
 
+## Testing Retry Logic with Fake Timers
+
+Functions that implement retry logic with exponential backoff should use Vitest fake timers to avoid actually waiting for delays during tests. This makes tests run instantly instead of waiting for real timeouts.
+
+### Pattern for Retry Tests
+
+```typescript
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+describe("retry logic", () => {
+  // Always reset timers in afterEach to prevent state bleeding between tests
+  afterEach(() => {
+    vi.useRealTimers(); // Reset to real timers after each test
+  });
+
+  it("should retry on transient failures", async () => {
+    vi.useFakeTimers(); // Enable fake timers for this test
+
+    // Setup mocks to fail then succeed
+    mockApiCall
+      .mockRejectedValueOnce(new Error("ECONNRESET"))
+      .mockRejectedValueOnce(new Error("Timeout"))
+      .mockResolvedValueOnce({ data: "success" });
+
+    // Start the action and advance timers
+    const actionPromise = myAction(mockArgs);
+    await vi.advanceTimersByTimeAsync(60000); // Advance 60 seconds to cover all retries
+    const result = await actionPromise;
+
+    // Verify retries happened
+    expect(mockApiCall).toHaveBeenCalledTimes(3);
+    expect(result.success).toBe(true);
+  });
+
+  it("should fail after exhausting retries", async () => {
+    vi.useFakeTimers();
+
+    mockApiCall.mockRejectedValue(new Error("ETIMEDOUT: Persistent error"));
+
+    const actionPromise = myAction(mockArgs);
+
+    // Catch rejection in a controlled way to avoid unhandled rejection errors
+    let caughtError: Error | null = null;
+    actionPromise.catch((e: Error) => {
+      caughtError = e;
+    });
+
+    await vi.advanceTimersByTimeAsync(60000); // Advance time to cover all retries
+    await vi.runAllTimersAsync(); // Ensure all timers complete
+
+    expect(caughtError).not.toBeNull();
+    expect(caughtError?.message).toContain("ETIMEDOUT");
+  });
+});
+```
+
+### Key Points
+
+| Guideline | Reason |
+| --------- | ------ |
+| Use `vi.useFakeTimers()` at the start of each retry test (not globally in `beforeEach`) | Global fake timers affect ALL async operations, not just `setTimeout`, which can break normal Promise resolution |
+| Use `vi.advanceTimersByTimeAsync(milliseconds)` instead of `vi.runAllTimersAsync()` | More reliable timer advancement for exponential backoff |
+| Set timeout to 60000ms (60 seconds) | Sufficient to cover all retry delays with exponential backoff up to 30s |
+| Always call `vi.useRealTimers()` in `afterEach()` | Prevents timer state from affecting other tests |
+| For expected rejections, use `.catch()` pattern | Avoids "Unhandled Rejection" errors in test output |
+
+### Why Not Use Fake Timers Globally?
+
+Using `vi.useFakeTimers()` in `beforeEach()` affects ALL async operations, not just `setTimeout`. This can break normal Promise resolution and cause tests to hang or fail. Only apply fake timers to specific tests that need them.
+
+### Real-World Example
+
+From [create-release-branch.test.ts](create-release-branch.test.ts):
+
+```typescript
+it("should retry on ECONNRESET errors", async () => {
+  vi.useFakeTimers(); // Enable fake timers for retry test
+
+  let versionCallCount = 0;
+  vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+    if (cmd === "pnpm" && args?.[0] === "ci:version") {
+      versionCallCount++;
+      if (versionCallCount === 1) {
+        throw new Error("ECONNRESET: Connection reset by peer");
+      }
+      return 0;
+    }
+    if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+      if (options?.listeners?.stdout) {
+        options.listeners.stdout(Buffer.from("M package.json\n"));
+      }
+    }
+    return 0;
+  });
+
+  const actionPromise = createReleaseBranch();
+  await vi.advanceTimersByTimeAsync(60000); // Advance time to cover all retries
+  const result = await actionPromise;
+
+  expect(result.created).toBe(true);
+  expect(versionCallCount).toBe(2);
+  expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("ECONNRESET"));
+});
+```
+
+### Performance Improvement
+
+Using fake timers dramatically improves test execution time:
+
+| Without Fake Timers | With Fake Timers |
+| ------------------- | ---------------- |
+| ~14.5s (waiting for real delays) | ~2.4s (instant timer advancement) |
+
 ## Test File Template
 
 ```typescript

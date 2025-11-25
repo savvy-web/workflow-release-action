@@ -302,19 +302,31 @@ export function createMockOctokit(): MockOctokit {
 	return {
 		rest: {
 			checks: {
-				create: vi.fn().mockResolvedValue({ data: { id: 12345 } }),
+				create: vi.fn().mockResolvedValue({ data: { id: 12345, html_url: "https://github.com/test/checks/12345" } }),
 				update: vi.fn().mockResolvedValue({ data: { id: 12345 } }),
+				get: vi.fn().mockResolvedValue({ data: { id: 12345, status: "in_progress", name: "Test Check" } }),
 			},
 			repos: {
 				getBranch: vi.fn(),
+				compareCommits: vi.fn().mockResolvedValue({ data: { commits: [] } }),
 			},
 			pulls: {
-				list: vi.fn(),
+				list: vi.fn().mockResolvedValue({ data: [] }),
+				create: vi.fn().mockResolvedValue({
+					data: { number: 123, html_url: "https://github.com/test/pull/123" },
+				}),
+				update: vi.fn().mockResolvedValue({ data: { number: 123 } }),
 			},
 			issues: {
-				listComments: vi.fn(),
-				createComment: vi.fn(),
-				updateComment: vi.fn(),
+				listComments: vi.fn().mockResolvedValue({ data: [] }),
+				createComment: vi.fn().mockResolvedValue({
+					data: { id: 456, html_url: "https://github.com/test/comment/456" },
+				}),
+				updateComment: vi.fn().mockResolvedValue({ data: { id: 456 } }),
+				addLabels: vi.fn().mockResolvedValue({ data: [] }),
+				get: vi.fn().mockResolvedValue({
+					data: { number: 1, title: "Test Issue", state: "open", html_url: "https://github.com/test/issues/1" },
+				}),
 			},
 		},
 	};

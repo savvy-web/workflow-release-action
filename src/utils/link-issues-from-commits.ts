@@ -49,6 +49,7 @@ function extractIssueReferences(message: string): number[] {
 
 	for (const match of matches) {
 		const issueNumber = Number.parseInt(match[1], 10);
+		/* v8 ignore next -- @preserve - Defensive: regex \d+ always captures valid digits */
 		if (!Number.isNaN(issueNumber)) {
 			issues.add(issueNumber);
 		}

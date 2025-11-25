@@ -11,20 +11,26 @@ export interface MockOctokit {
 		checks: {
 			create: ReturnType<typeof vi.fn>;
 			update: ReturnType<typeof vi.fn>;
+			get: ReturnType<typeof vi.fn>;
 		};
 		git?: {
 			getRef: ReturnType<typeof vi.fn>;
 		};
 		repos: {
 			getBranch: ReturnType<typeof vi.fn>;
+			compareCommits: ReturnType<typeof vi.fn>;
 		};
 		pulls: {
 			list: ReturnType<typeof vi.fn>;
+			create: ReturnType<typeof vi.fn>;
+			update: ReturnType<typeof vi.fn>;
 		};
 		issues: {
 			listComments: ReturnType<typeof vi.fn>;
 			createComment: ReturnType<typeof vi.fn>;
 			updateComment: ReturnType<typeof vi.fn>;
+			addLabels: ReturnType<typeof vi.fn>;
+			get: ReturnType<typeof vi.fn>;
 		};
 	};
 }
