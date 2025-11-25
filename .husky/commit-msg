@@ -1,0 +1,16 @@
+#!/bin/sh
+
+# Skip in CI environment
+[ -n "$GITHUB_ACTIONS" ] && exit 0
+
+# Re-exec with zsh if not already running in zsh (for GUI git clients like GitKraken)
+if [ -z "$ZSH_VERSION" ]; then
+  exec /bin/zsh "$0" "$@"
+fi
+
+# Ensure pnpm is in PATH for GUI git clients
+# Source nvm to get access to node/pnpm
+source ~/.zshenv
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+pnpm exec commitlint --config ./lib/configs/commitlint.config.ts --edit $1

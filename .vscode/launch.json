@@ -1,0 +1,29 @@
+{
+	"$schema": "vscode://schemas/launch",
+	"configurations": [
+		{
+			"address": "localhost",
+			"localRoot": "${workspaceFolder}",
+			"name": "Debug @savvy-web/tsconfig (attach to build)",
+			"port": 9229,
+			"preLaunchTask": "Debug Build: @savvy-web/tsconfig",
+			"remoteRoot": null,
+			"request": "attach",
+			"restart": false,
+			"skipFiles": ["<node_internals>/**"],
+			"sourceMaps": true,
+			"type": "node"
+		},
+		{
+			"address": "localhost",
+			"localRoot": "${workspaceFolder}",
+			"name": "Attach to @savvy-web/tsconfig build",
+			"port": 9229,
+			"remoteRoot": null,
+			"request": "attach",
+			"restart": false,
+			"type": "node"
+		}
+	],
+	"version": "0.2.0"
+}

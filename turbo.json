@@ -1,0 +1,18 @@
+{
+	"$schema": "https://turborepo.com/schema.v2.json",
+	"tasks": {
+		"//#typecheck:all": {
+			"cache": true,
+			"dependsOn": [],
+			"outputLogs": "errors-only",
+			"outputs": []
+		},
+		"typecheck": {
+			"cache": false,
+			"dependsOn": ["//#typecheck:all"],
+			"env": ["GITHUB_ACTIONS", "GITHUB_OUTPUT"],
+			"outputLogs": "errors-only",
+			"outputs": []
+		}
+	}
+}
