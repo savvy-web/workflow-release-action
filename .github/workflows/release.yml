@@ -5,6 +5,11 @@ on:
     branches:
       - main
       - changeset-release/main
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       dry_run:

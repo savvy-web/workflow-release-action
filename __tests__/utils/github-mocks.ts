@@ -328,7 +328,9 @@ export function createMockOctokit(): MockOctokit {
 				get: vi.fn().mockResolvedValue({
 					data: { number: 1, title: "Test Issue", state: "open", html_url: "https://github.com/test/issues/1" },
 				}),
+				update: vi.fn().mockResolvedValue({ data: { number: 1 } }),
 			},
 		},
+		graphql: vi.fn().mockResolvedValue({}),
 	};
 }

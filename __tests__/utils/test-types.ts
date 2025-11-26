@@ -32,8 +32,11 @@ export interface MockOctokit {
 			updateComment: ReturnType<typeof vi.fn>;
 			addLabels: ReturnType<typeof vi.fn>;
 			get: ReturnType<typeof vi.fn>;
+			update: ReturnType<typeof vi.fn>;
 		};
 	};
+	/** GraphQL API method */
+	graphql: ReturnType<typeof vi.fn>;
 }
 
 /**

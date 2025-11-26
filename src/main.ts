@@ -3,6 +3,7 @@ import * as github from "@actions/github";
 import { context } from "@actions/github";
 import { checkReleaseBranch } from "./utils/check-release-branch.js";
 import { cleanupValidationChecks } from "./utils/cleanup-validation-checks.js";
+import { closeLinkedIssues } from "./utils/close-linked-issues.js";
 import { createReleaseBranch } from "./utils/create-release-branch.js";
 import { createValidationCheck } from "./utils/create-validation-check.js";
 import { detectPublishableChanges } from "./utils/detect-publishable-changes.js";
@@ -87,6 +88,13 @@ async function run(): Promise<void> {
 		const commitMessage = context.payload.head_commit?.message || "";
 		const isReleaseCommit = commitMessage.includes("chore: version packages");
 
+		// Detect PR merge event
+		const isPullRequestEvent = context.eventName === "pull_request";
+		const pullRequest = context.payload.pull_request;
+		const isPRMerged = isPullRequestEvent && pullRequest?.merged === true;
+		const isReleasePRMerged =
+			isPRMerged && pullRequest?.head?.ref === inputs.releaseBranch && pullRequest?.base?.ref === inputs.targetBranch;
+
 		// Log context info
 		logger.context({
 			branch: context.ref,
@@ -94,8 +102,18 @@ async function run(): Promise<void> {
 			isReleaseBranch,
 			isMainBranch,
 			isReleaseCommit,
+			isPullRequestEvent,
+			isPRMerged,
+			isReleasePRMerged,
 			dryRun: inputs.dryRun,
 		});
+
+		// Phase 3a: Close linked issues (on release PR merge)
+		if (isReleasePRMerged) {
+			logger.phase(3, PHASE.publish, "Close Linked Issues");
+			await runCloseLinkedIssues(inputs, pullRequest.number);
+			return;
+		}
 
 		// Phase 3: Release Publishing (on merge to main with version commit)
 		if (isMainBranch && isReleaseCommit) {
@@ -543,6 +561,45 @@ ${
 		}
 
 		core.setFailed(`Phase 2 failed: ${error instanceof Error ? error.message : String(error)}`);
+		throw error;
+	}
+}
+
+/**
+ * Close linked issues when release PR is merged
+ *
+ * @remarks
+ * Runs on pull_request closed event when:
+ * - The PR was merged (not just closed)
+ * - The PR is from the release branch to the target branch
+ *
+ * Uses GitHub's GraphQL API to find issues linked to the PR via
+ * "fixes #123" keywords and closes each one with a comment.
+ */
+async function runCloseLinkedIssues(inputs: { token: string; dryRun: boolean }, prNumber: number): Promise<void> {
+	try {
+		logger.step(1, "Close Linked Issues");
+
+		const result = await closeLinkedIssues(inputs.token, prNumber, inputs.dryRun);
+
+		core.setOutput("closed_issues_count", result.closedCount);
+		core.setOutput("failed_issues_count", result.failedCount);
+		core.setOutput("closed_issues", JSON.stringify(result.issues));
+
+		if (result.closedCount > 0) {
+			logger.success(`Closed ${result.closedCount} linked issue(s)`);
+		} else {
+			logger.info("No linked issues to close");
+		}
+
+		if (result.failedCount > 0) {
+			logger.warn(`Failed to close ${result.failedCount} issue(s)`);
+		}
+
+		logger.endStep();
+		logger.phaseComplete(3);
+	} catch (error) {
+		core.setFailed(`Failed to close linked issues: ${error instanceof Error ? error.message : String(error)}`);
 		throw error;
 	}
 }

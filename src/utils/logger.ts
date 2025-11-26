@@ -57,6 +57,9 @@ export const logger = {
 		isReleaseBranch: boolean;
 		isMainBranch: boolean;
 		isReleaseCommit: boolean;
+		isPullRequestEvent?: boolean;
+		isPRMerged?: boolean;
+		isReleasePRMerged?: boolean;
 		dryRun: boolean;
 	}): void {
 		core.info("");
@@ -79,6 +82,19 @@ export const logger = {
 		core.info(`  ${data.isReleaseBranch ? STATE.good : STATE.neutral} Release branch: ${data.isReleaseBranch}`);
 		core.info(`  ${data.isMainBranch ? STATE.good : STATE.neutral} Main branch: ${data.isMainBranch}`);
 		core.info(`  ${data.isReleaseCommit ? STATE.good : STATE.neutral} Release commit: ${data.isReleaseCommit}`);
+
+		if (data.isPullRequestEvent !== undefined) {
+			core.info("");
+			core.info("PR event detection:");
+			core.info(
+				`  ${data.isPullRequestEvent ? STATE.good : STATE.neutral} Pull request event: ${data.isPullRequestEvent}`,
+			);
+			core.info(`  ${data.isPRMerged ? STATE.good : STATE.neutral} PR merged: ${data.isPRMerged}`);
+			core.info(
+				`  ${data.isReleasePRMerged ? STATE.good : STATE.neutral} Release PR merged: ${data.isReleasePRMerged}`,
+			);
+		}
+
 		core.info("");
 	},
 
