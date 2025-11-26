@@ -287,40 +287,34 @@ export async function detectPublishableChanges(
 			? `Found ${publishablePackages.length} publishable package(s) with changes`
 			: "No publishable packages with changes";
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary.addHeading("Publishable Packages", 2).addEOL();
+	// Build check details using markdown (not core.summary HTML methods)
+	// The checks API output field expects markdown, not HTML
+	const checkDetailParts: string[] = ["## Publishable Packages\n"];
 
 	if (publishablePackages.length > 0) {
-		checkSummaryBuilder.addRaw(
+		checkDetailParts.push(
 			publishablePackages.map((pkg) => `- **${pkg.name}** → \`${pkg.newVersion}\` (${pkg.type})`).join("\n"),
 		);
 	} else {
-		checkSummaryBuilder.addRaw("_No publishable packages found_");
+		checkDetailParts.push("_No publishable packages found_");
 	}
 
 	if (dryRun) {
-		checkSummaryBuilder
-			.addEOL()
-			.addEOL()
-			.addRaw("> **Dry Run Mode**: This is a preview run. No actual publishing will occur.");
+		checkDetailParts.push("\n\n> **Dry Run Mode**: This is a preview run. No actual publishing will occur.");
 	}
 
-	checkSummaryBuilder
-		.addEOL()
-		.addEOL()
-		.addHeading("Changeset Summary", 2)
-		.addEOL()
-		.addRaw(
-			changesetStatus.changesets.length > 0
-				? `Found ${changesetStatus.changesets.length} changeset(s)`
-				: "No changesets found",
-		);
+	checkDetailParts.push("\n\n## Changeset Summary\n");
+	checkDetailParts.push(
+		changesetStatus.changesets.length > 0
+			? `Found ${changesetStatus.changesets.length} changeset(s)`
+			: "No changesets found",
+	);
 
 	if (dryRun) {
-		checkSummaryBuilder.addEOL().addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
+		checkDetailParts.push("\n\n---\n**Mode**: Dry Run (Preview Only)");
 	}
 
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = checkDetailParts.join("");
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
