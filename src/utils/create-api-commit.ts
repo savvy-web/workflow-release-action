@@ -112,6 +112,16 @@ async function getFileMode(filePath: string): Promise<GitFileMode> {
 }
 
 /**
+ * Options for creating an API commit
+ */
+interface CreateApiCommitOptions {
+	/** Branch to use as parent for the commit (defaults to targetBranch) */
+	parentBranch?: string;
+	/** Whether to force update the ref (for rebasing onto different parent) */
+	force?: boolean;
+}
+
+/**
  * Creates a commit via GitHub API (automatically signed and attributed to the GitHub App)
  *
  * This function:
@@ -124,13 +134,21 @@ async function getFileMode(filePath: string): Promise<GitFileMode> {
  * Commits created via the API are automatically signed when using a GitHub App token.
  *
  * @param token - GitHub token (should be from GitHub App for verified commits)
- * @param branch - Branch name to commit to
+ * @param branch - Branch name to update with the new commit
  * @param message - Commit message
+ * @param options - Optional settings for parent branch and force update
  * @returns Commit result with SHA
  */
-export async function createApiCommit(token: string, branch: string, message: string): Promise<CreateApiCommitResult> {
+export async function createApiCommit(
+	token: string,
+	branch: string,
+	message: string,
+	options: CreateApiCommitOptions = {},
+): Promise<CreateApiCommitResult> {
 	const octokit = getOctokit(token);
 	const { owner, repo } = context.repo;
+	const parentBranch = options.parentBranch || branch;
+	const force = options.force ?? parentBranch !== branch;
 
 	core.startGroup("Creating API commit");
 
@@ -146,11 +164,11 @@ export async function createApiCommit(token: string, branch: string, message: st
 	core.info(`Found ${changedFiles.length} changed file(s)`);
 	core.debug(`Changed files: ${JSON.stringify(changedFiles, null, 2)}`);
 
-	// Get the current HEAD commit
+	// Get the parent commit from the specified parent branch
 	const { data: refData } = await octokit.rest.git.getRef({
 		owner,
 		repo,
-		ref: `heads/${branch}`,
+		ref: `heads/${parentBranch}`,
 	});
 	const parentCommitSha = refData.object.sha;
 
@@ -162,6 +180,7 @@ export async function createApiCommit(token: string, branch: string, message: st
 	});
 	const baseTreeSha = parentCommit.tree.sha;
 
+	core.info(`Parent branch: ${parentBranch}`);
 	core.info(`Parent commit: ${parentCommitSha}`);
 	core.info(`Base tree: ${baseTreeSha}`);
 
@@ -214,12 +233,13 @@ export async function createApiCommit(token: string, branch: string, message: st
 	core.info(`Created commit: ${newCommit.sha}`);
 
 	// Update the branch ref
-	core.info(`Updating ref heads/${branch}...`);
+	core.info(`Updating ref heads/${branch}${force ? " (force)" : ""}...`);
 	await octokit.rest.git.updateRef({
 		owner,
 		repo,
 		ref: `heads/${branch}`,
 		sha: newCommit.sha,
+		force,
 	});
 	core.info(`✓ Updated branch ${branch} to ${newCommit.sha}`);
 
@@ -229,4 +249,47 @@ export async function createApiCommit(token: string, branch: string, message: st
 		sha: newCommit.sha,
 		created: true,
 	};
+}
+
+/**
+ * Updates a branch ref to point to another branch's HEAD (fast-forward or force)
+ *
+ * Useful for syncing a branch to match another branch without creating a commit.
+ *
+ * @param token - GitHub token
+ * @param targetBranch - Branch to update
+ * @param sourceBranch - Branch to get the SHA from
+ * @param force - Whether to force update (default: true)
+ * @returns The SHA that the branch was updated to
+ */
+export async function updateBranchToRef(
+	token: string,
+	targetBranch: string,
+	sourceBranch: string,
+	force: boolean = true,
+): Promise<string> {
+	const octokit = getOctokit(token);
+	const { owner, repo } = context.repo;
+
+	// Get the source branch SHA
+	const { data: sourceRef } = await octokit.rest.git.getRef({
+		owner,
+		repo,
+		ref: `heads/${sourceBranch}`,
+	});
+	const sourceSha = sourceRef.object.sha;
+
+	core.info(`Updating ${targetBranch} to ${sourceBranch} (${sourceSha})${force ? " (force)" : ""}`);
+
+	// Update the target branch ref
+	await octokit.rest.git.updateRef({
+		owner,
+		repo,
+		ref: `heads/${targetBranch}`,
+		sha: sourceSha,
+		force,
+	});
+
+	core.info(`✓ Updated ${targetBranch} to ${sourceSha}`);
+	return sourceSha;
 }

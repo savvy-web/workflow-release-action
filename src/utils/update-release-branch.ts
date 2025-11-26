@@ -1,7 +1,7 @@
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
-import { createApiCommit } from "./create-api-commit.js";
+import { createApiCommit, updateBranchToRef } from "./create-api-commit.js";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
@@ -194,37 +194,31 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 			await exec.exec("git", ["add", "."]);
 		}
 
-		// Force push the branch to update remote (this replaces the old branch)
-		core.info(`Force pushing '${releaseBranch}' to origin`);
-		if (!dryRun) {
-			// Push the branch first to create/update the remote ref
-			await execWithRetry("git", ["push", "-f", "-u", "origin", releaseBranch]);
-		} else {
-			core.info(`[DRY RUN] Would force push to: ${releaseBranch}`);
-		}
-
-		// Create commit via GitHub API (automatically signed and attributed to GitHub App)
+		// Create commit via GitHub API on top of main, then update release branch ref
+		// This is a single atomic operation - no separate force push needed
 		const commitMessage = `${prTitlePrefix}\n\nVersion bump from changesets (rebased on ${targetBranch})`;
 		if (!dryRun) {
-			core.info("Creating verified commit via GitHub API...");
-			const commitResult = await createApiCommit(token, releaseBranch, commitMessage);
+			core.info("Creating verified commit via GitHub API (rebasing onto main)...");
+			const commitResult = await createApiCommit(token, releaseBranch, commitMessage, {
+				parentBranch: targetBranch,
+			});
 			if (!commitResult.created) {
 				core.warning("No changes to commit via API");
 			} else {
 				core.info(`✓ Created verified commit: ${commitResult.sha}`);
 			}
 		} else {
-			core.info(`[DRY RUN] Would commit with message: ${commitMessage}`);
+			core.info(`[DRY RUN] Would create API commit with message: ${commitMessage}`);
 		}
 	} else {
 		core.info("No version changes from changesets");
 
-		// Still need to force push to update the branch base
+		// Update release branch to point to main via API (no git push needed)
 		if (!dryRun) {
-			await execWithRetry("git", ["push", "-f", "-u", "origin", releaseBranch]);
-			core.info(`Force pushed '${releaseBranch}' to sync with ${targetBranch}`);
+			const sha = await updateBranchToRef(token, releaseBranch, targetBranch);
+			core.info(`✓ Updated '${releaseBranch}' to match '${targetBranch}' (${sha})`);
 		} else {
-			core.info(`[DRY RUN] Would force push to sync: ${releaseBranch}`);
+			core.info(`[DRY RUN] Would update ${releaseBranch} to match ${targetBranch}`);
 		}
 	}
 

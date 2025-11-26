@@ -2,7 +2,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createApiCommit } from "../src/utils/create-api-commit.js";
+import { createApiCommit, updateBranchToRef } from "../src/utils/create-api-commit.js";
 import { updateReleaseBranch } from "../src/utils/update-release-branch.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.js";
@@ -61,8 +61,9 @@ describe("update-release-branch", () => {
 			data: [{ number: 456, html_url: "https://github.com/test/pull/456" }],
 		});
 
-		// Mock createApiCommit
+		// Mock createApiCommit and updateBranchToRef
 		vi.mocked(createApiCommit).mockResolvedValue({ sha: "abc123def456", created: true });
+		vi.mocked(updateBranchToRef).mockResolvedValue("main123sha");
 	});
 
 	afterEach(() => {
@@ -109,7 +110,7 @@ describe("update-release-branch", () => {
 		expect(exec.exec).not.toHaveBeenCalledWith("git", expect.arrayContaining(["merge"]), expect.any(Object));
 	});
 
-	it("should create commit via GitHub API for verified signatures", async () => {
+	it("should create commit via GitHub API for verified signatures with parent branch", async () => {
 		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
 			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
 				if (options?.listeners?.stdout) {
@@ -121,15 +122,16 @@ describe("update-release-branch", () => {
 
 		await updateReleaseBranch();
 
-		// Verify createApiCommit was called
+		// Verify createApiCommit was called with parentBranch option
 		expect(createApiCommit).toHaveBeenCalledWith(
 			"test-token",
 			"changeset-release/main",
 			expect.stringContaining("chore: release"),
+			{ parentBranch: "main" },
 		);
 	});
 
-	it("should force push to update remote branch", async () => {
+	it("should not use git push (uses API commit instead)", async () => {
 		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
 			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
 				if (options?.listeners?.stdout) {
@@ -141,12 +143,10 @@ describe("update-release-branch", () => {
 
 		await updateReleaseBranch();
 
-		// Should force push
-		expect(exec.exec).toHaveBeenCalledWith(
-			"git",
-			["push", "-f", "-u", "origin", "changeset-release/main"],
-			expect.any(Object),
-		);
+		// Should NOT use git push - uses API commit instead to avoid triggering multiple workflows
+		expect(exec.exec).not.toHaveBeenCalledWith("git", expect.arrayContaining(["push"]), expect.any(Object));
+		// Should use createApiCommit with parentBranch option
+		expect(createApiCommit).toHaveBeenCalled();
 	});
 
 	it("should handle no version changes from changesets", async () => {
@@ -164,12 +164,8 @@ describe("update-release-branch", () => {
 		expect(result.success).toBe(true);
 		expect(result.hadConflicts).toBe(false);
 		expect(result.versionSummary).toBe("");
-		// Should still force push to sync branch
-		expect(exec.exec).toHaveBeenCalledWith(
-			"git",
-			["push", "-f", "-u", "origin", "changeset-release/main"],
-			expect.any(Object),
-		);
+		// Should use updateBranchToRef to sync branch via API (no git push)
+		expect(updateBranchToRef).toHaveBeenCalledWith("test-token", "changeset-release/main", "main");
 		// Should NOT call createApiCommit when no changes
 		expect(createApiCommit).not.toHaveBeenCalled();
 	});
@@ -410,33 +406,5 @@ describe("update-release-branch", () => {
 
 		expect(caughtError).toBeInstanceOf(Error);
 		expect((caughtError as unknown as Error).message).toContain("ETIMEDOUT");
-	});
-
-	it("should retry on EAI_AGAIN errors for git push", async () => {
-		vi.useFakeTimers(); // Enable fake timers for retry test
-
-		let pushCallCount = 0;
-		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-			if (cmd === "git" && args?.includes("push")) {
-				pushCallCount++;
-				if (pushCallCount === 1) {
-					throw new Error("EAI_AGAIN: Temporary DNS failure");
-				}
-				return 0;
-			}
-			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from("M package.json\n"));
-				}
-			}
-			return 0;
-		});
-
-		const actionPromise = updateReleaseBranch();
-		await vi.advanceTimersByTimeAsync(60000); // Advance time to cover all retries
-		const result = await actionPromise;
-
-		expect(result.success).toBe(true);
-		expect(pushCallCount).toBe(2);
 	});
 });
