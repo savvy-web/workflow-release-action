@@ -70,6 +70,8 @@ async function getChangesetFiles(): Promise<string[]> {
  * Gets commit information for a file using git log
  *
  * Looks at main branch history since changesets are added there by developers.
+ * Uses --follow and --reverse to find the original commit that first introduced the file,
+ * not merge commits that might also show the file as "added".
  *
  * @param filePath - Path to the file
  * @param targetBranch - Branch to search history on (defaults to main)
@@ -82,21 +84,28 @@ async function getCommitForFile(
 	let output = "";
 
 	try {
-		// Look at target branch history since changesets are added there
-		await exec.exec("git", ["log", targetBranch, "--diff-filter=A", "--format=%H%n%B%n---END---", "--", filePath], {
-			listeners: {
-				stdout: (data: Buffer) => {
-					output += data.toString();
+		// Use --follow to track file history and --reverse to get oldest first
+		// This ensures we find the original commit that introduced the file,
+		// not a merge commit or later commit that also shows it as "added"
+		await exec.exec(
+			"git",
+			["log", targetBranch, "--diff-filter=A", "--follow", "--reverse", "--format=%H%n%B%n---END---", "--", filePath],
+			{
+				listeners: {
+					stdout: (data: Buffer) => {
+						output += data.toString();
+					},
 				},
+				silent: true,
 			},
-			silent: true,
-		});
+		);
 
 		if (!output.trim()) {
 			return null;
 		}
 
-		// Parse the output: first line is SHA, rest until ---END--- is message
+		// Parse the output: first entry (with --reverse) is the original commit
+		// first line is SHA, rest until ---END--- is message
 		const endMarker = output.indexOf("---END---");
 		if (endMarker === -1) {
 			return null;
