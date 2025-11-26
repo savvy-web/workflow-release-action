@@ -19,6 +19,8 @@ interface LinkedIssue {
 	url: string;
 	/** Commits that reference this issue */
 	commits: string[];
+	/** GitHub node ID for GraphQL operations */
+	nodeId?: string;
 }
 
 /**
@@ -67,14 +69,21 @@ async function getChangesetFiles(): Promise<string[]> {
 /**
  * Gets commit information for a file using git log
  *
+ * Looks at main branch history since changesets are added there by developers.
+ *
  * @param filePath - Path to the file
+ * @param targetBranch - Branch to search history on (defaults to main)
  * @returns Commit SHA and message that introduced the file, or null if not found
  */
-async function getCommitForFile(filePath: string): Promise<{ sha: string; message: string } | null> {
+async function getCommitForFile(
+	filePath: string,
+	targetBranch: string = "main",
+): Promise<{ sha: string; message: string } | null> {
 	let output = "";
 
 	try {
-		await exec.exec("git", ["log", "--diff-filter=A", "--format=%H%n%B%n---END---", "--", filePath], {
+		// Look at target branch history since changesets are added there
+		await exec.exec("git", ["log", targetBranch, "--diff-filter=A", "--format=%H%n%B%n---END---", "--", filePath], {
 			listeners: {
 				stdout: (data: Buffer) => {
 					output += data.toString();
@@ -116,9 +125,10 @@ async function getCommitForFile(filePath: string): Promise<{ sha: string; messag
  */
 async function collectLinkedIssuesFromChangesets(
 	github: ReturnType<typeof getOctokit>,
+	targetBranch: string,
 ): Promise<{ linkedIssues: LinkedIssue[]; commits: Array<{ sha: string; message: string }> }> {
 	const changesetFiles = await getChangesetFiles();
-	core.debug(`Found ${changesetFiles.length} changeset file(s)`);
+	core.info(`Found ${changesetFiles.length} changeset file(s): ${changesetFiles.join(", ")}`);
 
 	if (changesetFiles.length === 0) {
 		return { linkedIssues: [], commits: [] };
@@ -129,11 +139,15 @@ async function collectLinkedIssuesFromChangesets(
 	const commits: Array<{ sha: string; message: string }> = [];
 
 	for (const file of changesetFiles) {
-		const commit = await getCommitForFile(`.changeset/${file}`);
+		const commit = await getCommitForFile(`.changeset/${file}`, targetBranch);
 		if (commit) {
 			commits.push(commit);
+			core.info(`Changeset ${file}:`);
+			core.info(`  Commit: ${commit.sha.slice(0, 7)}`);
+			core.info(`  Message: ${commit.message.split("\n")[0]}`);
+
 			const issues = extractIssueReferences(commit.message);
-			core.debug(`Commit ${commit.sha.slice(0, 7)} references issues: ${issues.join(", ") || "none"}`);
+			core.info(`  Issue refs: ${issues.length > 0 ? issues.map((i) => `#${i}`).join(", ") : "(none found)"}`);
 
 			for (const issueNumber of issues) {
 				if (!issueMap.has(issueNumber)) {
@@ -141,6 +155,8 @@ async function collectLinkedIssuesFromChangesets(
 				}
 				issueMap.get(issueNumber)?.push(commit.sha);
 			}
+		} else {
+			core.info(`Changeset ${file}: no commit found (file may not exist in history)`);
 		}
 	}
 
@@ -163,6 +179,7 @@ async function collectLinkedIssuesFromChangesets(
 				state: issue.state,
 				url: issue.html_url,
 				commits: commitShas,
+				nodeId: issue.node_id,
 			});
 
 			core.info(`✓ Issue #${issueNumber}: ${issue.title} (${issue.state})`);
@@ -172,6 +189,57 @@ async function collectLinkedIssuesFromChangesets(
 	}
 
 	return { linkedIssues, commits };
+}
+
+/**
+ * Links issues to a PR using GitHub's GraphQL linkBranch mutation
+ *
+ * This creates links in the "Development" section of each issue,
+ * which allows closingIssuesReferences to find them on the PR.
+ *
+ * @param github - GitHub API client
+ * @param issues - Array of issues to link (with nodeId)
+ * @param commitSha - The commit SHA to link to
+ */
+async function linkIssuesToPR(
+	github: ReturnType<typeof getOctokit>,
+	issues: LinkedIssue[],
+	commitSha: string,
+): Promise<void> {
+	if (issues.length === 0) {
+		return;
+	}
+
+	core.info(`Linking ${issues.length} issue(s) to commit ${commitSha.slice(0, 7)}`);
+
+	for (const issue of issues) {
+		if (!issue.nodeId) {
+			core.warning(`Issue #${issue.number} missing nodeId, skipping link`);
+			continue;
+		}
+
+		try {
+			await github.graphql<{ linkBranch: { issue: { id: string } } }>(
+				`
+				mutation LinkBranch($issueId: ID!, $oid: GitObjectID!) {
+					linkBranch(input: { issueId: $issueId, oid: $oid }) {
+						issue {
+							id
+						}
+					}
+				}
+				`,
+				{
+					issueId: issue.nodeId,
+					oid: commitSha,
+				},
+			);
+			core.info(`  ✓ Linked #${issue.number} to branch`);
+		} catch (error) {
+			// Log but don't fail - linking is best-effort
+			core.warning(`  Failed to link #${issue.number}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
 }
 
 /**
@@ -316,7 +384,7 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	core.startGroup("Collecting linked issues from changeset commits");
 	let linkedIssues: LinkedIssue[] = [];
 	if (!dryRun) {
-		const issueResult = await collectLinkedIssuesFromChangesets(github);
+		const issueResult = await collectLinkedIssuesFromChangesets(github, targetBranch);
 		linkedIssues = issueResult.linkedIssues;
 	} else {
 		core.info("[DRY RUN] Would collect linked issues from changeset commits");
@@ -380,6 +448,7 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	}
 
 	let versionSummary = "";
+	let branchSha = "";
 
 	if (hasChanges) {
 		// Generate version summary from changed files
@@ -408,6 +477,7 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 				core.warning("No changes to commit via API");
 			} else {
 				core.info(`✓ Created verified commit: ${commitResult.sha}`);
+				branchSha = commitResult.sha;
 			}
 		} else {
 			core.info(`[DRY RUN] Would create API commit with message: ${commitMessage}`);
@@ -425,6 +495,13 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	}
 
 	core.endGroup();
+
+	// Link issues to the PR using GraphQL
+	if (linkedIssues.length > 0 && branchSha && !dryRun) {
+		core.startGroup("Linking issues to PR");
+		await linkIssuesToPR(github, linkedIssues, branchSha);
+		core.endGroup();
+	}
 
 	// Reopen PR if it was closed by force push
 	if (prWasClosed && prNumber && !dryRun) {

@@ -31,72 +31,77 @@ interface CloseLinkedIssuesResult {
 }
 
 /**
- * Extracts issue numbers from PR body's linked issues section
- *
- * Looks for patterns like:
- * - #123: Issue title
- * - ~~#123: Issue title~~ (strikethrough for closed)
- *
- * @param body - PR body text
- * @returns Array of unique issue numbers
+ * GraphQL response for closing issues references
  */
-function extractIssuesFromPRBody(body: string): number[] {
-	// Find the linked issues section
-	const linkedIssuesStart = body.indexOf("## Linked Issues");
-	if (linkedIssuesStart === -1) {
-		return [];
-	}
-
-	// Find the end of the section (next ## heading or end of string)
-	const nextHeadingIndex = body.indexOf("\n## ", linkedIssuesStart + 1);
-	const sectionEnd = nextHeadingIndex !== -1 ? nextHeadingIndex : body.length;
-	const linkedIssuesSection = body.substring(linkedIssuesStart, sectionEnd);
-
-	// Extract issue numbers from "- #123" or "- ~~#123" patterns
-	const pattern = /- (?:~~)?#(\d+)/g;
-	const matches = linkedIssuesSection.matchAll(pattern);
-	const issues = new Set<number>();
-
-	for (const match of matches) {
-		const issueNumber = Number.parseInt(match[1], 10);
-		/* v8 ignore next -- @preserve - Defensive: regex \d+ always captures valid digits */
-		if (!Number.isNaN(issueNumber)) {
-			issues.add(issueNumber);
-		}
-	}
-
-	return Array.from(issues);
+interface ClosingIssuesResponse {
+	repository: {
+		pullRequest: {
+			closingIssuesReferences: {
+				nodes: Array<{
+					number: number;
+					title: string;
+					state: "OPEN" | "CLOSED";
+				}>;
+			};
+		};
+	};
 }
 
 /**
- * Extracts commit info from PR body's linked issues section
+ * Gets linked issues from a PR using GitHub's GraphQL closingIssuesReferences
  *
- * Looks for commit references that we added when collecting linked issues
- * Format: <!-- commit:SHA:title -->
+ * This finds issues that are linked to the PR via:
+ * - Keywords in PR body/title (fixes #123, closes #123, etc.)
+ * - linkBranch GraphQL mutation (Development section linking)
  *
- * @param body - PR body text
- * @returns Array of commit info objects
+ * @param github - GitHub API client
+ * @param prNumber - PR number to query
+ * @returns Array of linked issues with their state
  */
-function extractCommitsFromPRBody(body: string): Array<{ sha: string; title: string }> {
-	const commits: Array<{ sha: string; title: string }> = [];
-	const pattern = /<!-- commit:([a-f0-9]+):(.+?) -->/gi;
-	const matches = body.matchAll(pattern);
+async function getLinkedIssues(
+	github: ReturnType<typeof getOctokit>,
+	prNumber: number,
+): Promise<Array<{ number: number; title: string; state: string }>> {
+	try {
+		const response = await github.graphql<ClosingIssuesResponse>(
+			`
+			query GetClosingIssues($owner: String!, $repo: String!, $prNumber: Int!) {
+				repository(owner: $owner, name: $repo) {
+					pullRequest(number: $prNumber) {
+						closingIssuesReferences(first: 50) {
+							nodes {
+								number
+								title
+								state
+							}
+						}
+					}
+				}
+			}
+			`,
+			{
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				prNumber,
+			},
+		);
 
-	for (const match of matches) {
-		commits.push({
-			sha: match[1],
-			title: match[2],
-		});
+		return response.repository.pullRequest.closingIssuesReferences.nodes;
+	} catch (error) {
+		core.warning(
+			`Failed to query linked issues via GraphQL: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return [];
 	}
-
-	return commits;
 }
 
 /**
  * Closes linked issues when a release PR is merged
  *
- * Parses the PR body to find issues in the "## Linked Issues" section
- * that were added by updateReleaseBranch when collecting changeset commits.
+ * Uses GitHub's GraphQL API to find issues linked to the PR via
+ * closingIssuesReferences, which includes issues linked via:
+ * - Keywords in PR body/title
+ * - linkBranch mutations (Development section)
  *
  * @param token - GitHub token
  * @param prNumber - PR number that was merged
@@ -115,29 +120,11 @@ export async function closeLinkedIssues(
 
 	core.startGroup("Closing linked issues");
 
-	// Fetch the PR to get its body
-	const { data: pr } = await github.rest.pulls.get({
-		owner: context.repo.owner,
-		repo: context.repo.repo,
-		pull_number: prNumber,
-	});
+	// Get linked issues via GraphQL
+	const linkedIssues = await getLinkedIssues(github, prNumber);
+	core.info(`Found ${linkedIssues.length} linked issue(s) for PR #${prNumber}`);
 
-	const prBody = pr.body || "";
-
-	// Log any commit info embedded in the PR body (for debugging)
-	const commits = extractCommitsFromPRBody(prBody);
-	if (commits.length > 0) {
-		core.info("Changeset commits that introduced linked issues:");
-		for (const commit of commits) {
-			core.info(`  ${commit.sha.slice(0, 7)} ${commit.title}`);
-		}
-	}
-
-	// Extract issue numbers from PR body
-	const issueNumbers = extractIssuesFromPRBody(prBody);
-	core.info(`Found ${issueNumbers.length} linked issue(s) in PR #${prNumber} body`);
-
-	if (issueNumbers.length === 0) {
+	if (linkedIssues.length === 0) {
 		core.info("No linked issues to close");
 		core.endGroup();
 
@@ -164,21 +151,16 @@ export async function closeLinkedIssues(
 	}
 
 	// Close each linked issue
-	for (const issueNumber of issueNumbers) {
-		try {
-			// Fetch issue details to check state
-			const { data: issue } = await github.rest.issues.get({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				issue_number: issueNumber,
-			});
+	for (const linkedIssue of linkedIssues) {
+		const issueNumber = linkedIssue.number;
 
-			// Check if already closed
-			if (issue.state === "closed") {
+		try {
+			// Check if already closed (GraphQL gives us state)
+			if (linkedIssue.state === "CLOSED") {
 				core.info(`Issue #${issueNumber} is already closed, skipping`);
 				issues.push({
 					number: issueNumber,
-					title: issue.title,
+					title: linkedIssue.title,
 					closed: true,
 					error: "Already closed",
 				});
@@ -202,14 +184,14 @@ export async function closeLinkedIssues(
 					state_reason: "completed",
 				});
 
-				core.info(`✓ Closed issue #${issueNumber}: ${issue.title}`);
+				core.info(`✓ Closed issue #${issueNumber}: ${linkedIssue.title}`);
 			} else {
-				core.info(`[DRY RUN] Would close issue #${issueNumber}: ${issue.title}`);
+				core.info(`[DRY RUN] Would close issue #${issueNumber}: ${linkedIssue.title}`);
 			}
 
 			issues.push({
 				number: issueNumber,
-				title: issue.title,
+				title: linkedIssue.title,
 				closed: true,
 			});
 			closedCount++;
@@ -218,7 +200,7 @@ export async function closeLinkedIssues(
 			core.warning(`Failed to close issue #${issueNumber}: ${errorMessage}`);
 			issues.push({
 				number: issueNumber,
-				title: `Issue #${issueNumber}`,
+				title: linkedIssue.title,
 				closed: false,
 				error: errorMessage,
 			});
