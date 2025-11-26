@@ -187,7 +187,7 @@ function buildLinkedIssuesSection(linkedIssues: LinkedIssue[]): string {
 
 	let section = "## Linked Issues\n\n";
 	for (const issue of linkedIssues) {
-		section += `- ${issue.state === "closed" ? "~~" : ""}Fixes #${issue.number}: ${issue.title}${issue.state === "closed" ? "~~" : ""}\n`;
+		section += `- ${issue.state === "closed" ? "~~" : ""}#${issue.number}: ${issue.title}${issue.state === "closed" ? "~~" : ""}\n`;
 	}
 	return section;
 }

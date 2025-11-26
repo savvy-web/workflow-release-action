@@ -606,7 +606,7 @@ describe("update-release-branch", () => {
 
 		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
 			expect.objectContaining({
-				body: expect.stringContaining("Fixes #42"),
+				body: expect.stringContaining("#42"),
 			}),
 		);
 		// Should not have duplicated the "Linked Issues" section
@@ -646,7 +646,7 @@ describe("update-release-branch", () => {
 		expect(result.linkedIssues[0].state).toBe("closed");
 		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
 			expect.objectContaining({
-				body: expect.stringContaining("~~Fixes #42"),
+				body: expect.stringContaining("~~#42"),
 			}),
 		);
 	});

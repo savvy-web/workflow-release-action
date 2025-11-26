@@ -41,21 +41,28 @@ describe("closeLinkedIssues", () => {
 		cleanupTestEnvironment();
 	});
 
-	describe("getLinkedIssues via GraphQL", () => {
-		it("should fetch linked issues from PR via GraphQL", async () => {
-			// Mock GraphQL response
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [
-								{ number: 123, title: "Some issue", state: "OPEN" },
-								{ number: 456, title: "Another issue", state: "OPEN" },
-							],
-						},
-					},
+	describe("extracting issues from PR body", () => {
+		it("should extract issue numbers from linked issues section", async () => {
+			// Mock PR body with linked issues section
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Summary
+Some changes here
+
+## Linked Issues
+
+- #123: Fix bug in auth
+- #456: Add new feature
+
+## Test Plan
+Test it manually`,
 				},
 			});
+
+			// Mock issue fetches
+			mockOctokit.rest.issues.get
+				.mockResolvedValueOnce({ data: { number: 123, title: "Fix bug in auth", state: "open" } })
+				.mockResolvedValueOnce({ data: { number: 456, title: "Add new feature", state: "open" } });
 
 			const result = await closeLinkedIssues("test-token", 1, false);
 
@@ -64,9 +71,43 @@ describe("closeLinkedIssues", () => {
 			expect(mockOctokit.rest.issues.update).toHaveBeenCalledTimes(2);
 		});
 
-		it("should handle GraphQL errors gracefully", async () => {
-			// Mock GraphQL error
-			mockOctokit.graphql = vi.fn().mockRejectedValue(new Error("GraphQL error"));
+		it("should handle strikethrough format for already-closed issues", async () => {
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+
+- #123: Open issue
+- ~~#456: Already closed issue~~`,
+				},
+			});
+
+			mockOctokit.rest.issues.get
+				.mockResolvedValueOnce({ data: { number: 123, title: "Open issue", state: "open" } })
+				.mockResolvedValueOnce({ data: { number: 456, title: "Already closed issue", state: "closed" } });
+
+			const result = await closeLinkedIssues("test-token", 1, false);
+
+			// Only issue 123 should be closed
+			expect(result.closedCount).toBe(1);
+			expect(result.issues).toHaveLength(2);
+			expect(mockOctokit.rest.issues.update).toHaveBeenCalledTimes(1);
+		});
+
+		it("should return empty when no linked issues section exists", async () => {
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: { body: "Just a regular PR body without linked issues" },
+			});
+
+			const result = await closeLinkedIssues("test-token", 1, false);
+
+			expect(result.closedCount).toBe(0);
+			expect(result.issues).toHaveLength(0);
+		});
+
+		it("should handle PR with no body", async () => {
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: { body: null },
+			});
 
 			const result = await closeLinkedIssues("test-token", 1, false);
 
@@ -77,14 +118,16 @@ describe("closeLinkedIssues", () => {
 
 	describe("closing issues", () => {
 		it("should close issues and add comments", async () => {
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [{ number: 123, title: "Test issue", state: "OPEN" }],
-						},
-					},
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+
+- #123: Test issue`,
 				},
+			});
+
+			mockOctokit.rest.issues.get.mockResolvedValue({
+				data: { number: 123, title: "Test issue", state: "open" },
 			});
 
 			const result = await closeLinkedIssues("test-token", 42, false);
@@ -106,14 +149,16 @@ describe("closeLinkedIssues", () => {
 		});
 
 		it("should skip already closed issues", async () => {
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [{ number: 123, title: "Already closed issue", state: "CLOSED" }],
-						},
-					},
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+
+- #123: Already closed issue`,
 				},
+			});
+
+			mockOctokit.rest.issues.get.mockResolvedValue({
+				data: { number: 123, title: "Already closed issue", state: "closed" },
 			});
 
 			const result = await closeLinkedIssues("test-token", 1, false);
@@ -124,18 +169,18 @@ describe("closeLinkedIssues", () => {
 		});
 
 		it("should handle API errors when closing issues", async () => {
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [
-								{ number: 123, title: "Test issue", state: "OPEN" },
-								{ number: 456, title: "Another issue", state: "OPEN" },
-							],
-						},
-					},
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+
+- #123: First issue
+- #456: Second issue`,
 				},
 			});
+
+			mockOctokit.rest.issues.get
+				.mockResolvedValueOnce({ data: { number: 123, title: "First issue", state: "open" } })
+				.mockResolvedValueOnce({ data: { number: 456, title: "Second issue", state: "open" } });
 
 			// First issue fails, second succeeds
 			mockOctokit.rest.issues.createComment
@@ -153,14 +198,16 @@ describe("closeLinkedIssues", () => {
 
 	describe("dry run mode", () => {
 		it("should not close issues in dry run mode", async () => {
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [{ number: 123, title: "Test issue", state: "OPEN" }],
-						},
-					},
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+
+- #123: Test issue`,
 				},
+			});
+
+			mockOctokit.rest.issues.get.mockResolvedValue({
+				data: { number: 123, title: "Test issue", state: "open" },
 			});
 
 			const result = await closeLinkedIssues("test-token", 1, true);
@@ -171,14 +218,16 @@ describe("closeLinkedIssues", () => {
 		});
 
 		it("should still create check run in dry run mode", async () => {
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [{ number: 123, title: "Test issue", state: "OPEN" }],
-						},
-					},
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+
+- #123: Test issue`,
 				},
+			});
+
+			mockOctokit.rest.issues.get.mockResolvedValue({
+				data: { number: 123, title: "Test issue", state: "open" },
 			});
 
 			await closeLinkedIssues("test-token", 1, true);
@@ -193,14 +242,16 @@ describe("closeLinkedIssues", () => {
 
 	describe("check run creation", () => {
 		it("should create success check run when all issues closed", async () => {
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [{ number: 123, title: "Test issue", state: "OPEN" }],
-						},
-					},
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+
+- #123: Test issue`,
 				},
+			});
+
+			mockOctokit.rest.issues.get.mockResolvedValue({
+				data: { number: 123, title: "Test issue", state: "open" },
 			});
 
 			await closeLinkedIssues("test-token", 1, false);
@@ -214,14 +265,16 @@ describe("closeLinkedIssues", () => {
 		});
 
 		it("should create neutral check run when some issues failed", async () => {
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [{ number: 123, title: "Test issue", state: "OPEN" }],
-						},
-					},
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+
+- #123: Test issue`,
 				},
+			});
+
+			mockOctokit.rest.issues.get.mockResolvedValue({
+				data: { number: 123, title: "Test issue", state: "open" },
 			});
 
 			mockOctokit.rest.issues.createComment.mockRejectedValue(new Error("Failed"));
@@ -236,14 +289,8 @@ describe("closeLinkedIssues", () => {
 		});
 
 		it("should create check run even with no linked issues", async () => {
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [],
-						},
-					},
-				},
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: { body: "No linked issues section here" },
 			});
 
 			await closeLinkedIssues("test-token", 1, false);
@@ -261,19 +308,20 @@ describe("closeLinkedIssues", () => {
 
 	describe("edge cases", () => {
 		it("should handle multiple issues with mixed states", async () => {
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [
-								{ number: 123, title: "Open issue", state: "OPEN" },
-								{ number: 456, title: "Closed issue", state: "CLOSED" },
-								{ number: 789, title: "Another open", state: "OPEN" },
-							],
-						},
-					},
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+
+- #123: Open issue
+- ~~#456: Closed issue~~
+- #789: Another open`,
 				},
 			});
+
+			mockOctokit.rest.issues.get
+				.mockResolvedValueOnce({ data: { number: 123, title: "Open issue", state: "open" } })
+				.mockResolvedValueOnce({ data: { number: 456, title: "Closed issue", state: "closed" } })
+				.mockResolvedValueOnce({ data: { number: 789, title: "Another open", state: "open" } });
 
 			const result = await closeLinkedIssues("test-token", 1, false);
 
@@ -283,14 +331,12 @@ describe("closeLinkedIssues", () => {
 			expect(mockOctokit.rest.issues.update).toHaveBeenCalledTimes(2);
 		});
 
-		it("should handle empty nodes array", async () => {
-			mockOctokit.graphql = vi.fn().mockResolvedValue({
-				repository: {
-					pullRequest: {
-						closingIssuesReferences: {
-							nodes: [],
-						},
-					},
+		it("should handle empty linked issues section", async () => {
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+
+## Next Section`,
 				},
 			});
 
@@ -298,6 +344,26 @@ describe("closeLinkedIssues", () => {
 
 			expect(result.closedCount).toBe(0);
 			expect(result.issues).toHaveLength(0);
+		});
+
+		it("should extract commit info from PR body", async () => {
+			mockOctokit.rest.pulls.get.mockResolvedValue({
+				data: {
+					body: `## Linked Issues
+<!-- commit:abc1234:feat: add new feature -->
+<!-- commit:def5678:fix: bug fix -->
+
+- #123: Some issue`,
+				},
+			});
+
+			mockOctokit.rest.issues.get.mockResolvedValue({
+				data: { number: 123, title: "Some issue", state: "open" },
+			});
+
+			// Should not throw - commit info is just logged
+			const result = await closeLinkedIssues("test-token", 1, false);
+			expect(result.closedCount).toBe(1);
 		});
 	});
 });
