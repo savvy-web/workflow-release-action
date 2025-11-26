@@ -41,6 +41,9 @@ describe("generate-pr-description", () => {
 		mockOctokit = createMockOctokit();
 		vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
 
+		// Default mock for pulls.get (PR body with no linked issues)
+		mockOctokit.rest.pulls.get.mockResolvedValue({ data: { body: "" } });
+
 		// Mock context
 		Object.defineProperty(vi.mocked(context), "repo", {
 			value: { owner: "test-owner", repo: "test-repo" },
@@ -170,5 +173,45 @@ describe("generate-pr-description", () => {
 
 		expect(result.description).toContain("Commits");
 		expect(result.description).toContain("new feature");
+	});
+
+	it("should preserve existing linked issues section from PR body", async () => {
+		const commits = [{ sha: "abc123", message: "test", author: "Test" }];
+
+		// Mock PR body with existing linked issues section
+		mockOctokit.rest.pulls.get.mockResolvedValue({
+			data: {
+				body: "## Linked Issues\n\n- Closes #42: Fix bug\n- Closes #43: Add feature\n\n## Old Content\n\nSome old text",
+			},
+		});
+
+		await generatePRDescriptionDirect("test-token", [], commits, 123, "test-api-key", false);
+
+		// Should preserve linked issues section at the top
+		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				body: expect.stringContaining("## Linked Issues"),
+			}),
+		);
+		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				body: expect.stringContaining("Closes #42"),
+			}),
+		);
+		expect(core.info).toHaveBeenCalledWith("Preserved existing linked issues section");
+	});
+
+	it("should not preserve linked issues section when not present", async () => {
+		const commits = [{ sha: "abc123", message: "test", author: "Test" }];
+
+		// Mock PR body without linked issues section
+		mockOctokit.rest.pulls.get.mockResolvedValue({
+			data: { body: "Some random PR description" },
+		});
+
+		await generatePRDescriptionDirect("test-token", [], commits, 123, "test-api-key", false);
+
+		// Should not log about preserving linked issues
+		expect(core.info).not.toHaveBeenCalledWith("Preserved existing linked issues section");
 	});
 });

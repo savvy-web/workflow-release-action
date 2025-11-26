@@ -231,16 +231,34 @@ async function generatePRDescription(
 
 	core.endGroup();
 
-	// Update PR description
+	// Update PR description (preserving any existing linked issues section)
 	if (!dryRun) {
 		core.info(`Updating PR #${prNumber} description`);
+
+		// Get current PR body to preserve linked issues section
+		const { data: currentPR } = await github.rest.pulls.get({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			pull_number: prNumber,
+		});
+
+		let finalBody = description;
+		const currentBody = currentPR.body || "";
+
+		// Extract and preserve the linked issues section if it exists
+		const linkedIssuesMatch = currentBody.match(/## Linked Issues\n\n[\s\S]*?(?=\n## |$)/);
+		if (linkedIssuesMatch) {
+			// Prepend the linked issues section to the new description
+			finalBody = `${linkedIssuesMatch[0].trim()}\n\n${description}`;
+			core.info("Preserved existing linked issues section");
+		}
 
 		await withRetry(async () => {
 			await github.rest.pulls.update({
 				owner: context.repo.owner,
 				repo: context.repo.repo,
 				pull_number: prNumber,
-				body: description,
+				body: finalBody,
 			});
 		});
 
