@@ -360,6 +360,38 @@ describe("detect-publishable-changes", () => {
 		expect(core.info).toHaveBeenCalledWith("Changeset stdout: Some stdout output");
 	});
 
+	it("should throw on changeset ValidationError", async () => {
+		const validationError = `🦋  error The package "@test/pkg-a" depends on the ignored package "@test/builder", but "@test/pkg-a" is not being ignored.
+🦋  error     at parse (/node_modules/@changesets/config/dist/changesets-config.cjs.js:317:11)
+🦋  error     at Object.read (/node_modules/@changesets/config/dist/changesets-config.cjs.js:143:10)
+🦋  error   _error: Error
+🦋  error       at new ValidationError (/node_modules/@changesets/errors/dist/changesets-errors.cjs.js:18:1)`;
+
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+			if (options?.listeners?.stderr) {
+				options.listeners.stderr(Buffer.from(validationError));
+			}
+			return 1;
+		});
+
+		await expect(detectPublishableChanges("pnpm", false)).rejects.toThrow("Changeset configuration is invalid");
+		expect(core.error).toHaveBeenCalledWith(expect.stringContaining("depends on the ignored package"));
+	});
+
+	it("should not throw on non-validation changeset errors", async () => {
+		// Some other error that's not a ValidationError
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+			if (options?.listeners?.stderr) {
+				options.listeners.stderr(Buffer.from("Some other error\n"));
+			}
+			return 1;
+		});
+
+		// Should not throw, just return no changes
+		const result = await detectPublishableChanges("pnpm", false);
+		expect(result.hasChanges).toBe(false);
+	});
+
 	it("should find package from root package.json when not in workspaces", async () => {
 		changesetStatusContent = JSON.stringify({
 			releases: [{ name: "@test/root-pkg", newVersion: "1.0.0", type: "minor" }],

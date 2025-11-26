@@ -29,21 +29,40 @@ The `setup-flow` action is being refactored from `actions/github-script@v8` inli
 
 ### Integration Testing
 
-The `savvy-web/workflow-integration` repository is set up to test the release action from feature branches. To trigger a dry-run release test:
+The `savvy-web/workflow-integration` repository is set up to test the release action from feature branches.
+
+**Key points:**
+
+* The integration repo references `savvy-web/workflow-release-action@feature/setup-flow` directly
+* Changes pushed to `feature/setup-flow` are immediately testable (no need to merge to main)
+* The integration repo has a changeset file and packages configured with `publishConfig.access: public`
+
+**Iteration workflow:**
+
+1. Make changes to action code in this repo
+2. Run tests: `pnpm ci:test`
+3. Build: `pnpm build` (updates `dist/main.js`)
+4. Push to `feature/setup-flow` branch
+5. Trigger workflow on integration repo to test
 
 ```bash
-# Trigger release workflow on integration repo (uses feature/setup-flow branch)
+# Trigger release workflow on integration repo
 gh workflow run release.yml --repo savvy-web/workflow-integration --ref main
 
 # Watch the run
 gh run list --repo savvy-web/workflow-integration --limit 1
 gh run watch <run-id> --repo savvy-web/workflow-integration
 
-# View logs
+# View logs for debugging
 gh run view <run-id> --repo savvy-web/workflow-integration --log
 ```
 
-The integration repo references `savvy-web/workflow-release-action@feature/setup-flow` so changes pushed to this branch are immediately testable.
+**Debugging tips:**
+
+* The action logs show package discovery, changeset status, and publish config detection
+* Look for "Running:" lines to see exact commands being executed
+* Check "Changeset status file contents" to verify changeset detection
+* The "📦 Discovered X package(s)" section shows what packages were found and their publish strategies
 
 **Technical stack:**
 

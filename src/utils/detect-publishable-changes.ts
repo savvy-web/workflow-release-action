@@ -128,6 +128,28 @@ export async function detectPublishableChanges(
 		core.info(`Changeset stderr: ${statusError.trim()}`);
 	}
 
+	// Check for changeset validation errors (exit code 1 with specific error patterns)
+	if (exitCode !== 0 && statusError) {
+		const isValidationError =
+			statusError.includes("ValidationError") ||
+			statusError.includes("depends on the ignored package") ||
+			statusError.includes("is not being ignored");
+
+		if (isValidationError) {
+			// Extract the specific error messages for clearer reporting
+			const errorLines = statusError
+				.split("\n")
+				.filter((line) => line.includes("error") && !line.includes("at "))
+				.map((line) => line.replace(/^\s*🦋\s*error\s*/, "").trim())
+				.filter((line) => line.length > 0 && !line.startsWith("{"));
+
+			const errorSummary = errorLines.length > 0 ? errorLines.join("\n") : "Changeset configuration validation failed";
+
+			core.error(`Changeset validation error:\n${errorSummary}`);
+			throw new Error(`Changeset configuration is invalid:\n${errorSummary}`);
+		}
+	}
+
 	// Parse changeset status from temp file
 	let changesetStatus: ChangesetStatus;
 
