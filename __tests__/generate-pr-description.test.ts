@@ -33,6 +33,13 @@ describe("generate-pr-description", () => {
 		process.env.COMMITS = "[]";
 		process.env.DRY_RUN = "false";
 
+		// Mock core.summary on the actual core module (used by summaryWriter)
+		const mockSummary = {
+			addRaw: vi.fn().mockReturnThis(),
+			write: vi.fn().mockResolvedValue(undefined),
+		};
+		Object.defineProperty(core, "summary", { value: mockSummary, writable: true });
+
 		// Mock core module
 		mockCore = {
 			...core,
@@ -45,14 +52,7 @@ describe("generate-pr-description", () => {
 			endGroup: vi.fn(),
 			setOutput: vi.fn(),
 			setFailed: vi.fn(),
-			summary: {
-				addHeading: vi.fn().mockReturnThis(),
-				addEOL: vi.fn().mockReturnThis(),
-				addTable: vi.fn().mockReturnThis(),
-				addRaw: vi.fn().mockReturnThis(),
-				write: vi.fn().mockResolvedValue(undefined),
-				stringify: vi.fn().mockReturnValue(""),
-			},
+			summary: mockSummary,
 		} as unknown as typeof core;
 
 		// Setup mock octokit

@@ -1,5 +1,6 @@
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * Release branch check result
@@ -93,39 +94,28 @@ export async function checkReleaseBranch(
 			: `Release branch exists without open PR`
 		: `Release branch does not exist`;
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary
-		.addHeading("Release Branch Status", 2)
-		.addEOL()
-		.addTable([
-			[
-				{ data: "Property", header: true },
-				{ data: "Value", header: true },
-			],
-			["Branch", `\`${releaseBranch}\``],
-			["Target", `\`${targetBranch}\``],
-			["Exists", branchExists ? "✅ Yes" : "❌ No"],
-			["Open PR", hasOpenPr ? `✅ Yes (#${prNumber})` : "❌ No"],
-		])
-		.addEOL()
-		.addHeading("Next Steps", 3)
-		.addEOL();
+	// Build check details using summaryWriter (markdown, not HTML)
+	const statusTable = summaryWriter.keyValueTable([
+		{ key: "Branch", value: `\`${releaseBranch}\`` },
+		{ key: "Target", value: `\`${targetBranch}\`` },
+		{ key: "Exists", value: branchExists ? "✅ Yes" : "❌ No" },
+		{ key: "Open PR", value: hasOpenPr ? `✅ Yes (#${prNumber})` : "❌ No" },
+	]);
 
+	let nextSteps: string;
 	if (hasOpenPr) {
-		checkSummaryBuilder.addRaw(
-			`An open release PR already exists. The workflow will update it with the latest changes from \`${targetBranch}\`.`,
-		);
+		nextSteps = `An open release PR already exists. The workflow will update it with the latest changes from \`${targetBranch}\`.`;
 	} else if (branchExists) {
-		checkSummaryBuilder.addRaw("The release branch exists but has no open PR. A new PR will be created.");
+		nextSteps = "The release branch exists but has no open PR. A new PR will be created.";
 	} else {
-		checkSummaryBuilder.addRaw("No release branch exists. A new branch and PR will be created.");
+		nextSteps = "No release branch exists. A new branch and PR will be created.";
 	}
 
-	if (dryRun) {
-		checkSummaryBuilder.addEOL().addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
-	}
-
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = summaryWriter.build([
+		{ heading: "Release Branch Status", content: statusTable },
+		{ heading: "Next Steps", level: 3, content: nextSteps },
+		...(dryRun ? [{ content: "---\n**Mode**: Dry Run (Preview Only)" }] : []),
+	]);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -142,23 +132,20 @@ export async function checkReleaseBranch(
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary
-	await core.summary
-		.addHeading(checkTitle, 2)
-		.addRaw(checkSummary)
-		.addEOL()
-		.addHeading("Release Branch Status", 3)
-		.addTable([
-			[
-				{ data: "Property", header: true },
-				{ data: "Value", header: true },
-			],
-			["Branch", `\`${releaseBranch}\``],
-			["Target", `\`${targetBranch}\``],
-			["Exists", branchExists ? "✅ Yes" : "❌ No"],
-			["Open PR", hasOpenPr ? `✅ Yes (#${prNumber})` : "❌ No"],
-		])
-		.write();
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const jobStatusTable = summaryWriter.keyValueTable([
+		{ key: "Branch", value: `\`${releaseBranch}\`` },
+		{ key: "Target", value: `\`${targetBranch}\`` },
+		{ key: "Exists", value: branchExists ? "✅ Yes" : "❌ No" },
+		{ key: "Open PR", value: hasOpenPr ? `✅ Yes (#${prNumber})` : "❌ No" },
+	]);
+
+	const jobSummary = summaryWriter.build([
+		{ heading: checkTitle, content: checkSummary },
+		{ heading: "Release Branch Status", level: 3, content: jobStatusTable },
+	]);
+
+	await summaryWriter.write(jobSummary);
 
 	return {
 		exists: branchExists,

@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import type { PackageValidationResult } from "../types/shared-types.js";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * GitHub Packages validation result
@@ -420,38 +421,34 @@ export async function validatePublishGitHubPackages(
 		? `All ${validationResults.length} package(s) ready for GitHub Packages`
 		: `${failedPackages.length} of ${validationResults.length} package(s) failed validation`;
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary
-		.addHeading("Validation Results", 2)
-		.addEOL()
-		.addTable([
-			[
-				{ data: "Package", header: true },
-				{ data: "Version", header: true },
-				{ data: "Status", header: true },
-				{ data: "Message", header: true },
-			],
-			...validationResults.map((pkg) => [
-				pkg.name,
-				pkg.version,
-				pkg.canPublish ? "✅ Ready" : "❌ Failed",
-				`${pkg.message}${pkg.hasProvenance ? " 🔐" : ""}`,
-			]),
-		]);
+	// Build check details using summaryWriter (markdown, not HTML)
+	const resultsTable = summaryWriter.table(
+		["Package", "Version", "Status", "Message"],
+		validationResults.map((pkg) => [
+			pkg.name,
+			pkg.version,
+			pkg.canPublish ? "✅ Ready" : "❌ Failed",
+			`${pkg.message}${pkg.hasProvenance ? " 🔐" : ""}`,
+		]),
+	);
+
+	const checkSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: "Validation Results", content: resultsTable },
+	];
 
 	if (failedPackages.length > 0) {
-		checkSummaryBuilder
-			.addEOL()
-			.addHeading("Failed Packages", 3)
-			.addEOL()
-			.addRaw(failedPackages.map((pkg) => `- **${pkg.name}@${pkg.version}**: ${pkg.message}`).join("\n"));
+		checkSections.push({
+			heading: "Failed Packages",
+			level: 3,
+			content: summaryWriter.list(failedPackages.map((pkg) => `**${pkg.name}@${pkg.version}**: ${pkg.message}`)),
+		});
 	}
 
 	if (dryRun) {
-		checkSummaryBuilder.addEOL().addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
+		checkSections.push({ content: "---\n**Mode**: Dry Run (Preview Only)" });
 	}
 
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = summaryWriter.build(checkSections);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -468,36 +465,31 @@ export async function validatePublishGitHubPackages(
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary
-	const summaryBuilder = core.summary
-		.addHeading(checkTitle, 2)
-		.addRaw(checkSummary)
-		.addEOL()
-		.addHeading("Validation Results", 3)
-		.addTable([
-			[
-				{ data: "Package", header: true },
-				{ data: "Version", header: true },
-				{ data: "Status", header: true },
-				{ data: "Message", header: true },
-			],
-			...validationResults.map((pkg) => [
-				pkg.name,
-				pkg.version,
-				pkg.canPublish ? "✅ Ready" : "❌ Failed",
-				`${pkg.message}${pkg.hasProvenance ? " 🔐" : ""}`,
-			]),
-		]);
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const jobResultsTable = summaryWriter.table(
+		["Package", "Version", "Status", "Message"],
+		validationResults.map((pkg) => [
+			pkg.name,
+			pkg.version,
+			pkg.canPublish ? "✅ Ready" : "❌ Failed",
+			`${pkg.message}${pkg.hasProvenance ? " 🔐" : ""}`,
+		]),
+	);
+
+	const jobSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: checkTitle, content: checkSummary },
+		{ heading: "Validation Results", level: 3, content: jobResultsTable },
+	];
 
 	if (failedPackages.length > 0) {
-		summaryBuilder.addHeading("Failed Packages", 3);
-
-		for (const pkg of failedPackages) {
-			summaryBuilder.addRaw(`- **${pkg.name}@${pkg.version}**: ${pkg.message}`).addEOL();
-		}
+		jobSections.push({
+			heading: "Failed Packages",
+			level: 3,
+			content: summaryWriter.list(failedPackages.map((pkg) => `**${pkg.name}@${pkg.version}**: ${pkg.message}`)),
+		});
 	}
 
-	await summaryBuilder.write();
+	await summaryWriter.write(summaryWriter.build(jobSections));
 
 	return {
 		success,

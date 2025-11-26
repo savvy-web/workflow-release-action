@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * Update release branch result
@@ -231,19 +232,18 @@ The release branch has conflicts with \`${targetBranch}\` and needs manual resol
 			},
 		});
 
-		// Write job summary
-		await core.summary
-			.addHeading(dryRun ? "🧪 Update Release Branch (Dry Run)" : "Update Release Branch", 2)
-			.addRaw("⚠️ Merge conflicts detected")
-			.addEOL()
-			.addRaw(`Conflicts between \`${releaseBranch}\` and \`${targetBranch}\` require manual resolution.`)
-			.addEOL()
-			.addRaw(
-				prNumber
+		// Write job summary using summaryWriter (markdown, not HTML)
+		const conflictTitle = dryRun ? "🧪 Update Release Branch (Dry Run)" : "Update Release Branch";
+		const conflictSummary = summaryWriter.build([
+			{ heading: conflictTitle, content: "⚠️ Merge conflicts detected" },
+			{ content: `Conflicts between \`${releaseBranch}\` and \`${targetBranch}\` require manual resolution.` },
+			{
+				content: prNumber
 					? `See PR #${prNumber} for resolution instructions.`
 					: "Please resolve conflicts manually and re-run the workflow.",
-			)
-			.write();
+			},
+		]);
+		await summaryWriter.write(conflictSummary);
 
 		return {
 			success: false,
@@ -326,36 +326,37 @@ The release branch has conflicts with \`${targetBranch}\` and needs manual resol
 
 	core.endGroup();
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary
-		.addHeading("Release Branch Updated", 2)
-		.addEOL()
-		.addTable([
-			[
-				{ data: "Property", header: true },
-				{ data: "Value", header: true },
-			],
-			["Branch", `\`${releaseBranch}\``],
-			["Target", `\`${targetBranch}\``],
-			["Conflicts", "❌ None"],
-			["New Changes", hasChanges ? "✅ Yes" : "❌ No"],
-			[
-				"PR",
-				prNumber
-					? `[#${prNumber}](https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber})`
-					: "_N/A_",
-			],
-		]);
+	// Build check details using summaryWriter (markdown, not HTML)
+	const checkStatusTable = summaryWriter.keyValueTable([
+		{ key: "Branch", value: `\`${releaseBranch}\`` },
+		{ key: "Target", value: `\`${targetBranch}\`` },
+		{ key: "Conflicts", value: "❌ None" },
+		{ key: "New Changes", value: hasChanges ? "✅ Yes" : "❌ No" },
+		{
+			key: "PR",
+			value: prNumber
+				? `[#${prNumber}](https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${prNumber})`
+				: "_N/A_",
+		},
+	]);
+
+	const checkSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: "Release Branch Updated", content: checkStatusTable },
+	];
 
 	if (hasChanges) {
-		checkSummaryBuilder.addEOL().addHeading("Version Changes", 3).addEOL().addCodeBlock(versionSummary, "text");
+		checkSections.push({
+			heading: "Version Changes",
+			level: 3,
+			content: summaryWriter.codeBlock(versionSummary, "text"),
+		});
 	}
 
 	if (dryRun) {
-		checkSummaryBuilder.addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
+		checkSections.push({ content: "---\n**Mode**: Dry Run (Preview Only)" });
 	}
 
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = summaryWriter.build(checkSections);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -370,29 +371,33 @@ The release branch has conflicts with \`${targetBranch}\` and needs manual resol
 		},
 	});
 
-	// Write job summary
-	const summaryBuilder = core.summary
-		.addHeading(dryRun ? "🧪 Update Release Branch (Dry Run)" : "Update Release Branch", 2)
-		.addRaw(hasChanges ? "✅ Release branch updated with new changes" : "✅ Release branch updated (no new changes)")
-		.addEOL()
-		.addHeading("Update Summary", 3)
-		.addTable([
-			[
-				{ data: "Property", header: true },
-				{ data: "Value", header: true },
-			],
-			["Branch", `\`${releaseBranch}\``],
-			["Target", `\`${targetBranch}\``],
-			["Conflicts", "❌ No"],
-			["New Changes", hasChanges ? "✅ Yes" : "❌ No"],
-			["PR", prNumber ? `#${prNumber}` : "_N/A_"],
-		]);
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const jobTitle = dryRun ? "🧪 Update Release Branch (Dry Run)" : "Update Release Branch";
+	const jobStatusTable = summaryWriter.keyValueTable([
+		{ key: "Branch", value: `\`${releaseBranch}\`` },
+		{ key: "Target", value: `\`${targetBranch}\`` },
+		{ key: "Conflicts", value: "❌ No" },
+		{ key: "New Changes", value: hasChanges ? "✅ Yes" : "❌ No" },
+		{ key: "PR", value: prNumber ? `#${prNumber}` : "_N/A_" },
+	]);
+
+	const jobSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{
+			heading: jobTitle,
+			content: hasChanges ? "✅ Release branch updated with new changes" : "✅ Release branch updated (no new changes)",
+		},
+		{ heading: "Update Summary", level: 3, content: jobStatusTable },
+	];
 
 	if (hasChanges) {
-		summaryBuilder.addHeading("Version Changes", 3).addCodeBlock(versionSummary, "text");
+		jobSections.push({
+			heading: "Version Changes",
+			level: 3,
+			content: summaryWriter.codeBlock(versionSummary, "text"),
+		});
 	}
 
-	await summaryBuilder.write();
+	await summaryWriter.write(summaryWriter.build(jobSections));
 
 	return {
 		success: true,

@@ -56,6 +56,13 @@ export const summaryWriter = {
 	},
 
 	/**
+	 * Build a markdown code block
+	 */
+	codeBlock(code: string, lang: string = ""): string {
+		return `\`\`\`${lang}\n${code}\n\`\`\``;
+	},
+
+	/**
 	 * Build a complete summary section with heading and content.
 	 */
 	section(heading: string, level: 2 | 3, content: string): string {

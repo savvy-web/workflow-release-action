@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import type { ValidationResult } from "../types/shared-types.js";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * Unified validation check result
@@ -52,36 +53,33 @@ export async function createValidationCheck(
 		? `All ${validations.length} validation(s) passed`
 		: `${failedChecks.length} of ${validations.length} validation(s) failed`;
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary
-		.addHeading("Validation Results", 2)
-		.addEOL()
-		.addTable([
-			[
-				{ data: "Check", header: true },
-				{ data: "Status", header: true },
-				{ data: "Details", header: true },
-			],
-			...validations.map((v) => {
-				const status = v.success ? "✅ Passed" : "❌ Failed";
-				const details = v.message || (v.success ? "All checks passed" : "Validation failed");
-				return [v.name, status, details];
-			}),
-		]);
+	// Build check details using summaryWriter (markdown, not HTML)
+	const resultsTable = summaryWriter.table(
+		["Check", "Status", "Details"],
+		validations.map((v) => {
+			const status = v.success ? "✅ Passed" : "❌ Failed";
+			const details = v.message || (v.success ? "All checks passed" : "Validation failed");
+			return [v.name, status, details];
+		}),
+	);
+
+	const checkSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: "Validation Results", content: resultsTable },
+	];
 
 	if (failedChecks.length > 0) {
-		checkSummaryBuilder
-			.addEOL()
-			.addHeading("Failed Validations", 3)
-			.addEOL()
-			.addRaw(failedChecks.map((v) => `- **${v.name}**: ${v.message || "Validation failed"}`).join("\n"));
+		checkSections.push({
+			heading: "Failed Validations",
+			level: 3,
+			content: summaryWriter.list(failedChecks.map((v) => `**${v.name}**: ${v.message || "Validation failed"}`)),
+		});
 	}
 
 	if (dryRun) {
-		checkSummaryBuilder.addEOL().addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
+		checkSections.push({ content: "---\n**Mode**: Dry Run (Preview Only)" });
 	}
 
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = summaryWriter.build(checkSections);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -98,34 +96,30 @@ export async function createValidationCheck(
 
 	core.info(`Created unified check run: ${checkRun.html_url}`);
 
-	// Write job summary
-	const summaryBuilder = core.summary
-		.addHeading(checkTitle, 2)
-		.addRaw(checkSummary)
-		.addEOL()
-		.addHeading("Validation Results", 3)
-		.addTable([
-			[
-				{ data: "Check", header: true },
-				{ data: "Status", header: true },
-				{ data: "Details", header: true },
-			],
-			...validations.map((v) => {
-				const status = v.success ? "✅ Passed" : "❌ Failed";
-				const details = v.message || (v.success ? "All checks passed" : "Validation failed");
-				return [v.name, status, details];
-			}),
-		]);
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const jobResultsTable = summaryWriter.table(
+		["Check", "Status", "Details"],
+		validations.map((v) => {
+			const status = v.success ? "✅ Passed" : "❌ Failed";
+			const details = v.message || (v.success ? "All checks passed" : "Validation failed");
+			return [v.name, status, details];
+		}),
+	);
+
+	const jobSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: checkTitle, content: checkSummary },
+		{ heading: "Validation Results", level: 3, content: jobResultsTable },
+	];
 
 	if (failedChecks.length > 0) {
-		summaryBuilder.addHeading("Failed Validations", 3);
-
-		for (const v of failedChecks) {
-			summaryBuilder.addRaw(`- **${v.name}**: ${v.message || "Validation failed"}`).addEOL();
-		}
+		jobSections.push({
+			heading: "Failed Validations",
+			level: 3,
+			content: summaryWriter.list(failedChecks.map((v) => `**${v.name}**: ${v.message || "Validation failed"}`)),
+		});
 	}
 
-	await summaryBuilder.write();
+	await summaryWriter.write(summaryWriter.build(jobSections));
 
 	return {
 		success,

@@ -103,6 +103,20 @@ describe("summary-writer", () => {
 		});
 	});
 
+	describe("codeBlock", () => {
+		it("should build a code block with language", () => {
+			const result = summaryWriter.codeBlock("const x = 1;", "typescript");
+
+			expect(result).toBe("```typescript\nconst x = 1;\n```");
+		});
+
+		it("should build a code block without language", () => {
+			const result = summaryWriter.codeBlock("plain text");
+
+			expect(result).toBe("```\nplain text\n```");
+		});
+	});
+
 	describe("section", () => {
 		it("should build a section with level 2 heading", () => {
 			const result = summaryWriter.section("Title", 2, "Content here");

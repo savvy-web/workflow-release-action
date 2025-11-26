@@ -143,7 +143,7 @@ describe("create-validation-check", () => {
 
 		await createValidationCheck(validations, false);
 
-		// Check that summary was built with default message
-		expect(core.summary.addTable).toHaveBeenCalled();
+		// Check that summary was built with default message (summaryWriter uses addRaw)
+		expect(core.summary.addRaw).toHaveBeenCalled();
 	});
 });

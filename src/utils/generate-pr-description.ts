@@ -2,6 +2,7 @@ import type * as core from "@actions/core";
 import type { Context } from "@actions/github/lib/context";
 import type { GitHub } from "@actions/github/lib/utils";
 import type Anthropic from "@anthropic-ai/sdk";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * Custom arguments for this action including external Anthropic module
@@ -265,40 +266,29 @@ async function generatePRDescription(
 	const checkTitle = dryRun ? "🧪 Generate PR Description (Dry Run)" : "Generate PR Description";
 	const checkSummary = "Generated PR description with AI assistance";
 
-	// Build check details
-	const checkSummaryBuilder = core.summary
-		.addHeading("PR Description Generated", 2)
-		.addEOL()
-		.addHeading("Generated Description", 3)
-		.addEOL()
-		.addRaw(description)
-		.addEOL()
-		.addEOL();
+	// Build check details using summaryWriter (markdown, not HTML)
+	const checkSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: "PR Description Generated", content: "" },
+		{ heading: "Generated Description", level: 3, content: description },
+	];
 
 	if (linkedIssues.length > 0) {
-		checkSummaryBuilder
-			.addHeading("Linked Issues", 3)
-			.addEOL()
-			.addTable([
-				[
-					{ data: "Issue", header: true },
-					{ data: "Title", header: true },
-					{ data: "State", header: true },
-				],
-				...linkedIssues.map((issue) => [`[#${issue.number}](${issue.url})`, issue.title, issue.state]),
-			])
-			.addEOL();
+		const issuesTable = summaryWriter.table(
+			["Issue", "Title", "State"],
+			linkedIssues.map((issue) => [`[#${issue.number}](${issue.url})`, issue.title, issue.state]),
+		);
+		checkSections.push({ heading: "Linked Issues", level: 3, content: issuesTable });
 	}
 
 	if (commits.length > 0) {
-		checkSummaryBuilder.addHeading("Commits Analyzed", 3).addEOL().addRaw(`${commits.length} commit(s)`).addEOL();
+		checkSections.push({ heading: "Commits Analyzed", level: 3, content: `${commits.length} commit(s)` });
 	}
 
 	if (dryRun) {
-		checkSummaryBuilder.addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
+		checkSections.push({ content: "---\n**Mode**: Dry Run (Preview Only)" });
 	}
 
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = summaryWriter.build(checkSections);
 
 	const { data: checkRun } = await withRetry(async () => {
 		return await github.rest.checks.create({
@@ -317,18 +307,13 @@ async function generatePRDescription(
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary
-	const summaryBuilder = core.summary
-		.addHeading(checkTitle, 2)
-		.addRaw(checkSummary)
-		.addEOL()
-		.addEOL()
-		.addHeading("Generated Description", 3)
-		.addEOL()
-		.addRaw(description)
-		.addEOL();
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const jobSummary = summaryWriter.build([
+		{ heading: checkTitle, content: checkSummary },
+		{ heading: "Generated Description", level: 3, content: description },
+	]);
 
-	await summaryBuilder.write();
+	await summaryWriter.write(jobSummary);
 
 	return {
 		description,
