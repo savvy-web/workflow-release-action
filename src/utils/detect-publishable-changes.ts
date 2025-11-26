@@ -11,6 +11,8 @@ import { getWorkspaceRoot, getWorkspaces } from "workspace-tools";
 interface ChangesetPackage {
 	/** Package name */
 	name: string;
+	/** Current version before changeset application */
+	oldVersion: string;
 	/** New version after changeset application */
 	newVersion: string;
 	/** Type of version bump */
@@ -293,7 +295,9 @@ export async function detectPublishableChanges(
 
 	if (publishablePackages.length > 0) {
 		checkDetailParts.push(
-			publishablePackages.map((pkg) => `- **${pkg.name}** → \`${pkg.newVersion}\` (${pkg.type})`).join("\n"),
+			publishablePackages
+				.map((pkg) => `- **${pkg.name}**: \`${pkg.oldVersion}\` → \`${pkg.newVersion}\` (${pkg.type})`)
+				.join("\n"),
 		);
 	} else {
 		checkDetailParts.push("_No publishable packages found_");
@@ -335,10 +339,10 @@ export async function detectPublishableChanges(
 	const jobSummaryParts: string[] = [`## ${checkTitle}`, "", checkSummary, "", "### Publishable Packages", ""];
 
 	if (publishablePackages.length > 0) {
-		jobSummaryParts.push("| Package | Version | Type |");
-		jobSummaryParts.push("|---------|---------|------|");
+		jobSummaryParts.push("| Package | Current | Next | Type |");
+		jobSummaryParts.push("|---------|---------|------|------|");
 		for (const pkg of publishablePackages) {
-			jobSummaryParts.push(`| ${pkg.name} | ${pkg.newVersion} | ${pkg.type} |`);
+			jobSummaryParts.push(`| ${pkg.name} | ${pkg.oldVersion} | ${pkg.newVersion} | ${pkg.type} |`);
 		}
 	} else {
 		jobSummaryParts.push("_No publishable packages found_");
