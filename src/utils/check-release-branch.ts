@@ -114,7 +114,6 @@ export async function checkReleaseBranch(
 	const checkDetails = summaryWriter.build([
 		{ heading: "Release Branch Status", content: statusTable },
 		{ heading: "Next Steps", level: 3, content: nextSteps },
-		...(dryRun ? [{ content: "---\n**Mode**: Dry Run (Preview Only)" }] : []),
 	]);
 
 	const { data: checkRun } = await github.rest.checks.create({

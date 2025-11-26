@@ -134,10 +134,6 @@ export async function cleanupValidationChecks(
 		{ heading: "Validation Check Cleanup", content: "" },
 	];
 
-	if (dryRun) {
-		sections.push({ content: "**Mode**: Dry Run (Preview Only)" });
-	}
-
 	sections.push({ content: `**Reason**: ${reason}` });
 	sections.push({ heading: "Results", level: 3, content: resultsTable });
 

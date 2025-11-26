@@ -227,10 +227,6 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 		});
 	}
 
-	if (dryRun) {
-		prBodySections.push({ content: "---\n**Mode**: Dry Run (Preview Only)" });
-	}
-
 	prBodySections.push({
 		content: `---\n🤖 Generated with [GitHub Actions](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
 	});
@@ -310,10 +306,6 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 			level: 3,
 			content: summaryWriter.codeBlock(versionSummary, "text"),
 		});
-	}
-
-	if (dryRun) {
-		checkSections.push({ content: "---\n**Mode**: Dry Run (Preview Only)" });
 	}
 
 	const checkDetails = summaryWriter.build(checkSections);

@@ -166,7 +166,6 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 			heading: "Commits Analyzed",
 			content: `${commits.length} commit(s) between \`${targetBranch}\` and \`${releaseBranch}\``,
 		},
-		...(dryRun ? [{ content: "---\n**Mode**: Dry Run (Preview Only)" }] : []),
 	]);
 
 	const { data: checkRun } = await github.rest.checks.create({

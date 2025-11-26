@@ -314,10 +314,6 @@ export async function detectPublishableChanges(
 			: "No changesets found",
 	);
 
-	if (dryRun) {
-		checkDetailParts.push("\n\n---\n**Mode**: Dry Run (Preview Only)");
-	}
-
 	const checkDetails = checkDetailParts.join("");
 
 	const { data: checkRun } = await github.rest.checks.create({
@@ -356,12 +352,6 @@ export async function detectPublishableChanges(
 			? `Found ${changesetStatus.changesets.length} changeset(s)`
 			: "No changesets found",
 	);
-
-	if (dryRun) {
-		jobSummaryParts.push("");
-		jobSummaryParts.push("---");
-		jobSummaryParts.push("**Mode**: Dry Run (Preview Only)");
-	}
 
 	await core.summary.addRaw(jobSummaryParts.join("\n")).write();
 

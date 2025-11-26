@@ -284,10 +284,6 @@ async function generatePRDescription(
 		checkSections.push({ heading: "Commits Analyzed", level: 3, content: `${commits.length} commit(s)` });
 	}
 
-	if (dryRun) {
-		checkSections.push({ content: "---\n**Mode**: Dry Run (Preview Only)" });
-	}
-
 	const checkDetails = summaryWriter.build(checkSections);
 
 	const { data: checkRun } = await withRetry(async () => {

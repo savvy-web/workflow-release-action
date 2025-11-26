@@ -283,10 +283,6 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 		checkSections.push({ content: "_No packages to release_" });
 	}
 
-	if (dryRun) {
-		checkSections.push({ content: "---\n**Mode**: Dry Run (Preview Only)" });
-	}
-
 	const checkDetails = summaryWriter.build(checkSections);
 
 	const { data: checkRun } = await github.rest.checks.create({

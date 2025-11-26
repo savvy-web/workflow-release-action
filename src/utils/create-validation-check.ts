@@ -75,10 +75,6 @@ export async function createValidationCheck(
 		});
 	}
 
-	if (dryRun) {
-		checkSections.push({ content: "---\n**Mode**: Dry Run (Preview Only)" });
-	}
-
 	const checkDetails = summaryWriter.build(checkSections);
 
 	const { data: checkRun } = await github.rest.checks.create({

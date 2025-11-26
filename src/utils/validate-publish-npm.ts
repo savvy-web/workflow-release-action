@@ -291,10 +291,7 @@ export async function validateNPMPublish(packageManager: string, dryRun: boolean
 				)
 			: "_No packages to validate_";
 
-	const checkDetails = summaryWriter.build([
-		{ heading: "NPM Publish Validation Results", content: packagesList },
-		...(dryRun ? [{ content: "---\n**Mode**: Dry Run (Preview Only)" }] : []),
-	]);
+	const checkDetails = summaryWriter.build([{ heading: "NPM Publish Validation Results", content: packagesList }]);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
