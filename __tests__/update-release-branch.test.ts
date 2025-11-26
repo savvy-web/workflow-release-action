@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createApiCommit } from "../src/utils/create-api-commit.js";
 import { updateReleaseBranch } from "../src/utils/update-release-branch.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.js";
@@ -10,6 +11,7 @@ import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.j
 vi.mock("@actions/core");
 vi.mock("@actions/exec");
 vi.mock("@actions/github");
+vi.mock("../src/utils/create-api-commit.js");
 
 describe("update-release-branch", () => {
 	let mockOctokit: MockOctokit;
@@ -58,6 +60,9 @@ describe("update-release-branch", () => {
 		mockOctokit.rest.pulls.list.mockResolvedValue({
 			data: [{ number: 456, html_url: "https://github.com/test/pull/456" }],
 		});
+
+		// Mock createApiCommit
+		vi.mocked(createApiCommit).mockResolvedValue({ sha: "abc123def456", created: true });
 	});
 
 	afterEach(() => {
@@ -83,40 +88,68 @@ describe("update-release-branch", () => {
 		expect(result.checkId).toBe(12345);
 	});
 
-	it("should handle merge conflicts", async () => {
-		let mergeAttempted = false;
+	it("should recreate branch from main instead of merging", async () => {
 		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-			if (cmd === "git" && args?.includes("merge") && !args?.includes("--abort")) {
-				mergeAttempted = true;
-				if (options?.listeners?.stderr) {
-					options.listeners.stderr(Buffer.from("CONFLICT (content): Merge conflict in package.json\n"));
-				}
-			}
-			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain") && mergeAttempted) {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
 				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from("UU package.json\n"));
+					options.listeners.stdout(Buffer.from("M package.json\n"));
 				}
 			}
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		await updateReleaseBranch();
 
-		expect(result.success).toBe(false);
-		expect(result.hadConflicts).toBe(true);
-		expect(mockOctokit.rest.issues.createComment).toHaveBeenCalledWith(
-			expect.objectContaining({
-				body: expect.stringContaining("Merge Conflicts Detected"),
-			}),
-		);
-		expect(mockOctokit.rest.issues.addLabels).toHaveBeenCalledWith(
-			expect.objectContaining({
-				labels: ["conflicts"],
-			}),
+		// Should delete existing local branch and create new one
+		expect(exec.exec).toHaveBeenCalledWith("git", ["branch", "-D", "changeset-release/main"], {
+			ignoreReturnCode: true,
+		});
+		expect(exec.exec).toHaveBeenCalledWith("git", ["checkout", "-b", "changeset-release/main"]);
+		// Should NOT call merge
+		expect(exec.exec).not.toHaveBeenCalledWith("git", expect.arrayContaining(["merge"]), expect.any(Object));
+	});
+
+	it("should create commit via GitHub API for verified signatures", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		await updateReleaseBranch();
+
+		// Verify createApiCommit was called
+		expect(createApiCommit).toHaveBeenCalledWith(
+			"test-token",
+			"changeset-release/main",
+			expect.stringContaining("chore: release"),
 		);
 	});
 
-	it("should handle no changes after merge", async () => {
+	it("should force push to update remote branch", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		await updateReleaseBranch();
+
+		// Should force push
+		expect(exec.exec).toHaveBeenCalledWith(
+			"git",
+			["push", "-f", "-u", "origin", "changeset-release/main"],
+			expect.any(Object),
+		);
+	});
+
+	it("should handle no version changes from changesets", async () => {
 		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
 			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
 				if (options?.listeners?.stdout) {
@@ -131,6 +164,14 @@ describe("update-release-branch", () => {
 		expect(result.success).toBe(true);
 		expect(result.hadConflicts).toBe(false);
 		expect(result.versionSummary).toBe("");
+		// Should still force push to sync branch
+		expect(exec.exec).toHaveBeenCalledWith(
+			"git",
+			["push", "-f", "-u", "origin", "changeset-release/main"],
+			expect.any(Object),
+		);
+		// Should NOT call createApiCommit when no changes
+		expect(createApiCommit).not.toHaveBeenCalled();
 	});
 
 	it("should skip actual operations in dry-run mode", async () => {
@@ -224,67 +265,6 @@ describe("update-release-branch", () => {
 		expect(result.success).toBe(true);
 		expect(result.prNumber).toBeNull();
 		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find open PR"));
-	});
-
-	it("should create check with action_required conclusion on conflicts", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-			if (cmd === "git" && args?.includes("merge") && !args?.includes("--abort")) {
-				if (options?.listeners?.stderr) {
-					options.listeners.stderr(Buffer.from("CONFLICT\n"));
-				}
-			}
-			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from("UU file.txt\n"));
-				}
-			}
-			return 0;
-		});
-
-		await updateReleaseBranch();
-
-		expect(mockOctokit.rest.checks.create).toHaveBeenCalledWith(
-			expect.objectContaining({
-				conclusion: "action_required",
-			}),
-		);
-	});
-
-	it("should handle merge throw error", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (cmd, args) => {
-			if (cmd === "git" && args?.includes("merge") && !args?.includes("--abort")) {
-				throw new Error("Merge failed");
-			}
-			return 0;
-		});
-
-		const result = await updateReleaseBranch();
-
-		expect(result.success).toBe(false);
-		expect(result.hadConflicts).toBe(true);
-		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Merge failed"));
-	});
-
-	it("should not post conflict comment when no PR exists", async () => {
-		mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
-
-		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-			if (cmd === "git" && args?.includes("merge") && !args?.includes("--abort")) {
-				if (options?.listeners?.stderr) {
-					options.listeners.stderr(Buffer.from("CONFLICT\n"));
-				}
-			}
-			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from("UU file.txt\n"));
-				}
-			}
-			return 0;
-		});
-
-		await updateReleaseBranch();
-
-		expect(mockOctokit.rest.issues.createComment).not.toHaveBeenCalled();
 	});
 
 	it("should retry on ECONNRESET errors for version command", async () => {
