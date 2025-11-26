@@ -1,5 +1,6 @@
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * Linked issue information
@@ -148,34 +149,25 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 			? `Found ${linkedIssues.length} linked issue(s) from ${commits.length} commit(s)`
 			: `No issue references found in ${commits.length} commit(s)`;
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary.addHeading("Linked Issues", 2).addEOL();
-
-	if (linkedIssues.length > 0) {
-		checkSummaryBuilder.addRaw(
-			linkedIssues
-				.map(
-					(issue) =>
-						`- [#${issue.number}](${issue.url}) - ${issue.title} (${issue.state})\n  Referenced by: ${issue.commits.map((sha) => `\`${sha.slice(0, 7)}\``).join(", ")}`,
+	// Build check details using summaryWriter (markdown, not HTML)
+	const issuesList =
+		linkedIssues.length > 0
+			? summaryWriter.list(
+					linkedIssues.map(
+						(issue) =>
+							`[#${issue.number}](${issue.url}) - ${issue.title} (${issue.state})\n  Referenced by: ${issue.commits.map((sha) => `\`${sha.slice(0, 7)}\``).join(", ")}`,
+					),
 				)
-				.join("\n"),
-		);
-	} else {
-		checkSummaryBuilder.addRaw("_No issue references found_");
-	}
+			: "_No issue references found_";
 
-	checkSummaryBuilder
-		.addEOL()
-		.addEOL()
-		.addHeading("Commits Analyzed", 2)
-		.addEOL()
-		.addRaw(`${commits.length} commit(s) between \`${targetBranch}\` and \`${releaseBranch}\``);
-
-	if (dryRun) {
-		checkSummaryBuilder.addEOL().addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
-	}
-
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = summaryWriter.build([
+		{ heading: "Linked Issues", content: issuesList },
+		{
+			heading: "Commits Analyzed",
+			content: `${commits.length} commit(s) between \`${targetBranch}\` and \`${releaseBranch}\``,
+		},
+		...(dryRun ? [{ content: "---\n**Mode**: Dry Run (Preview Only)" }] : []),
+	]);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -192,35 +184,27 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary
-	const summaryBuilder = core.summary
-		.addHeading(checkTitle, 2)
-		.addRaw(checkSummary)
-		.addEOL()
-		.addHeading("Linked Issues", 3);
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const issuesTable =
+		linkedIssues.length > 0
+			? summaryWriter.table(
+					["Issue", "Title", "State", "Commits"],
+					linkedIssues.map((issue) => [
+						`[#${issue.number}](${issue.url})`,
+						issue.title,
+						issue.state,
+						issue.commits.length.toString(),
+					]),
+				)
+			: "_No issue references found_";
 
-	if (linkedIssues.length > 0) {
-		summaryBuilder.addTable([
-			[
-				{ data: "Issue", header: true },
-				{ data: "Title", header: true },
-				{ data: "State", header: true },
-				{ data: "Commits", header: true },
-			],
-			...linkedIssues.map((issue) => [
-				`[#${issue.number}](${issue.url})`,
-				issue.title,
-				issue.state,
-				issue.commits.length.toString(),
-			]),
-		]);
-	} else {
-		summaryBuilder.addRaw("_No issue references found_").addEOL();
-	}
+	const jobSummary = summaryWriter.build([
+		{ heading: checkTitle, content: checkSummary },
+		{ heading: "Linked Issues", level: 3, content: issuesTable },
+		{ heading: "Commits Analyzed", level: 3, content: `${commits.length} commit(s)` },
+	]);
 
-	summaryBuilder.addHeading("Commits Analyzed", 3).addRaw(`${commits.length} commit(s)`).addEOL();
-
-	await summaryBuilder.write();
+	await summaryWriter.write(jobSummary);
 
 	return {
 		linkedIssues,

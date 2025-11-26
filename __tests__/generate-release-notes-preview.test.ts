@@ -406,8 +406,8 @@ Previous notes`;
 		expect(result.packages).toHaveLength(1);
 		// Notes should be empty string (after trim)
 		expect(result.packages[0].notes).toBe("");
-		// The summary should show "No release notes available"
-		expect(core.summary.addRaw).toHaveBeenCalledWith("_No release notes available_");
+		// The summary should show "No release notes available" (within the full markdown)
+		expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("_No release notes available_"));
 	});
 
 	it("should capture stderr from changeset status command", async () => {

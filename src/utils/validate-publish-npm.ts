@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import type { PackageValidationResult } from "../types/shared-types.js";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * NPM publish validation result
@@ -278,28 +279,22 @@ export async function validateNPMPublish(packageManager: string, dryRun: boolean
 		? `All ${results.length} package(s) ready for NPM publish`
 		: `${results.filter((r) => !r.canPublish).length} package(s) not ready for NPM publish`;
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary.addHeading("NPM Publish Validation Results", 2).addEOL();
+	// Build check details using summaryWriter (markdown, not HTML)
+	const packagesList =
+		results.length > 0
+			? summaryWriter.list(
+					results.map((r) => {
+						const status = r.canPublish ? "✅" : "❌";
+						const provenance = r.hasProvenance ? "✅ Provenance" : "";
+						return `${status} **${r.name}@${r.version}** ${provenance}\n  ${r.message}`;
+					}),
+				)
+			: "_No packages to validate_";
 
-	if (results.length > 0) {
-		checkSummaryBuilder.addRaw(
-			results
-				.map((r) => {
-					const status = r.canPublish ? "✅" : "❌";
-					const provenance = r.hasProvenance ? "✅ Provenance" : "";
-					return `- ${status} **${r.name}@${r.version}** ${provenance}\n  ${r.message}`;
-				})
-				.join("\n"),
-		);
-	} else {
-		checkSummaryBuilder.addRaw("_No packages to validate_");
-	}
-
-	if (dryRun) {
-		checkSummaryBuilder.addEOL().addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
-	}
-
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = summaryWriter.build([
+		{ heading: "NPM Publish Validation Results", content: packagesList },
+		...(dryRun ? [{ content: "---\n**Mode**: Dry Run (Preview Only)" }] : []),
+	]);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -316,34 +311,27 @@ export async function validateNPMPublish(packageManager: string, dryRun: boolean
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary
-	const summaryBuilder = core.summary.addHeading(checkTitle, 2).addRaw(checkSummary).addEOL();
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const resultsTable =
+		results.length > 0
+			? summaryWriter.table(
+					["Package", "Version", "Status", "Provenance", "Message"],
+					results.map((r) => [
+						r.name,
+						r.version,
+						r.canPublish ? "✅ Ready" : "❌ Not Ready",
+						r.hasProvenance ? "✅" : "❌",
+						r.message,
+					]),
+				)
+			: "_No packages to validate_";
 
-	if (results.length > 0) {
-		summaryBuilder
-			.addHeading("NPM Publish Readiness", 3)
-			.addTable([
-				[
-					{ data: "Package", header: true },
-					{ data: "Version", header: true },
-					{ data: "Status", header: true },
-					{ data: "Provenance", header: true },
-					{ data: "Message", header: true },
-				],
-				...results.map((r) => [
-					r.name,
-					r.version,
-					r.canPublish ? "✅ Ready" : "❌ Not Ready",
-					r.hasProvenance ? "✅" : "❌",
-					r.message,
-				]),
-			])
-			.addEOL();
-	} else {
-		summaryBuilder.addRaw("_No packages to validate_").addEOL();
-	}
+	const jobSummary = summaryWriter.build([
+		{ heading: checkTitle, content: checkSummary },
+		{ heading: "NPM Publish Readiness", level: 3, content: resultsTable },
+	]);
 
-	await summaryBuilder.write();
+	await summaryWriter.write(jobSummary);
 
 	return {
 		success,

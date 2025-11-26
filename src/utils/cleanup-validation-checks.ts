@@ -1,5 +1,6 @@
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * Cleanup result
@@ -119,34 +120,32 @@ export async function cleanupValidationChecks(
 
 	core.endGroup();
 
-	// Write job summary
-	const summaryBuilder = core.summary.addHeading("Validation Check Cleanup", 2).addEOL();
-
-	if (dryRun) {
-		summaryBuilder.addRaw("**Mode**: Dry Run (Preview Only)").addEOL().addEOL();
-	}
-
-	summaryBuilder
-		.addRaw(`**Reason**: ${reason}`)
-		.addEOL()
-		.addEOL()
-		.addHeading("Results", 3)
-		.addEOL()
-		.addTable([
-			[
-				{ data: "Status", header: true },
-				{ data: "Count", header: true },
-			],
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const resultsTable = summaryWriter.table(
+		["Status", "Count"],
+		[
 			["Cleaned Up", result.cleanedUp.toString()],
 			["Failed", result.failed.toString()],
 			["Total", checkIds.length.toString()],
-		]);
+		],
+	);
 
-	if (result.errors.length > 0) {
-		summaryBuilder.addEOL().addHeading("Errors", 3).addEOL().addList(result.errors);
+	const sections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: "Validation Check Cleanup", content: "" },
+	];
+
+	if (dryRun) {
+		sections.push({ content: "**Mode**: Dry Run (Preview Only)" });
 	}
 
-	await summaryBuilder.write();
+	sections.push({ content: `**Reason**: ${reason}` });
+	sections.push({ heading: "Results", level: 3, content: resultsTable });
+
+	if (result.errors.length > 0) {
+		sections.push({ heading: "Errors", level: 3, content: summaryWriter.list(result.errors) });
+	}
+
+	await summaryWriter.write(summaryWriter.build(sections));
 
 	return result;
 }

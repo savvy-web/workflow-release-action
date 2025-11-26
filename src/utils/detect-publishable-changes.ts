@@ -331,32 +331,35 @@ export async function detectPublishableChanges(
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary
-	await core.summary
-		.addHeading(checkTitle, 2)
-		.addRaw(checkSummary)
-		.addEOL()
-		.addHeading("Publishable Packages", 3)
-		.addTable(
-			publishablePackages.length > 0
-				? [
-						[
-							{ data: "Package", header: true },
-							{ data: "Version", header: true },
-							{ data: "Type", header: true },
-						],
-						...publishablePackages.map((pkg) => [pkg.name, pkg.newVersion, pkg.type]),
-					]
-				: [[{ data: "No publishable packages found", header: false }]],
-		)
-		.addHeading("Changeset Summary", 3)
-		.addRaw(
-			changesetStatus.changesets.length > 0
-				? `Found ${changesetStatus.changesets.length} changeset(s)`
-				: "No changesets found",
-		)
-		.addEOL()
-		.write();
+	// Write job summary using markdown (core.summary HTML methods don't render well)
+	const jobSummaryParts: string[] = [`## ${checkTitle}`, "", checkSummary, "", "### Publishable Packages", ""];
+
+	if (publishablePackages.length > 0) {
+		jobSummaryParts.push("| Package | Version | Type |");
+		jobSummaryParts.push("|---------|---------|------|");
+		for (const pkg of publishablePackages) {
+			jobSummaryParts.push(`| ${pkg.name} | ${pkg.newVersion} | ${pkg.type} |`);
+		}
+	} else {
+		jobSummaryParts.push("_No publishable packages found_");
+	}
+
+	jobSummaryParts.push("");
+	jobSummaryParts.push("### Changeset Summary");
+	jobSummaryParts.push("");
+	jobSummaryParts.push(
+		changesetStatus.changesets.length > 0
+			? `Found ${changesetStatus.changesets.length} changeset(s)`
+			: "No changesets found",
+	);
+
+	if (dryRun) {
+		jobSummaryParts.push("");
+		jobSummaryParts.push("---");
+		jobSummaryParts.push("**Mode**: Dry Run (Preview Only)");
+	}
+
+	await core.summary.addRaw(jobSummaryParts.join("\n")).write();
 
 	return {
 		hasChanges: publishablePackages.length > 0,
