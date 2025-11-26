@@ -97,6 +97,12 @@
 			"Bash(gh:issue list)",
 			"Bash(gh:repo view)",
 
+			// GitHub CLI workflow operations (integration testing)
+			"Bash(gh workflow run:*)",
+			"Bash(gh run list:*)",
+			"Bash(gh run view:*)",
+			"Bash(gh run watch:*)",
+
 			// Docker read-only
 			"Bash(docker ps:*)",
 			"Bash(docker logs:*)",
