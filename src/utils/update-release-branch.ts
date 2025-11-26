@@ -69,17 +69,17 @@ async function getChangesetFiles(): Promise<string[]> {
 /**
  * Gets commit information for a file using git log
  *
- * Looks at main branch history since changesets are added there by developers.
+ * Looks at the remote branch history since changesets are added there by developers.
  * Uses --follow and --reverse to find the original commit that first introduced the file,
  * not merge commits that might also show the file as "added".
  *
  * @param filePath - Path to the file
- * @param targetBranch - Branch to search history on (defaults to main)
+ * @param remoteBranch - Remote branch ref to search history on (e.g., "origin/main")
  * @returns Commit SHA and message that introduced the file, or null if not found
  */
 async function getCommitForFile(
 	filePath: string,
-	targetBranch: string = "main",
+	remoteBranch: string,
 ): Promise<{ sha: string; message: string } | null> {
 	let output = "";
 
@@ -87,20 +87,29 @@ async function getCommitForFile(
 		// Use --follow to track file history and --reverse to get oldest first
 		// This ensures we find the original commit that introduced the file,
 		// not a merge commit or later commit that also shows it as "added"
-		await exec.exec(
-			"git",
-			["log", targetBranch, "--diff-filter=A", "--follow", "--reverse", "--format=%H%n%B%n---END---", "--", filePath],
-			{
-				listeners: {
-					stdout: (data: Buffer) => {
-						output += data.toString();
-					},
+		const args = [
+			"log",
+			remoteBranch,
+			"--diff-filter=A",
+			"--follow",
+			"--reverse",
+			"--format=%H%n%B%n---END---",
+			"--",
+			filePath,
+		];
+		core.debug(`Running: git ${args.join(" ")}`);
+
+		await exec.exec("git", args, {
+			listeners: {
+				stdout: (data: Buffer) => {
+					output += data.toString();
 				},
-				silent: true,
 			},
-		);
+			silent: true,
+		});
 
 		if (!output.trim()) {
+			core.debug(`No git log output for ${filePath}`);
 			return null;
 		}
 
@@ -108,6 +117,7 @@ async function getCommitForFile(
 		// first line is SHA, rest until ---END--- is message
 		const endMarker = output.indexOf("---END---");
 		if (endMarker === -1) {
+			core.debug(`No ---END--- marker found in output for ${filePath}`);
 			return null;
 		}
 
@@ -121,7 +131,8 @@ async function getCommitForFile(
 			sha: content.substring(0, firstNewline),
 			message: content.substring(firstNewline + 1).trim(),
 		};
-	} catch {
+	} catch (error) {
+		core.debug(`Error getting commit for ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
 		return null;
 	}
 }
@@ -130,6 +141,7 @@ async function getCommitForFile(
  * Collects linked issues from changeset commits
  *
  * @param github - GitHub API client
+ * @param targetBranch - The target branch name (e.g., "main")
  * @returns Array of linked issues with details
  */
 async function collectLinkedIssuesFromChangesets(
@@ -143,12 +155,38 @@ async function collectLinkedIssuesFromChangesets(
 		return { linkedIssues: [], commits: [] };
 	}
 
+	// Fetch the target branch to ensure we have full history
+	// This is needed because the checkout might be shallow or we might be on a different branch
+	core.info(`Fetching origin/${targetBranch} to get full history...`);
+	try {
+		await exec.exec("git", ["fetch", "origin", targetBranch, "--unshallow"], {
+			ignoreReturnCode: true, // May fail if already unshallow
+			silent: true,
+		});
+	} catch {
+		// Ignore errors - might already be unshallow
+	}
+
+	// Also fetch with full depth in case unshallow didn't work
+	try {
+		await exec.exec("git", ["fetch", "origin", `${targetBranch}:refs/remotes/origin/${targetBranch}`], {
+			ignoreReturnCode: true,
+			silent: true,
+		});
+	} catch {
+		// Ignore errors
+	}
+
+	// Use origin/targetBranch to search the remote's history
+	const remoteBranch = `origin/${targetBranch}`;
+	core.info(`Searching ${remoteBranch} for changeset commits...`);
+
 	// Map of issue number to commit SHAs that reference it
 	const issueMap = new Map<number, string[]>();
 	const commits: Array<{ sha: string; message: string }> = [];
 
 	for (const file of changesetFiles) {
-		const commit = await getCommitForFile(`.changeset/${file}`, targetBranch);
+		const commit = await getCommitForFile(`.changeset/${file}`, remoteBranch);
 		if (commit) {
 			commits.push(commit);
 			core.info(`Changeset ${file}:`);
@@ -165,7 +203,7 @@ async function collectLinkedIssuesFromChangesets(
 				issueMap.get(issueNumber)?.push(commit.sha);
 			}
 		} else {
-			core.info(`Changeset ${file}: no commit found (file may not exist in history)`);
+			core.info(`Changeset ${file}: no commit found in ${remoteBranch} history`);
 		}
 	}
 
