@@ -63,7 +63,7 @@ export const logger = {
 		core.info("=== Workflow Context ===");
 
 		if (data.dryRun) {
-			core.notice(`${PHASE.test} Running in dry-run mode (preview only)`);
+			core.info(`${PHASE.test} Running in dry-run mode (preview only)`);
 		}
 
 		core.info(`${STATE.neutral} Branch: ${data.branch}`);
@@ -111,10 +111,10 @@ export const logger = {
 	},
 
 	/**
-	 * Log a skip notice
+	 * Log a skip message
 	 */
 	skip(message: string): void {
-		core.notice(`${PHASE.skip} ${message}`);
+		core.info(`${PHASE.skip} ${message}`);
 	},
 
 	/**
@@ -122,7 +122,7 @@ export const logger = {
 	 */
 	phaseComplete(number: number): void {
 		core.info("");
-		core.notice(`${STATE.good} Phase ${number} completed successfully`);
+		core.info(`${STATE.good} Phase ${number} completed successfully`);
 	},
 
 	/**
