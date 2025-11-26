@@ -6,6 +6,7 @@ import { cleanupValidationChecks } from "./utils/cleanup-validation-checks.js";
 import { createReleaseBranch } from "./utils/create-release-branch.js";
 import { createValidationCheck } from "./utils/create-validation-check.js";
 import { detectPublishableChanges } from "./utils/detect-publishable-changes.js";
+import { generatePRDescriptionDirect } from "./utils/generate-pr-description.js";
 import { generateReleaseNotesPreview } from "./utils/generate-release-notes-preview.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
 import { PHASE, logger } from "./utils/logger.js";
@@ -275,27 +276,86 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			status: "in_progress",
 		});
 
-		// Note: generate-pr-description is designed for github-script execution
-		// and requires Anthropic SDK integration. For now, we skip this step
-		// if no API key is provided, or implement it via github-script in the workflow.
-		if (inputs.anthropicApiKey) {
-			logger.info("Anthropic API key provided, but generate-pr-description requires github-script integration");
-			// TODO: Integrate via github-script action in workflow
-		}
-
-		await octokit.rest.checks.update({
+		// Find the PR for the release branch to get PR number
+		const { data: prs } = await octokit.rest.pulls.list({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
-			check_run_id: checkIds[1],
-			status: "completed",
-			conclusion: inputs.anthropicApiKey ? "neutral" : "skipped",
-			output: {
-				title: inputs.anthropicApiKey ? "Not Implemented" : "Skipped",
-				summary: inputs.anthropicApiKey
-					? "PR description generation requires github-script integration (not yet implemented)"
-					: "Anthropic API key not provided",
-			},
+			state: "open",
+			head: `${context.repo.owner}:${inputs.releaseBranch}`,
+			base: inputs.targetBranch,
 		});
+
+		if (prs.length > 0 && inputs.anthropicApiKey) {
+			const pr = prs[0];
+			logger.info(`Found release PR #${pr.number}, generating description with Claude`);
+
+			try {
+				const descResult = await generatePRDescriptionDirect(
+					inputs.token,
+					issuesResult.linkedIssues,
+					issuesResult.commits,
+					pr.number,
+					inputs.anthropicApiKey,
+					inputs.dryRun,
+				);
+
+				core.setOutput("pr_description", descResult.description);
+				logger.success(`Generated PR description (${descResult.description.length} characters)`);
+
+				await octokit.rest.checks.update({
+					owner: context.repo.owner,
+					repo: context.repo.repo,
+					check_run_id: checkIds[1],
+					status: "completed",
+					conclusion: "success",
+					output: {
+						title: "PR Description Generated",
+						summary: `Generated ${descResult.description.length} character description with Claude`,
+					},
+				});
+			} catch (descError) {
+				logger.warn(
+					`Failed to generate PR description: ${descError instanceof Error ? descError.message : String(descError)}`,
+				);
+				await octokit.rest.checks.update({
+					owner: context.repo.owner,
+					repo: context.repo.repo,
+					check_run_id: checkIds[1],
+					status: "completed",
+					conclusion: "neutral",
+					output: {
+						title: "PR Description Generation Failed",
+						summary: descError instanceof Error ? descError.message : String(descError),
+					},
+				});
+			}
+		} else if (!inputs.anthropicApiKey) {
+			logger.info("Anthropic API key not provided, skipping PR description generation");
+			await octokit.rest.checks.update({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				check_run_id: checkIds[1],
+				status: "completed",
+				conclusion: "skipped",
+				output: {
+					title: "Skipped",
+					summary: "Anthropic API key not provided",
+				},
+			});
+		} else {
+			logger.warn("No open PR found for release branch, skipping PR description generation");
+			await octokit.rest.checks.update({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				check_run_id: checkIds[1],
+				status: "completed",
+				conclusion: "skipped",
+				output: {
+					title: "Skipped",
+					summary: "No open PR found for release branch",
+				},
+			});
+		}
 		logger.endStep();
 
 		// Step 3: Validate builds

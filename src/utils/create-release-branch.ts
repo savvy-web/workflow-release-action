@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
+import { createApiCommit } from "./create-api-commit.js";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
@@ -89,10 +90,6 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 	const github = getOctokit(token);
 
 	core.startGroup("Creating release branch");
-
-	// Configure git
-	await exec.exec("git", ["config", "user.name", "github-actions[bot]"]);
-	await exec.exec("git", ["config", "user.email", "github-actions[bot]@users.noreply.github.com"]);
 
 	// Create and checkout release branch from target branch HEAD
 	core.info(`Creating branch '${releaseBranch}' from '${targetBranch}' HEAD`);
@@ -187,21 +184,27 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 	core.info("Version changes:");
 	core.info(versionSummary);
 
-	// Commit changes
-	const commitMessage = `${prTitlePrefix}\n\nVersion bump from changesets`;
-	if (!dryRun) {
-		await exec.exec("git", ["add", "."]);
-		await exec.exec("git", ["commit", "-m", commitMessage]);
-	} else {
-		core.info(`[DRY RUN] Would commit with message: ${commitMessage}`);
-	}
-
-	// Push branch with retry
+	// Push the branch first (with no commits yet) so the ref exists
 	core.info(`Pushing branch '${releaseBranch}' to origin`);
 	if (!dryRun) {
+		// Push the branch to create the remote ref
 		await execWithRetry("git", ["push", "-u", "origin", releaseBranch]);
 	} else {
 		core.info(`[DRY RUN] Would push branch: ${releaseBranch}`);
+	}
+
+	// Create commit via GitHub API (automatically signed and attributed to GitHub App)
+	const commitMessage = `${prTitlePrefix}\n\nVersion bump from changesets`;
+	if (!dryRun) {
+		core.info("Creating verified commit via GitHub API...");
+		const commitResult = await createApiCommit(token, releaseBranch, commitMessage);
+		if (!commitResult.created) {
+			core.warning("No changes to commit via API");
+		} else {
+			core.info(`✓ Created verified commit: ${commitResult.sha}`);
+		}
+	} else {
+		core.info(`[DRY RUN] Would commit with message: ${commitMessage}`);
 	}
 
 	core.endGroup();

@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createApiCommit } from "../src/utils/create-api-commit.js";
 import { createReleaseBranch } from "../src/utils/create-release-branch.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.js";
@@ -10,6 +11,7 @@ import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.j
 vi.mock("@actions/core");
 vi.mock("@actions/exec");
 vi.mock("@actions/github");
+vi.mock("../src/utils/create-api-commit.js");
 
 describe("create-release-branch", () => {
 	let mockOctokit: MockOctokit;
@@ -54,6 +56,9 @@ describe("create-release-branch", () => {
 
 		// Default exec mock
 		vi.mocked(exec.exec).mockResolvedValue(0);
+
+		// Mock createApiCommit
+		vi.mocked(createApiCommit).mockResolvedValue({ sha: "abc123def456", created: true });
 	});
 
 	afterEach(() => {
@@ -209,7 +214,7 @@ describe("create-release-branch", () => {
 		expect(exec.exec).toHaveBeenCalledWith("turbo run version", ["turbo", "run", "version"], expect.any(Object));
 	});
 
-	it("should configure git user before operations", async () => {
+	it("should create commit via GitHub API for verified signatures", async () => {
 		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
 			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
 				if (options?.listeners?.stdout) {
@@ -221,12 +226,14 @@ describe("create-release-branch", () => {
 
 		await createReleaseBranch();
 
-		expect(exec.exec).toHaveBeenCalledWith("git", ["config", "user.name", "github-actions[bot]"]);
-		expect(exec.exec).toHaveBeenCalledWith("git", [
-			"config",
-			"user.email",
-			"github-actions[bot]@users.noreply.github.com",
-		]);
+		// Verify createApiCommit was called instead of git commit
+		expect(createApiCommit).toHaveBeenCalledWith(
+			"test-token",
+			"changeset-release/main",
+			expect.stringContaining("chore: release"),
+		);
+		// Verify git config is NOT called (we use API commits now)
+		expect(exec.exec).not.toHaveBeenCalledWith("git", ["config", "user.name", expect.any(String)]);
 	});
 
 	it("should include check run with neutral conclusion when no changes", async () => {

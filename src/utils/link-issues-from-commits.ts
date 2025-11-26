@@ -19,13 +19,25 @@ interface LinkedIssue {
 }
 
 /**
+ * Commit information
+ */
+interface CommitInfo {
+	/** Commit SHA */
+	sha: string;
+	/** Commit message */
+	message: string;
+	/** Commit author */
+	author: string;
+}
+
+/**
  * Link issues result
  */
 interface LinkIssuesResult {
 	/** Linked issues found */
 	linkedIssues: LinkedIssue[];
-	/** Commit SHAs processed */
-	commits: string[];
+	/** Commits with full info */
+	commits: CommitInfo[];
 	/** GitHub check run ID */
 	checkId: number;
 }
@@ -207,7 +219,7 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 
 	return {
 		linkedIssues,
-		commits: commits.map((c) => c.sha),
+		commits,
 		checkId: checkRun.id,
 	};
 }
