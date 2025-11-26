@@ -138,6 +138,16 @@ export async function detectPublishableChanges(
 
 	core.debug(`Changeset status: ${JSON.stringify(changesetStatus, null, 2)}`);
 
+	// Log what changesets found
+	if (changesetStatus.changesets.length > 0) {
+		core.info(`Found ${changesetStatus.changesets.length} changeset(s)`);
+	}
+	if (changesetStatus.releases.length > 0) {
+		core.info(`Found ${changesetStatus.releases.length} package(s) with pending releases`);
+	} else {
+		core.info("No packages with pending releases found");
+	}
+
 	// Filter for publishable packages
 	const publishablePackages: ChangesetPackage[] = [];
 
@@ -193,7 +203,12 @@ export async function detectPublishableChanges(
 			core.info(`✓ ${release.name} is publishable (access: ${packageJson.publishConfig?.access})`);
 			publishablePackages.push(release);
 		} else {
-			core.debug(`Skipping ${release.name}: no valid publishConfig.access (private or missing)`);
+			// Log at info level so users can see why packages are skipped
+			const reason =
+				packageJson.private && !hasPublishConfig
+					? "package is private without publishConfig.access"
+					: "missing publishConfig.access (public or restricted)";
+			core.info(`⚪ Skipping ${release.name}: ${reason}`);
 		}
 	}
 
