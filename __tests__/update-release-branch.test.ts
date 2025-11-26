@@ -248,7 +248,7 @@ describe("update-release-branch", () => {
 		expect(exec.exec).toHaveBeenCalledWith("yarn", ["ci:version"], expect.any(Object));
 	});
 
-	it("should handle errors when checking for open PR", async () => {
+	it("should handle errors when checking for PR", async () => {
 		mockOctokit.rest.pulls.list.mockRejectedValue(new Error("API Error"));
 
 		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
@@ -264,7 +264,87 @@ describe("update-release-branch", () => {
 
 		expect(result.success).toBe(true);
 		expect(result.prNumber).toBeNull();
-		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find open PR"));
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find PR"));
+	});
+
+	it("should find and reopen a closed PR after force push", async () => {
+		// First call returns no open PRs, second call returns a closed unmerged PR
+		mockOctokit.rest.pulls.list
+			.mockResolvedValueOnce({ data: [] }) // open PRs
+			.mockResolvedValueOnce({
+				data: [{ number: 789, html_url: "https://github.com/test/pull/789", merged_at: null }],
+			}); // closed PRs
+		mockOctokit.rest.pulls.update.mockResolvedValue({});
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		const result = await updateReleaseBranch();
+
+		expect(result.success).toBe(true);
+		expect(result.prNumber).toBe(789);
+		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Found closed (unmerged) PR #789"));
+		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith({
+			owner: "test-owner",
+			repo: "test-repo",
+			pull_number: 789,
+			state: "open",
+		});
+		expect(core.info).toHaveBeenCalledWith("✓ Reopened PR #789");
+	});
+
+	it("should not reopen a merged PR", async () => {
+		// First call returns no open PRs, second call returns a merged PR
+		mockOctokit.rest.pulls.list
+			.mockResolvedValueOnce({ data: [] }) // open PRs
+			.mockResolvedValueOnce({
+				data: [{ number: 789, html_url: "https://github.com/test/pull/789", merged_at: "2024-01-01T00:00:00Z" }],
+			}); // closed PRs (merged)
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		const result = await updateReleaseBranch();
+
+		expect(result.success).toBe(true);
+		expect(result.prNumber).toBeNull();
+		expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+	});
+
+	it("should handle error when reopening PR", async () => {
+		mockOctokit.rest.pulls.list
+			.mockResolvedValueOnce({ data: [] }) // open PRs
+			.mockResolvedValueOnce({
+				data: [{ number: 789, html_url: "https://github.com/test/pull/789", merged_at: null }],
+			}); // closed PRs
+		mockOctokit.rest.pulls.update.mockRejectedValue(new Error("PR cannot be reopened"));
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		const result = await updateReleaseBranch();
+
+		expect(result.success).toBe(true);
+		expect(result.prNumber).toBe(789);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not reopen PR #789"));
 	});
 
 	it("should retry on ECONNRESET errors for version command", async () => {

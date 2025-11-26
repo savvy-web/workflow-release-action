@@ -84,21 +84,39 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	const dryRun = core.getBooleanInput("dry-run") || false;
 
 	const github = getOctokit(token);
-	// Find the open PR for this release branch
+	// Find the PR for this release branch (open or closed)
 	let prNumber: number | null = null;
+	let prWasClosed = false;
 	try {
-		const { data: prs } = await github.rest.pulls.list({
+		// First check for open PRs
+		const { data: openPrs } = await github.rest.pulls.list({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
 			state: "open",
 			head: `${context.repo.owner}:${releaseBranch}`,
 			base: targetBranch,
 		});
-		if (prs.length > 0) {
-			prNumber = prs[0].number;
+		if (openPrs.length > 0) {
+			prNumber = openPrs[0].number;
+		} else {
+			// Check for closed PRs (force push can close them)
+			const { data: closedPrs } = await github.rest.pulls.list({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				state: "closed",
+				head: `${context.repo.owner}:${releaseBranch}`,
+				base: targetBranch,
+			});
+			// Find a closed PR that wasn't merged (merged PRs have merged_at set)
+			const unmergedClosedPr = closedPrs.find((pr) => !pr.merged_at);
+			if (unmergedClosedPr) {
+				prNumber = unmergedClosedPr.number;
+				prWasClosed = true;
+				core.info(`Found closed (unmerged) PR #${prNumber} - will reopen after branch update`);
+			}
 		}
 	} catch (error) {
-		core.warning(`Could not find open PR: ${error instanceof Error ? error.message : String(error)}`);
+		core.warning(`Could not find PR: ${error instanceof Error ? error.message : String(error)}`);
 	}
 
 	const prTitlePrefix = core.getInput("pr-title-prefix") || "chore: release";
@@ -211,6 +229,25 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	}
 
 	core.endGroup();
+
+	// Reopen PR if it was closed by force push
+	if (prWasClosed && prNumber && !dryRun) {
+		core.startGroup("Reopening closed PR");
+		try {
+			await github.rest.pulls.update({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				pull_number: prNumber,
+				state: "open",
+			});
+			core.info(`✓ Reopened PR #${prNumber}`);
+		} catch (error) {
+			core.warning(`Could not reopen PR #${prNumber}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		core.endGroup();
+	} else if (prWasClosed && prNumber && dryRun) {
+		core.info(`[DRY RUN] Would reopen PR #${prNumber}`);
+	}
 
 	// Build check details using summaryWriter (markdown, not HTML)
 	const checkStatusTable = summaryWriter.keyValueTable([
