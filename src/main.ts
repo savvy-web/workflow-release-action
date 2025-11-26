@@ -8,6 +8,7 @@ import { createValidationCheck } from "./utils/create-validation-check.js";
 import { detectPublishableChanges } from "./utils/detect-publishable-changes.js";
 import { generateReleaseNotesPreview } from "./utils/generate-release-notes-preview.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
+import { PHASE, logger } from "./utils/logger.js";
 import { updateReleaseBranch } from "./utils/update-release-branch.js";
 import { updateStickyComment } from "./utils/update-sticky-comment.js";
 import { validateBuilds } from "./utils/validate-builds.js";
@@ -53,7 +54,7 @@ interface Inputs {
  */
 async function run(): Promise<void> {
 	try {
-		core.info("🚀 Starting release workflow...");
+		logger.start();
 
 		// Read inputs
 		const inputs = {
@@ -79,45 +80,45 @@ async function run(): Promise<void> {
 
 		core.debug(`Inputs: ${JSON.stringify(inputs, null, 2)}`);
 
-		if (inputs.dryRun) {
-			core.notice("🧪 Running in dry-run mode (preview only)");
-		}
-
 		// Determine which phase to run based on context
 		const isReleaseBranch = context.ref === `refs/heads/${inputs.releaseBranch}`;
 		const isMainBranch = context.ref === `refs/heads/${inputs.targetBranch}`;
 		const commitMessage = context.payload.head_commit?.message || "";
 		const isReleaseCommit = commitMessage.includes("chore: version packages");
 
-		core.info(`Branch: ${context.ref}`);
-		core.info(`Commit message: ${commitMessage}`);
-		core.info(`Is release branch: ${isReleaseBranch}`);
-		core.info(`Is main branch: ${isMainBranch}`);
-		core.info(`Is release commit: ${isReleaseCommit}`);
+		// Log context info
+		logger.context({
+			branch: context.ref,
+			commitMessage,
+			isReleaseBranch,
+			isMainBranch,
+			isReleaseCommit,
+			dryRun: inputs.dryRun,
+		});
 
 		// Phase 3: Release Publishing (on merge to main with version commit)
 		if (isMainBranch && isReleaseCommit) {
-			core.info("\\n📦 Phase 3: Release Publishing");
+			logger.phase(3, PHASE.publish, "Release Publishing");
 			//await runPhase3Publishing(inputs);
 			return;
 		}
 
 		// Phase 2: Release Validation (on release branch)
 		if (isReleaseBranch) {
-			core.info("\\n✅ Phase 2: Release Validation");
+			logger.phase(2, PHASE.validation, "Release Validation");
 			await runPhase2Validation(inputs);
 			return;
 		}
 
 		// Phase 1: Release Branch Management (on main branch, non-release commit)
 		if (isMainBranch && !isReleaseCommit) {
-			core.info("\\n🌿 Phase 1: Release Branch Management");
+			logger.phase(1, PHASE.branch, "Release Branch Management");
 			await runPhase1BranchManagement(inputs);
 			return;
 		}
 
 		// No action needed for other branches/scenarios
-		core.info("⏭️  No release action needed for this branch/commit");
+		logger.noAction("not on main or release branch");
 	} catch (error) {
 		core.setFailed(`Release workflow failed: ${error instanceof Error ? error.message : String(error)}`);
 	}
@@ -142,9 +143,7 @@ async function runPhase1BranchManagement(inputs: {
 	claudeReviewPat?: string;
 }): Promise<void> {
 	try {
-		core.startGroup("Step 1: Detect Publishable Changes");
-
-		// Import and run detect-publishable-changes
+		logger.step(1, "Detect Publishable Changes");
 
 		const detectionResult = await detectPublishableChanges(inputs.packageManager, inputs.dryRun);
 
@@ -152,17 +151,15 @@ async function runPhase1BranchManagement(inputs: {
 		core.setOutput("publishable_packages", JSON.stringify(detectionResult.packages));
 		core.setOutput("detection_check_id", detectionResult.checkId);
 
-		core.endGroup();
+		logger.endStep();
 
 		// If no publishable changes, skip remaining steps
 		if (!detectionResult.hasChanges) {
-			core.notice("⏭️  No publishable changes detected, skipping release branch management");
+			logger.skip("No publishable changes detected, skipping release branch management");
 			return;
 		}
 
-		core.startGroup("Step 2: Check Release Branch");
-
-		// Import and run check-release-branch
+		logger.step(2, "Check Release Branch");
 
 		const branchCheckResult = await checkReleaseBranch(inputs.releaseBranch, inputs.targetBranch, inputs.dryRun);
 
@@ -171,22 +168,21 @@ async function runPhase1BranchManagement(inputs: {
 		core.setOutput("release_pr_number", branchCheckResult.prNumber || "");
 		core.setOutput("branch_check_id", branchCheckResult.checkId);
 
-		core.endGroup();
+		logger.endStep();
 
 		// Step 3: Create or update release branch
 		if (!branchCheckResult.exists) {
-			core.startGroup("Step 3: Create Release Branch");
+			logger.step(3, "Create Release Branch");
 
-			// Import and run create-release-branch
 			const createResult = await createReleaseBranch();
 
 			core.setOutput("release_branch_created", createResult.created);
 			core.setOutput("release_pr_number", createResult.prNumber || "");
 			core.setOutput("create_check_id", createResult.checkId);
 
-			core.endGroup();
+			logger.endStep();
 		} else {
-			core.startGroup("Step 3: Update Release Branch");
+			logger.step(3, "Update Release Branch");
 
 			const updateResult = await updateReleaseBranch();
 
@@ -194,10 +190,10 @@ async function runPhase1BranchManagement(inputs: {
 			core.setOutput("has_conflicts", updateResult.hadConflicts);
 			core.setOutput("update_check_id", updateResult.checkId);
 
-			core.endGroup();
+			logger.endStep();
 		}
 
-		core.notice("✅ Phase 1 completed successfully");
+		logger.phaseComplete(1);
 	} catch (error) {
 		core.setFailed(`Phase 1 failed: ${error instanceof Error ? error.message : String(error)}`);
 		throw error;
@@ -233,7 +229,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 	try {
 		// Create all validation checks upfront for immediate visibility
-		core.startGroup("Creating validation checks");
+		logger.step(0, "Creating Validation Checks");
 
 		const checkRuns = await Promise.all(
 			checkNames.map((name) =>
@@ -248,12 +244,12 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		);
 
 		checkIds.push(...checkRuns.map((r) => r.data.id));
-		core.info(`Created ${checkIds.length} validation checks`);
+		logger.success(`Created ${checkIds.length} validation checks`);
 
-		core.endGroup();
+		logger.endStep();
 
 		// Step 1: Link issues from commits
-		core.startGroup("Step 1: Link Issues from Commits");
+		logger.step(1, "Link Issues from Commits");
 
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
@@ -267,10 +263,10 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		core.setOutput("linked_issues", JSON.stringify(issuesResult.linkedIssues));
 		core.setOutput("issue_commits", JSON.stringify(issuesResult.commits));
 
-		core.endGroup();
+		logger.endStep();
 
 		// Step 2: Generate PR description
-		core.startGroup("Step 2: Generate PR Description");
+		logger.step(2, "Generate PR Description");
 
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
@@ -283,7 +279,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		// and requires Anthropic SDK integration. For now, we skip this step
 		// if no API key is provided, or implement it via github-script in the workflow.
 		if (inputs.anthropicApiKey) {
-			core.info("Anthropic API key provided, but generate-pr-description requires github-script integration");
+			logger.info("Anthropic API key provided, but generate-pr-description requires github-script integration");
 			// TODO: Integrate via github-script action in workflow
 		}
 
@@ -300,10 +296,10 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 					: "Anthropic API key not provided",
 			},
 		});
-		core.endGroup();
+		logger.endStep();
 
 		// Step 3: Validate builds
-		core.startGroup("Step 3: Validate Builds");
+		logger.step(3, "Validate Builds");
 
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
@@ -317,7 +313,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		core.setOutput("builds_passed", buildResult.success);
 		core.setOutput("build_results", JSON.stringify([]));
 
-		core.endGroup();
+		logger.endStep();
 
 		// Initialize result variables
 		let npmResult: { success: boolean; results?: unknown[] } = { success: false };
@@ -326,7 +322,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		// Only continue with publish validation if builds passed
 		if (buildResult.success) {
 			// Step 4: Validate NPM publish
-			core.startGroup("Step 4: Validate NPM Publish");
+			logger.step(4, "Validate NPM Publish");
 
 			await octokit.rest.checks.update({
 				owner: context.repo.owner,
@@ -340,10 +336,10 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			core.setOutput("npm_publish_ready", npmResult.success);
 			core.setOutput("npm_results", JSON.stringify(npmResult.results));
 
-			core.endGroup();
+			logger.endStep();
 
 			// Step 5: Validate GitHub Packages publish
-			core.startGroup("Step 5: Validate GitHub Packages Publish");
+			logger.step(5, "Validate GitHub Packages Publish");
 
 			await octokit.rest.checks.update({
 				owner: context.repo.owner,
@@ -357,10 +353,10 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			core.setOutput("github_packages_ready", ghResult.success);
 			core.setOutput("github_packages_results", JSON.stringify([]));
 
-			core.endGroup();
+			logger.endStep();
 		} else {
 			// Skip publish validation if builds failed
-			core.warning("Builds failed, skipping publish validation");
+			logger.warn("Builds failed, skipping publish validation");
 
 			for (let i = 3; i <= 4; i++) {
 				await octokit.rest.checks.update({
@@ -378,7 +374,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		}
 
 		// Step 6: Generate release notes preview
-		core.startGroup("Step 6: Generate Release Notes Preview");
+		logger.step(6, "Generate Release Notes Preview");
 
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
@@ -389,10 +385,10 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		await generateReleaseNotesPreview();
 
-		core.endGroup();
+		logger.endStep();
 
 		// Step 7: Create unified validation check
-		core.startGroup("Step 7: Create Unified Validation Check");
+		logger.step(7, "Create Unified Validation Check");
 
 		const validationResults = [
 			{ name: checkNames[0], success: true, checkId: checkIds[0] },
@@ -413,10 +409,10 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		await createValidationCheck(validationResults, inputs.dryRun);
 
-		core.endGroup();
+		logger.endStep();
 
 		// Step 8: Update sticky comment on PR
-		core.startGroup("Step 8: Update Sticky Comment");
+		logger.step(8, "Update Sticky Comment");
 
 		try {
 			// Find the PR for the release branch
@@ -430,7 +426,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 			if (prs.length > 0) {
 				const pr = prs[0];
-				core.info(`Found release PR #${pr.number}`);
+				logger.success(`Found release PR #${pr.number}`);
 
 				// Generate validation summary
 				const allSuccess = validationResults.every((r) => r.success);
@@ -459,26 +455,26 @@ ${
 `;
 
 				await updateStickyComment(pr.number, commentBody, "release-validation");
-				core.info("✅ Updated sticky comment on PR");
+				logger.success("Updated sticky comment on PR");
 			} else {
-				core.warning("No open PR found for release branch - skipping sticky comment update");
+				logger.warn("No open PR found for release branch - skipping sticky comment update");
 			}
 		} catch (stickyError) {
-			core.warning(
+			logger.warn(
 				`Failed to update sticky comment: ${stickyError instanceof Error ? stickyError.message : String(stickyError)}`,
 			);
 			// Don't fail the entire workflow if sticky comment update fails
 		}
 
-		core.endGroup();
+		logger.endStep();
 
-		core.notice("✅ Phase 2 completed successfully");
+		logger.phaseComplete(2);
 	} catch (error) {
 		// Cleanup incomplete checks on error
-		core.error(`Phase 2 failed: ${error instanceof Error ? error.message : String(error)}`);
+		logger.error(`Phase 2 failed: ${error instanceof Error ? error.message : String(error)}`);
 
 		if (checkIds.length > 0) {
-			core.info("Cleaning up incomplete validation checks...");
+			logger.info("Cleaning up incomplete validation checks...");
 			await cleanupValidationChecks(
 				checkIds,
 				error instanceof Error ? error.message : "Workflow failed",
