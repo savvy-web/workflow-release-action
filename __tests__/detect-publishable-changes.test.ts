@@ -201,8 +201,8 @@ describe("detect-publishable-changes", () => {
 
 		expect(result.hasChanges).toBe(false);
 		expect(result.packages).toEqual([]);
-		// Should use debug for expected empty output
-		expect(core.debug).toHaveBeenCalledWith("Changeset status file is empty (no changesets present)");
+		// Should use info for expected empty output
+		expect(core.info).toHaveBeenCalledWith("Changeset status file is empty (no changesets present)");
 		expect(core.warning).not.toHaveBeenCalled();
 	});
 
@@ -222,7 +222,7 @@ describe("detect-publishable-changes", () => {
 
 		expect(result.hasChanges).toBe(false);
 		expect(result.packages).toEqual([]);
-		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("Changeset status file not created"));
+		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Changeset status file not created"));
 		expect(core.warning).not.toHaveBeenCalled();
 	});
 
@@ -343,6 +343,21 @@ describe("detect-publishable-changes", () => {
 		const result = await detectPublishableChanges("pnpm", false);
 
 		expect(result.hasChanges).toBe(false);
+	});
+
+	it("should capture stdout output from changeset command", async () => {
+		// Default changesetStatusContent is already set
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+			if (options?.listeners?.stdout) {
+				options.listeners.stdout(Buffer.from("Some stdout output\n"));
+			}
+			return 0;
+		});
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(result.hasChanges).toBe(false);
+		expect(core.info).toHaveBeenCalledWith("Changeset stdout: Some stdout output");
 	});
 
 	it("should find package from root package.json when not in workspaces", async () => {

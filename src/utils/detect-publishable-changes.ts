@@ -103,9 +103,15 @@ export async function detectPublishableChanges(
 
 	// Run changeset status
 	let statusError = "";
+	let statusStdout = "";
+
+	core.info(`Running: ${changesetCommand} ${changesetArgs.join(" ")}`);
 
 	const exitCode = await exec.exec(changesetCommand, changesetArgs, {
 		listeners: {
+			stdout: (data: Buffer) => {
+				statusStdout += data.toString();
+			},
 			stderr: (data: Buffer) => {
 				statusError += data.toString();
 			},
@@ -114,31 +120,36 @@ export async function detectPublishableChanges(
 		silent: true,
 	});
 
+	core.info(`Changeset status exit code: ${exitCode}`);
+	if (statusStdout) {
+		core.info(`Changeset stdout: ${statusStdout.trim()}`);
+	}
+	if (statusError) {
+		core.info(`Changeset stderr: ${statusError.trim()}`);
+	}
+
 	// Parse changeset status from temp file
 	let changesetStatus: ChangesetStatus;
 
 	try {
 		const statusContent = await readFile(statusFile, "utf-8");
 		const trimmedOutput = statusContent.trim();
+		core.info(`Changeset status file contents (${statusContent.length} bytes): ${trimmedOutput.slice(0, 500)}`);
 
 		if (!trimmedOutput || trimmedOutput === "") {
-			core.debug("Changeset status file is empty (no changesets present)");
+			core.info("Changeset status file is empty (no changesets present)");
 			changesetStatus = { releases: [], changesets: [] };
 		} else {
 			changesetStatus = JSON.parse(trimmedOutput) as ChangesetStatus;
-			core.debug(`Parsed changeset status from ${statusFile}`);
+			core.info(`Parsed ${changesetStatus.changesets.length} changesets, ${changesetStatus.releases.length} releases`);
 		}
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
 			// File not created means no changesets or command failed
-			core.debug(`Changeset status file not created (exit code: ${exitCode})`);
-			if (statusError) {
-				core.debug(`Changeset stderr: ${statusError}`);
-			}
+			core.info(`Changeset status file not created at ${statusFile}`);
 			changesetStatus = { releases: [], changesets: [] };
 		} else {
 			core.warning(`Failed to read/parse changeset status: ${error instanceof Error ? error.message : String(error)}`);
-			core.debug(`Changeset stderr: ${statusError}`);
 			changesetStatus = { releases: [], changesets: [] };
 		}
 	} finally {
