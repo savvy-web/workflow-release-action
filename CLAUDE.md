@@ -27,6 +27,24 @@ The `setup-flow` action is being refactored from `actions/github-script@v8` inli
 
 **Current status:** Core utility modules implemented with 85%+ test coverage. See issue #9 for detailed progress.
 
+### Integration Testing
+
+The `savvy-web/workflow-integration` repository is set up to test the release action from feature branches. To trigger a dry-run release test:
+
+```bash
+# Trigger release workflow on integration repo (uses feature/setup-flow branch)
+gh workflow run release.yml --repo savvy-web/workflow-integration --ref main
+
+# Watch the run
+gh run list --repo savvy-web/workflow-integration --limit 1
+gh run watch <run-id> --repo savvy-web/workflow-integration
+
+# View logs
+gh run view <run-id> --repo savvy-web/workflow-integration --log
+```
+
+The integration repo references `savvy-web/workflow-release-action@feature/setup-flow` so changes pushed to this branch are immediately testable.
+
 **Technical stack:**
 
 * **Package manager:** pnpm 10.20.0 (enforced via `packageManager` field)
