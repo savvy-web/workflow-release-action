@@ -22,6 +22,7 @@ export interface MockOctokit {
 		};
 		pulls: {
 			list: ReturnType<typeof vi.fn>;
+			get: ReturnType<typeof vi.fn>;
 			create: ReturnType<typeof vi.fn>;
 			update: ReturnType<typeof vi.fn>;
 		};

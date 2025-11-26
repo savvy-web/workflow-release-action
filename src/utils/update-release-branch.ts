@@ -1,8 +1,196 @@
+import * as fs from "node:fs/promises";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { createApiCommit, updateBranchToRef } from "./create-api-commit.js";
 import { summaryWriter } from "./summary-writer.js";
+
+/**
+ * Linked issue information
+ */
+interface LinkedIssue {
+	/** Issue number */
+	number: number;
+	/** Issue title */
+	title: string;
+	/** Issue state */
+	state: string;
+	/** Issue URL */
+	url: string;
+	/** Commits that reference this issue */
+	commits: string[];
+}
+
+/**
+ * Extracts issue references from commit messages
+ *
+ * Supports patterns:
+ * - closes #123
+ * - fixes #123
+ * - resolves #123
+ * - close #123, fix #123, resolve #123
+ * - (case insensitive)
+ *
+ * @param message - Commit message to parse
+ * @returns Array of issue numbers referenced
+ */
+function extractIssueReferences(message: string): number[] {
+	const pattern = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi;
+	const matches = message.matchAll(pattern);
+	const issues = new Set<number>();
+
+	for (const match of matches) {
+		const issueNumber = Number.parseInt(match[1], 10);
+		/* v8 ignore next -- @preserve - Defensive: regex \d+ always captures valid digits */
+		if (!Number.isNaN(issueNumber)) {
+			issues.add(issueNumber);
+		}
+	}
+
+	return Array.from(issues);
+}
+
+/**
+ * Gets changeset files from the .changeset directory
+ *
+ * @returns Array of changeset file paths (excluding README.md and config.json)
+ */
+async function getChangesetFiles(): Promise<string[]> {
+	try {
+		const files = await fs.readdir(".changeset");
+		return files.filter((f) => f.endsWith(".md") && f !== "README.md");
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Gets commit information for a file using git log
+ *
+ * @param filePath - Path to the file
+ * @returns Commit SHA and message that introduced the file, or null if not found
+ */
+async function getCommitForFile(filePath: string): Promise<{ sha: string; message: string } | null> {
+	let output = "";
+
+	try {
+		await exec.exec("git", ["log", "--diff-filter=A", "--format=%H%n%B%n---END---", "--", filePath], {
+			listeners: {
+				stdout: (data: Buffer) => {
+					output += data.toString();
+				},
+			},
+			silent: true,
+		});
+
+		if (!output.trim()) {
+			return null;
+		}
+
+		// Parse the output: first line is SHA, rest until ---END--- is message
+		const endMarker = output.indexOf("---END---");
+		if (endMarker === -1) {
+			return null;
+		}
+
+		const content = output.substring(0, endMarker).trim();
+		const firstNewline = content.indexOf("\n");
+		if (firstNewline === -1) {
+			return { sha: content, message: "" };
+		}
+
+		return {
+			sha: content.substring(0, firstNewline),
+			message: content.substring(firstNewline + 1).trim(),
+		};
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Collects linked issues from changeset commits
+ *
+ * @param github - GitHub API client
+ * @returns Array of linked issues with details
+ */
+async function collectLinkedIssuesFromChangesets(
+	github: ReturnType<typeof getOctokit>,
+): Promise<{ linkedIssues: LinkedIssue[]; commits: Array<{ sha: string; message: string }> }> {
+	const changesetFiles = await getChangesetFiles();
+	core.debug(`Found ${changesetFiles.length} changeset file(s)`);
+
+	if (changesetFiles.length === 0) {
+		return { linkedIssues: [], commits: [] };
+	}
+
+	// Map of issue number to commit SHAs that reference it
+	const issueMap = new Map<number, string[]>();
+	const commits: Array<{ sha: string; message: string }> = [];
+
+	for (const file of changesetFiles) {
+		const commit = await getCommitForFile(`.changeset/${file}`);
+		if (commit) {
+			commits.push(commit);
+			const issues = extractIssueReferences(commit.message);
+			core.debug(`Commit ${commit.sha.slice(0, 7)} references issues: ${issues.join(", ") || "none"}`);
+
+			for (const issueNumber of issues) {
+				if (!issueMap.has(issueNumber)) {
+					issueMap.set(issueNumber, []);
+				}
+				issueMap.get(issueNumber)?.push(commit.sha);
+			}
+		}
+	}
+
+	core.info(`Found ${issueMap.size} unique issue reference(s) from ${commits.length} changeset commit(s)`);
+
+	// Fetch issue details
+	const linkedIssues: LinkedIssue[] = [];
+
+	for (const [issueNumber, commitShas] of issueMap.entries()) {
+		try {
+			const { data: issue } = await github.rest.issues.get({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				issue_number: issueNumber,
+			});
+
+			linkedIssues.push({
+				number: issueNumber,
+				title: issue.title,
+				state: issue.state,
+				url: issue.html_url,
+				commits: commitShas,
+			});
+
+			core.info(`✓ Issue #${issueNumber}: ${issue.title} (${issue.state})`);
+		} catch (error) {
+			core.warning(`Failed to fetch issue #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	return { linkedIssues, commits };
+}
+
+/**
+ * Builds a linked issues section for PR body
+ *
+ * @param linkedIssues - Array of linked issues
+ * @returns Markdown section for linked issues
+ */
+function buildLinkedIssuesSection(linkedIssues: LinkedIssue[]): string {
+	if (linkedIssues.length === 0) {
+		return "";
+	}
+
+	let section = "## Linked Issues\n\n";
+	for (const issue of linkedIssues) {
+		section += `- ${issue.state === "closed" ? "~~" : ""}Fixes #${issue.number}: ${issue.title}${issue.state === "closed" ? "~~" : ""}\n`;
+	}
+	return section;
+}
 
 /**
  * Update release branch result
@@ -18,6 +206,8 @@ interface UpdateReleaseBranchResult {
 	checkId: number;
 	/** Version summary */
 	versionSummary: string;
+	/** Linked issues found from changeset commits */
+	linkedIssues: LinkedIssue[];
 }
 
 /**
@@ -120,6 +310,18 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	}
 
 	const prTitlePrefix = core.getInput("pr-title-prefix") || "chore: release";
+
+	// Collect linked issues from changeset commits BEFORE running version command
+	// (version command deletes changeset files)
+	core.startGroup("Collecting linked issues from changeset commits");
+	let linkedIssues: LinkedIssue[] = [];
+	if (!dryRun) {
+		const issueResult = await collectLinkedIssuesFromChangesets(github);
+		linkedIssues = issueResult.linkedIssues;
+	} else {
+		core.info("[DRY RUN] Would collect linked issues from changeset commits");
+	}
+	core.endGroup();
 
 	core.startGroup("Updating release branch");
 
@@ -243,12 +445,60 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 		core.info(`[DRY RUN] Would reopen PR #${prNumber}`);
 	}
 
+	// Update PR body with linked issues
+	if (prNumber && linkedIssues.length > 0 && !dryRun) {
+		core.startGroup("Updating PR with linked issues");
+		try {
+			// Get current PR body
+			const { data: pr } = await github.rest.pulls.get({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				pull_number: prNumber,
+			});
+
+			// Build linked issues section
+			const linkedIssuesSection = buildLinkedIssuesSection(linkedIssues);
+
+			// Update PR body - prepend linked issues section
+			// Remove any existing linked issues section first
+			let currentBody = pr.body || "";
+			const existingLinkedIssuesIndex = currentBody.indexOf("## Linked Issues");
+			if (existingLinkedIssuesIndex !== -1) {
+				// Find the end of the section (next ## heading or end of string)
+				const nextHeadingIndex = currentBody.indexOf("\n## ", existingLinkedIssuesIndex + 1);
+				if (nextHeadingIndex !== -1) {
+					currentBody =
+						currentBody.substring(0, existingLinkedIssuesIndex) + currentBody.substring(nextHeadingIndex + 1);
+				} else {
+					currentBody = currentBody.substring(0, existingLinkedIssuesIndex);
+				}
+			}
+
+			const newBody = `${linkedIssuesSection}\n${currentBody.trim()}`;
+
+			await github.rest.pulls.update({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				pull_number: prNumber,
+				body: newBody,
+			});
+
+			core.info(`✓ Updated PR #${prNumber} with ${linkedIssues.length} linked issue(s)`);
+		} catch (error) {
+			core.warning(`Could not update PR body: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		core.endGroup();
+	} else if (prNumber && linkedIssues.length > 0 && dryRun) {
+		core.info(`[DRY RUN] Would update PR #${prNumber} with ${linkedIssues.length} linked issue(s)`);
+	}
+
 	// Build check details using summaryWriter (markdown, not HTML)
 	const checkStatusTable = summaryWriter.keyValueTable([
 		{ key: "Branch", value: `\`${releaseBranch}\`` },
 		{ key: "Base", value: `\`${targetBranch}\`` },
 		{ key: "Strategy", value: "Recreate from main" },
 		{ key: "Version Changes", value: hasChanges ? "✅ Yes" : "❌ No" },
+		{ key: "Linked Issues", value: linkedIssues.length > 0 ? `${linkedIssues.length} issue(s)` : "_None_" },
 		{
 			key: "PR",
 			value: prNumber
@@ -260,6 +510,17 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	const checkSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
 		{ heading: "Release Branch Updated", content: checkStatusTable },
 	];
+
+	if (linkedIssues.length > 0) {
+		const issuesList = summaryWriter.list(
+			linkedIssues.map((issue) => `[#${issue.number}](${issue.url}) - ${issue.title} (${issue.state})`),
+		);
+		checkSections.push({
+			heading: "Linked Issues",
+			level: 3,
+			content: issuesList,
+		});
+	}
 
 	if (hasChanges) {
 		checkSections.push({
@@ -291,6 +552,7 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 		{ key: "Base", value: `\`${targetBranch}\`` },
 		{ key: "Strategy", value: "Recreate from main" },
 		{ key: "Version Changes", value: hasChanges ? "✅ Yes" : "❌ No" },
+		{ key: "Linked Issues", value: linkedIssues.length > 0 ? `${linkedIssues.length} issue(s)` : "_None_" },
 		{ key: "PR", value: prNumber ? `#${prNumber}` : "_N/A_" },
 	]);
 
@@ -303,6 +565,17 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 		},
 		{ heading: "Update Summary", level: 3, content: jobStatusTable },
 	];
+
+	if (linkedIssues.length > 0) {
+		const jobIssuesList = summaryWriter.list(
+			linkedIssues.map((issue) => `#${issue.number} - ${issue.title} (${issue.state})`),
+		);
+		jobSections.push({
+			heading: "Linked Issues",
+			level: 3,
+			content: jobIssuesList,
+		});
+	}
 
 	if (hasChanges) {
 		jobSections.push({
@@ -320,5 +593,6 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 		prNumber,
 		checkId: checkRun.id,
 		versionSummary,
+		linkedIssues,
 	};
 }

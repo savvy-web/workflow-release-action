@@ -312,6 +312,7 @@ export function createMockOctokit(): MockOctokit {
 			},
 			pulls: {
 				list: vi.fn().mockResolvedValue({ data: [] }),
+				get: vi.fn().mockResolvedValue({ data: { body: "" } }),
 				create: vi.fn().mockResolvedValue({
 					data: { number: 123, html_url: "https://github.com/test/pull/123" },
 				}),
