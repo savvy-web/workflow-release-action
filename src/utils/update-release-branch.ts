@@ -239,58 +239,10 @@ async function collectLinkedIssuesFromChangesets(
 }
 
 /**
- * Links issues to a PR using GitHub's GraphQL linkBranch mutation
- *
- * This creates links in the "Development" section of each issue,
- * which allows closingIssuesReferences to find them on the PR.
- *
- * @param github - GitHub API client
- * @param issues - Array of issues to link (with nodeId)
- * @param commitSha - The commit SHA to link to
- */
-async function linkIssuesToPR(
-	github: ReturnType<typeof getOctokit>,
-	issues: LinkedIssue[],
-	commitSha: string,
-): Promise<void> {
-	if (issues.length === 0) {
-		return;
-	}
-
-	core.info(`Linking ${issues.length} issue(s) to commit ${commitSha.slice(0, 7)}`);
-
-	for (const issue of issues) {
-		if (!issue.nodeId) {
-			core.warning(`Issue #${issue.number} missing nodeId, skipping link`);
-			continue;
-		}
-
-		try {
-			await github.graphql<{ linkBranch: { issue: { id: string } } }>(
-				`
-				mutation LinkBranch($issueId: ID!, $oid: GitObjectID!) {
-					linkBranch(input: { issueId: $issueId, oid: $oid }) {
-						issue {
-							id
-						}
-					}
-				}
-				`,
-				{
-					issueId: issue.nodeId,
-					oid: commitSha,
-				},
-			);
-			core.info(`  ✓ Linked #${issue.number} to branch`);
-		} catch (error) {
-			// Log but don't fail - linking is best-effort
-			core.warning(`  Failed to link #${issue.number}: ${error instanceof Error ? error.message : String(error)}`);
-		}
-	}
-}
-
-/**
  * Builds a linked issues section for PR body
+ *
+ * Uses "Closes #123" format which GitHub automatically detects and populates
+ * in closingIssuesReferences. This allows the issues to be closed when the PR merges.
  *
  * @param linkedIssues - Array of linked issues
  * @returns Markdown section for linked issues
@@ -302,7 +254,13 @@ function buildLinkedIssuesSection(linkedIssues: LinkedIssue[]): string {
 
 	let section = "## Linked Issues\n\n";
 	for (const issue of linkedIssues) {
-		section += `- ${issue.state === "closed" ? "~~" : ""}#${issue.number}: ${issue.title}${issue.state === "closed" ? "~~" : ""}\n`;
+		if (issue.state === "closed") {
+			// Already closed issues - just show as strikethrough (don't use Closes keyword)
+			section += `- ~~#${issue.number}: ${issue.title}~~ (already closed)\n`;
+		} else {
+			// Open issues - use "Closes" keyword so GitHub detects them for closingIssuesReferences
+			section += `- Closes #${issue.number}: ${issue.title}\n`;
+		}
 	}
 	return section;
 }
@@ -495,7 +453,6 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	}
 
 	let versionSummary = "";
-	let branchSha = "";
 
 	if (hasChanges) {
 		// Generate version summary from changed files
@@ -524,7 +481,6 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 				core.warning("No changes to commit via API");
 			} else {
 				core.info(`✓ Created verified commit: ${commitResult.sha}`);
-				branchSha = commitResult.sha;
 			}
 		} else {
 			core.info(`[DRY RUN] Would create API commit with message: ${commitMessage}`);
@@ -542,13 +498,6 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	}
 
 	core.endGroup();
-
-	// Link issues to the PR using GraphQL
-	if (linkedIssues.length > 0 && branchSha && !dryRun) {
-		core.startGroup("Linking issues to PR");
-		await linkIssuesToPR(github, linkedIssues, branchSha);
-		core.endGroup();
-	}
 
 	// Reopen PR if it was closed by force push
 	if (prWasClosed && prNumber && !dryRun) {
