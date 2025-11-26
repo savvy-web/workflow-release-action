@@ -1,6 +1,5 @@
 import { readFile, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
@@ -90,7 +89,8 @@ export async function detectPublishableChanges(
 
 	// Create temp file for changeset status output
 	// The --output flag writes JSON to a file, not stdout
-	const statusFile = join(tmpdir(), `changeset-status-${Date.now()}.json`);
+	// Use relative path because changeset CLI treats absolute paths as relative
+	const statusFile = `.changeset-status-${Date.now()}.json`;
 
 	// Determine changeset command based on package manager
 	const changesetCommand = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npx";
