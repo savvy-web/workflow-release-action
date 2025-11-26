@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceRoot, getWorkspaces } from "workspace-tools";
 import { detectPublishableChanges } from "../src/utils/detect-publishable-changes.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
-import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.js";
+import type { MockOctokit } from "./utils/test-types.js";
 
 // Mock modules
 vi.mock("@actions/core");
@@ -18,8 +18,14 @@ vi.mock("workspace-tools");
 describe("detect-publishable-changes", () => {
 	let mockOctokit: MockOctokit;
 
+	// Track what the changeset status file should contain
+	let changesetStatusContent: string;
+
 	beforeEach(() => {
 		setupTestEnvironment({ suppressOutput: true });
+
+		// Default: empty changeset status
+		changesetStatusContent = JSON.stringify({ releases: [], changesets: [] });
 
 		// Mock core.summary
 		const mockSummary = {
@@ -52,8 +58,21 @@ describe("detect-publishable-changes", () => {
 		vi.mocked(getWorkspaceRoot).mockReturnValue("/test/workspace");
 		vi.mocked(getWorkspaces).mockReturnValue([]);
 
-		// Mock readFile for root package.json fallback
-		vi.mocked(readFile).mockResolvedValue('{"name": "@test/pkg"}');
+		// Mock readFile - handles both changeset status file and root package.json
+		vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
+			const pathStr = String(path);
+			if (pathStr.includes("changeset-status")) {
+				return changesetStatusContent;
+			}
+			// Root package.json fallback
+			return '{"name": "@test/pkg"}';
+		});
+
+		// Mock unlink for cleanup
+		vi.mocked(unlink).mockResolvedValue(undefined);
+
+		// Mock exec - just returns success, output is via file
+		vi.mocked(exec.exec).mockResolvedValue(0);
 	});
 
 	afterEach(() => {
@@ -61,12 +80,7 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should detect no changes when changeset has no releases", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
-			}
-			return 0;
-		});
+		// Default changesetStatusContent is already { releases: [], changesets: [] }
 
 		const result = await detectPublishableChanges("pnpm", false);
 
@@ -77,19 +91,12 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should detect changes for packages with publishConfig.access", async () => {
-		const changesetStatus = {
+		changesetStatusContent = JSON.stringify({
 			releases: [
 				{ name: "@test/pkg-a", newVersion: "1.0.0", type: "minor" },
 				{ name: "@test/pkg-b", newVersion: "2.0.0", type: "major" },
 			],
 			changesets: [{ id: "change-1", summary: "Test change", releases: [] }],
-		};
-
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify(changesetStatus)));
-			}
-			return 0;
 		});
 
 		// Mock workspace-tools to return packages
@@ -125,19 +132,12 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should skip packages with type 'none'", async () => {
-		const changesetStatus = {
+		changesetStatusContent = JSON.stringify({
 			releases: [
 				{ name: "@test/pkg-a", newVersion: "1.0.0", type: "none" },
 				{ name: "@test/pkg-b", newVersion: "2.0.0", type: "patch" },
 			],
 			changesets: [],
-		};
-
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify(changesetStatus)));
-			}
-			return 0;
 		});
 
 		vi.mocked(getWorkspaces).mockReturnValue([
@@ -170,90 +170,76 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should use correct changeset command for different package managers", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
-			}
-			return 0;
-		});
+		// Default changesetStatusContent is already set
 
 		await detectPublishableChanges("pnpm", false);
 		expect(exec.exec).toHaveBeenCalledWith(
 			"pnpm",
-			["exec", "changeset", "status", "--output=json"],
+			["exec", "changeset", "status", "--output", expect.stringContaining("changeset-status")],
 			expect.any(Object),
 		);
 
 		await detectPublishableChanges("yarn", false);
-		expect(exec.exec).toHaveBeenCalledWith("yarn", ["changeset", "status", "--output=json"], expect.any(Object));
+		expect(exec.exec).toHaveBeenCalledWith(
+			"yarn",
+			["changeset", "status", "--output", expect.stringContaining("changeset-status")],
+			expect.any(Object),
+		);
 
 		await detectPublishableChanges("npm", false);
-		expect(exec.exec).toHaveBeenCalledWith("npx", ["changeset", "status", "--output=json"], expect.any(Object));
+		expect(exec.exec).toHaveBeenCalledWith(
+			"npx",
+			["changeset", "status", "--output", expect.stringContaining("changeset-status")],
+			expect.any(Object),
+		);
 	});
 
-	it("should handle empty output from changeset status (no changesets)", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			// Empty output is expected when no changesets exist
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(""));
-			}
-			return 0;
-		});
+	it("should handle empty status file (no changesets)", async () => {
+		changesetStatusContent = "";
 
 		const result = await detectPublishableChanges("pnpm", false);
 
 		expect(result.hasChanges).toBe(false);
 		expect(result.packages).toEqual([]);
-		// Should use debug, not warning, for expected empty output
-		expect(core.debug).toHaveBeenCalledWith("No changeset status output (no changesets present)");
+		// Should use debug for expected empty output
+		expect(core.debug).toHaveBeenCalledWith("Changeset status file is empty (no changesets present)");
 		expect(core.warning).not.toHaveBeenCalled();
 	});
 
-	it("should handle non-JSON text output from changeset status", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				// Text output like "No changesets present"
-				options.listeners.stdout(Buffer.from("No changesets present"));
+	it("should handle file not created (no changesets or command failed)", async () => {
+		// Simulate file not found
+		vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
+			const pathStr = String(path);
+			if (pathStr.includes("changeset-status")) {
+				const error = new Error("ENOENT: no such file or directory") as NodeJS.ErrnoException;
+				error.code = "ENOENT";
+				throw error;
 			}
-			return 0;
+			return '{"name": "@test/pkg"}';
 		});
 
 		const result = await detectPublishableChanges("pnpm", false);
 
 		expect(result.hasChanges).toBe(false);
 		expect(result.packages).toEqual([]);
-		// Should use debug, not warning, for non-JSON output
-		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("Changeset status returned non-JSON output"));
+		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("Changeset status file not created"));
 		expect(core.warning).not.toHaveBeenCalled();
 	});
 
-	it("should warn on malformed JSON from changeset status", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				// Malformed JSON that looks like it should be JSON but isn't valid
-				options.listeners.stdout(Buffer.from('{"releases": [malformed'));
-			}
-			return 0;
-		});
+	it("should warn on malformed JSON from changeset status file", async () => {
+		changesetStatusContent = '{"releases": [malformed';
 
 		const result = await detectPublishableChanges("pnpm", false);
 
 		expect(result.hasChanges).toBe(false);
 		expect(result.packages).toEqual([]);
-		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to parse changeset status"));
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to read/parse changeset status"));
 	});
 
 	it("should skip packages without publishConfig.access", async () => {
-		const changesetStatus = {
+		changesetStatusContent = JSON.stringify({
 			releases: [{ name: "@test/no-access", newVersion: "1.0.0", type: "minor" }],
 			changesets: [],
-		};
-
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify(changesetStatus)));
-			}
-			return 0;
 		});
 
 		vi.mocked(getWorkspaces).mockReturnValue([
@@ -275,16 +261,9 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should warn when package.json is not found", async () => {
-		const changesetStatus = {
+		changesetStatusContent = JSON.stringify({
 			releases: [{ name: "@test/not-found", newVersion: "1.0.0", type: "minor" }],
 			changesets: [],
-		};
-
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify(changesetStatus)));
-			}
-			return 0;
 		});
 
 		// Return empty workspaces - package not found
@@ -297,12 +276,7 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should include dry-run mode in output", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
-			}
-			return 0;
-		});
+		// Default changesetStatusContent is already set
 
 		const result = await detectPublishableChanges("pnpm", true);
 
@@ -315,19 +289,12 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should handle packages with changesets in output", async () => {
-		const changesetStatus = {
+		changesetStatusContent = JSON.stringify({
 			releases: [{ name: "@test/pkg-a", newVersion: "1.0.0", type: "minor" }],
 			changesets: [
 				{ id: "change-1", summary: "Add feature", releases: [{ name: "@test/pkg-a", type: "minor" }] },
 				{ id: "change-2", summary: "Fix bug", releases: [{ name: "@test/pkg-a", type: "patch" }] },
 			],
-		};
-
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify(changesetStatus)));
-			}
-			return 0;
 		});
 
 		vi.mocked(getWorkspaces).mockReturnValue([
@@ -350,16 +317,9 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should handle package not in workspace", async () => {
-		const changesetStatus = {
+		changesetStatusContent = JSON.stringify({
 			releases: [{ name: "@test/error-pkg", newVersion: "1.0.0", type: "minor" }],
 			changesets: [],
-		};
-
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify(changesetStatus)));
-			}
-			return 0;
 		});
 
 		// Package not in workspaces
@@ -372,12 +332,10 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should capture stderr output from changeset command", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+		// Default changesetStatusContent is already set
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
 			if (options?.listeners?.stderr) {
 				options.listeners.stderr(Buffer.from("Warning: Some changeset issue\n"));
-			}
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
 			}
 			return 0;
 		});
@@ -388,23 +346,21 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should find package from root package.json when not in workspaces", async () => {
-		const changesetStatus = {
+		changesetStatusContent = JSON.stringify({
 			releases: [{ name: "@test/root-pkg", newVersion: "1.0.0", type: "minor" }],
 			changesets: [],
-		};
-
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify(changesetStatus)));
-			}
-			return 0;
 		});
 
 		// No workspaces, but root package.json matches
 		vi.mocked(getWorkspaces).mockReturnValue([]);
-		vi.mocked(readFile).mockResolvedValue(
-			JSON.stringify({ name: "@test/root-pkg", publishConfig: { access: "public" } }),
-		);
+		vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
+			const pathStr = String(path);
+			if (pathStr.includes("changeset-status")) {
+				return changesetStatusContent;
+			}
+			// Root package.json with publishConfig
+			return JSON.stringify({ name: "@test/root-pkg", publishConfig: { access: "public" } });
+		});
 
 		const result = await detectPublishableChanges("pnpm", false);
 

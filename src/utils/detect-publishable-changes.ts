@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
@@ -87,24 +88,24 @@ export async function detectPublishableChanges(
 	const token = core.getInput("token", { required: true });
 	const github = getOctokit(token);
 
+	// Create temp file for changeset status output
+	// The --output flag writes JSON to a file, not stdout
+	const statusFile = join(tmpdir(), `changeset-status-${Date.now()}.json`);
+
 	// Determine changeset command based on package manager
 	const changesetCommand = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npx";
 	const changesetArgs =
 		packageManager === "pnpm"
-			? ["exec", "changeset", "status", "--output=json"]
+			? ["exec", "changeset", "status", "--output", statusFile]
 			: packageManager === "yarn"
-				? ["changeset", "status", "--output=json"]
-				: ["changeset", "status", "--output=json"];
+				? ["changeset", "status", "--output", statusFile]
+				: ["changeset", "status", "--output", statusFile];
 
 	// Run changeset status
-	let statusOutput = "";
 	let statusError = "";
 
-	await exec.exec(changesetCommand, changesetArgs, {
+	const exitCode = await exec.exec(changesetCommand, changesetArgs, {
 		listeners: {
-			stdout: (data: Buffer) => {
-				statusOutput += data.toString();
-			},
 			stderr: (data: Buffer) => {
 				statusError += data.toString();
 			},
@@ -113,26 +114,39 @@ export async function detectPublishableChanges(
 		silent: true,
 	});
 
-	// Parse changeset status
+	// Parse changeset status from temp file
 	let changesetStatus: ChangesetStatus;
-	const trimmedOutput = statusOutput.trim();
 
-	if (!trimmedOutput || trimmedOutput === "") {
-		// No output means no changesets - this is expected, not a warning
-		core.debug("No changeset status output (no changesets present)");
-		changesetStatus = { releases: [], changesets: [] };
-	} else if (!trimmedOutput.startsWith("{") && !trimmedOutput.startsWith("[")) {
-		// Non-JSON output (e.g., "No changesets present" message)
-		core.debug(`Changeset status returned non-JSON output: ${trimmedOutput}`);
-		changesetStatus = { releases: [], changesets: [] };
-	} else {
-		try {
-			changesetStatus = JSON.parse(trimmedOutput) as ChangesetStatus;
-		} catch (error) {
-			core.warning(`Failed to parse changeset status: ${error instanceof Error ? error.message : String(error)}`);
-			core.debug(`Changeset output: ${statusOutput}`);
-			core.debug(`Changeset error: ${statusError}`);
+	try {
+		const statusContent = await readFile(statusFile, "utf-8");
+		const trimmedOutput = statusContent.trim();
+
+		if (!trimmedOutput || trimmedOutput === "") {
+			core.debug("Changeset status file is empty (no changesets present)");
 			changesetStatus = { releases: [], changesets: [] };
+		} else {
+			changesetStatus = JSON.parse(trimmedOutput) as ChangesetStatus;
+			core.debug(`Parsed changeset status from ${statusFile}`);
+		}
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			// File not created means no changesets or command failed
+			core.debug(`Changeset status file not created (exit code: ${exitCode})`);
+			if (statusError) {
+				core.debug(`Changeset stderr: ${statusError}`);
+			}
+			changesetStatus = { releases: [], changesets: [] };
+		} else {
+			core.warning(`Failed to read/parse changeset status: ${error instanceof Error ? error.message : String(error)}`);
+			core.debug(`Changeset stderr: ${statusError}`);
+			changesetStatus = { releases: [], changesets: [] };
+		}
+	} finally {
+		// Clean up temp file
+		try {
+			await unlink(statusFile);
+		} catch {
+			// Ignore cleanup errors
 		}
 	}
 
@@ -175,7 +189,22 @@ export async function detectPublishableChanges(
 		// Root package.json may not exist or be readable
 	}
 
-	core.debug(`Found ${packageMap.size} package(s) in workspace`);
+	// Log discovered packages and their publish configurations
+	if (packageMap.size > 0) {
+		core.info(`📦 Discovered ${packageMap.size} package(s) in workspace:`);
+		for (const [name, info] of packageMap) {
+			const access = info.packageJson.publishConfig?.access;
+			const isPrivate = info.packageJson.private;
+			const strategy = access
+				? `publishConfig.access: ${access}`
+				: isPrivate
+					? "private (no publish)"
+					: "no publishConfig";
+			core.info(`   • ${name} (${strategy})`);
+		}
+	} else {
+		core.info("📦 No packages found in workspace");
+	}
 
 	// Filter for publishable packages
 	const publishablePackages: ChangesetPackage[] = [];
