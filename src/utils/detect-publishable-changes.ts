@@ -115,13 +115,25 @@ export async function detectPublishableChanges(
 
 	// Parse changeset status
 	let changesetStatus: ChangesetStatus;
-	try {
-		changesetStatus = JSON.parse(statusOutput) as ChangesetStatus;
-	} catch (error) {
-		core.warning(`Failed to parse changeset status: ${error instanceof Error ? error.message : String(error)}`);
-		core.debug(`Changeset output: ${statusOutput}`);
-		core.debug(`Changeset error: ${statusError}`);
+	const trimmedOutput = statusOutput.trim();
+
+	if (!trimmedOutput || trimmedOutput === "") {
+		// No output means no changesets - this is expected, not a warning
+		core.debug("No changeset status output (no changesets present)");
 		changesetStatus = { releases: [], changesets: [] };
+	} else if (!trimmedOutput.startsWith("{") && !trimmedOutput.startsWith("[")) {
+		// Non-JSON output (e.g., "No changesets present" message)
+		core.debug(`Changeset status returned non-JSON output: ${trimmedOutput}`);
+		changesetStatus = { releases: [], changesets: [] };
+	} else {
+		try {
+			changesetStatus = JSON.parse(trimmedOutput) as ChangesetStatus;
+		} catch (error) {
+			core.warning(`Failed to parse changeset status: ${error instanceof Error ? error.message : String(error)}`);
+			core.debug(`Changeset output: ${statusOutput}`);
+			core.debug(`Changeset error: ${statusError}`);
+			changesetStatus = { releases: [], changesets: [] };
+		}
 	}
 
 	core.debug(`Changeset status: ${JSON.stringify(changesetStatus, null, 2)}`);

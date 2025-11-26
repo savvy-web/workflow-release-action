@@ -165,10 +165,47 @@ describe("detect-publishable-changes", () => {
 		expect(exec.exec).toHaveBeenCalledWith("npx", ["changeset", "status", "--output=json"], expect.any(Object));
 	});
 
-	it("should handle invalid JSON from changeset status", async () => {
+	it("should handle empty output from changeset status (no changesets)", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			// Empty output is expected when no changesets exist
+			if (options?.listeners?.stdout) {
+				options.listeners.stdout(Buffer.from(""));
+			}
+			return 0;
+		});
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(result.hasChanges).toBe(false);
+		expect(result.packages).toEqual([]);
+		// Should use debug, not warning, for expected empty output
+		expect(core.debug).toHaveBeenCalledWith("No changeset status output (no changesets present)");
+		expect(core.warning).not.toHaveBeenCalled();
+	});
+
+	it("should handle non-JSON text output from changeset status", async () => {
 		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
 			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from("invalid json output"));
+				// Text output like "No changesets present"
+				options.listeners.stdout(Buffer.from("No changesets present"));
+			}
+			return 0;
+		});
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(result.hasChanges).toBe(false);
+		expect(result.packages).toEqual([]);
+		// Should use debug, not warning, for non-JSON output
+		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("Changeset status returned non-JSON output"));
+		expect(core.warning).not.toHaveBeenCalled();
+	});
+
+	it("should warn on malformed JSON from changeset status", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+			if (options?.listeners?.stdout) {
+				// Malformed JSON that looks like it should be JSON but isn't valid
+				options.listeners.stdout(Buffer.from('{"releases": [malformed'));
 			}
 			return 0;
 		});
