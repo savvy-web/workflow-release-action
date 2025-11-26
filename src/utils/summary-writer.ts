@@ -8,9 +8,10 @@ export const summaryWriter = {
 	/**
 	 * Write a markdown summary to the job summary file.
 	 * Uses addRaw() to avoid HTML generation from core.summary methods.
+	 * Appends trailing newlines to separate from subsequent summaries.
 	 */
 	async write(markdown: string): Promise<void> {
-		await core.summary.addRaw(markdown).write();
+		await core.summary.addRaw(`${markdown}\n\n`).write();
 	},
 
 	/**

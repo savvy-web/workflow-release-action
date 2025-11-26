@@ -22,10 +22,11 @@ describe("summary-writer", () => {
 	});
 
 	describe("write", () => {
-		it("should write markdown to job summary", async () => {
+		it("should write markdown to job summary with trailing newlines", async () => {
 			await summaryWriter.write("# Test");
 
-			expect(core.summary.addRaw).toHaveBeenCalledWith("# Test");
+			// Appends trailing newlines to separate from subsequent summaries
+			expect(core.summary.addRaw).toHaveBeenCalledWith("# Test\n\n");
 			expect(core.summary.write).toHaveBeenCalled();
 		});
 	});

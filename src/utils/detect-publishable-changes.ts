@@ -353,7 +353,7 @@ export async function detectPublishableChanges(
 			: "No changesets found",
 	);
 
-	await core.summary.addRaw(jobSummaryParts.join("\n")).write();
+	await core.summary.addRaw(`${jobSummaryParts.join("\n")}\n\n`).write();
 
 	return {
 		hasChanges: publishablePackages.length > 0,
