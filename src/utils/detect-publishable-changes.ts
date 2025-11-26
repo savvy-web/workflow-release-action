@@ -1,9 +1,9 @@
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname } from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
+import { getWorkspaceRoot, getWorkspaces } from "workspace-tools";
 
 /**
  * Package information from changeset status
@@ -148,6 +148,35 @@ export async function detectPublishableChanges(
 		core.info("No packages with pending releases found");
 	}
 
+	// Build a map of package name -> package info using workspace-tools
+	const cwd = process.cwd();
+	const workspaceRoot = getWorkspaceRoot(cwd);
+	const workspaces = workspaceRoot ? getWorkspaces(workspaceRoot) : [];
+
+	// Create lookup map: package name -> { path, packageJson }
+	const packageMap = new Map<string, { path: string; packageJson: PackageJson }>();
+
+	for (const workspace of workspaces) {
+		packageMap.set(workspace.name, {
+			path: workspace.path,
+			packageJson: workspace.packageJson as PackageJson,
+		});
+	}
+
+	// Also check root package.json for single-package repos
+	try {
+		const rootPkgPath = `${cwd}/package.json`;
+		const rootContent = await readFile(rootPkgPath, "utf-8");
+		const rootPkg = JSON.parse(rootContent) as PackageJson;
+		if (rootPkg.name && !packageMap.has(rootPkg.name)) {
+			packageMap.set(rootPkg.name, { path: dirname(rootPkgPath), packageJson: rootPkg });
+		}
+	} catch {
+		// Root package.json may not exist or be readable
+	}
+
+	core.debug(`Found ${packageMap.size} package(s) in workspace`);
+
 	// Filter for publishable packages
 	const publishablePackages: ChangesetPackage[] = [];
 
@@ -158,38 +187,15 @@ export async function detectPublishableChanges(
 			continue;
 		}
 
-		// Find package.json for this package
-		// For monorepos, packages are typically in workspaces
-		// For single-package repos, it's the root package.json
-		const possiblePaths = [
-			join(process.cwd(), "package.json"), // Root package
-			join(process.cwd(), "packages", release.name.replace("@", "").replace("/", "-"), "package.json"), // Scoped packages
-			join(process.cwd(), "packages", release.name, "package.json"), // Non-scoped packages
-		];
+		// Find package info from workspace map
+		const pkgInfo = packageMap.get(release.name);
 
-		let packageJson: PackageJson | null = null;
-		let packagePath: string | null = null;
-
-		for (const path of possiblePaths) {
-			if (existsSync(path)) {
-				try {
-					const content = await readFile(path, "utf-8");
-					const parsed = JSON.parse(content) as PackageJson;
-					if (parsed.name === release.name) {
-						packageJson = parsed;
-						packagePath = path;
-						break;
-					}
-				} catch (error) {
-					core.debug(`Failed to read ${path}: ${error instanceof Error ? error.message : String(error)}`);
-				}
-			}
-		}
-
-		if (!packageJson) {
+		if (!pkgInfo) {
 			core.warning(`Could not find package.json for ${release.name}, skipping`);
 			continue;
 		}
+
+		const { path: packagePath, packageJson } = pkgInfo;
 
 		core.debug(`Found package.json for ${release.name} at ${packagePath}`);
 		core.debug(`Package config: ${JSON.stringify(packageJson, null, 2)}`);

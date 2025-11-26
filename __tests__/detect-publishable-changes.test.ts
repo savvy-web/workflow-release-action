@@ -1,9 +1,9 @@
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getWorkspaceRoot, getWorkspaces } from "workspace-tools";
 import { detectPublishableChanges } from "../src/utils/detect-publishable-changes.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.js";
@@ -12,8 +12,8 @@ import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.j
 vi.mock("@actions/core");
 vi.mock("@actions/exec");
 vi.mock("@actions/github");
-vi.mock("node:fs");
 vi.mock("node:fs/promises");
+vi.mock("workspace-tools");
 
 describe("detect-publishable-changes", () => {
 	let mockOctokit: MockOctokit;
@@ -48,8 +48,11 @@ describe("detect-publishable-changes", () => {
 		});
 		Object.defineProperty(vi.mocked(context), "sha", { value: "abc123", writable: true });
 
-		// Mock file system
-		vi.mocked(existsSync).mockReturnValue(false);
+		// Mock workspace-tools - default to empty workspace
+		vi.mocked(getWorkspaceRoot).mockReturnValue("/test/workspace");
+		vi.mocked(getWorkspaces).mockReturnValue([]);
+
+		// Mock readFile for root package.json fallback
 		vi.mocked(readFile).mockResolvedValue('{"name": "@test/pkg"}');
 	});
 
@@ -89,17 +92,29 @@ describe("detect-publishable-changes", () => {
 			return 0;
 		});
 
-		vi.mocked(existsSync).mockReturnValue(true);
-		vi.mocked(readFile).mockImplementation(async (path) => {
-			const pathStr = String(path);
-			if (pathStr.includes("pkg-a")) {
-				return JSON.stringify({ name: "@test/pkg-a", publishConfig: { access: "public" } });
-			}
-			if (pathStr.includes("pkg-b")) {
-				return JSON.stringify({ name: "@test/pkg-b", publishConfig: { access: "public" } });
-			}
-			return '{"name": "@test/unknown"}';
-		});
+		// Mock workspace-tools to return packages
+		vi.mocked(getWorkspaces).mockReturnValue([
+			{
+				name: "@test/pkg-a",
+				path: "/test/workspace/packages/pkg-a",
+				packageJson: {
+					name: "@test/pkg-a",
+					version: "0.0.0",
+					packageJsonPath: "/test/workspace/packages/pkg-a/package.json",
+					publishConfig: { access: "public" },
+				},
+			},
+			{
+				name: "@test/pkg-b",
+				path: "/test/workspace/packages/pkg-b",
+				packageJson: {
+					name: "@test/pkg-b",
+					version: "0.0.0",
+					packageJsonPath: "/test/workspace/packages/pkg-b/package.json",
+					publishConfig: { access: "public" },
+				},
+			},
+		]);
 
 		const result = await detectPublishableChanges("pnpm", false);
 
@@ -125,17 +140,28 @@ describe("detect-publishable-changes", () => {
 			return 0;
 		});
 
-		vi.mocked(existsSync).mockReturnValue(true);
-		vi.mocked(readFile).mockImplementation(async (path) => {
-			const pathStr = String(path);
-			if (pathStr.includes("pkg-a")) {
-				return JSON.stringify({ name: "@test/pkg-a", publishConfig: { access: "public" } });
-			}
-			if (pathStr.includes("pkg-b")) {
-				return JSON.stringify({ name: "@test/pkg-b", publishConfig: { access: "public" } });
-			}
-			return '{"name": "@test/unknown"}';
-		});
+		vi.mocked(getWorkspaces).mockReturnValue([
+			{
+				name: "@test/pkg-a",
+				path: "/test/workspace/packages/pkg-a",
+				packageJson: {
+					name: "@test/pkg-a",
+					version: "0.0.0",
+					packageJsonPath: "/test/workspace/packages/pkg-a/package.json",
+					publishConfig: { access: "public" },
+				},
+			},
+			{
+				name: "@test/pkg-b",
+				path: "/test/workspace/packages/pkg-b",
+				packageJson: {
+					name: "@test/pkg-b",
+					version: "0.0.0",
+					packageJsonPath: "/test/workspace/packages/pkg-b/package.json",
+					publishConfig: { access: "public" },
+				},
+			},
+		]);
 
 		const result = await detectPublishableChanges("pnpm", false);
 
@@ -230,8 +256,17 @@ describe("detect-publishable-changes", () => {
 			return 0;
 		});
 
-		vi.mocked(existsSync).mockReturnValue(true);
-		vi.mocked(readFile).mockResolvedValue(JSON.stringify({ name: "@test/no-access" }));
+		vi.mocked(getWorkspaces).mockReturnValue([
+			{
+				name: "@test/no-access",
+				path: "/test/workspace/packages/no-access",
+				packageJson: {
+					name: "@test/no-access",
+					version: "0.0.0",
+					packageJsonPath: "/test/workspace/packages/no-access/package.json",
+				}, // No publishConfig
+			},
+		]);
 
 		const result = await detectPublishableChanges("pnpm", false);
 
@@ -252,7 +287,8 @@ describe("detect-publishable-changes", () => {
 			return 0;
 		});
 
-		vi.mocked(existsSync).mockReturnValue(false);
+		// Return empty workspaces - package not found
+		vi.mocked(getWorkspaces).mockReturnValue([]);
 
 		const result = await detectPublishableChanges("pnpm", false);
 
@@ -294,8 +330,18 @@ describe("detect-publishable-changes", () => {
 			return 0;
 		});
 
-		vi.mocked(existsSync).mockReturnValue(true);
-		vi.mocked(readFile).mockResolvedValue(JSON.stringify({ name: "@test/pkg-a", publishConfig: { access: "public" } }));
+		vi.mocked(getWorkspaces).mockReturnValue([
+			{
+				name: "@test/pkg-a",
+				path: "/test/workspace/packages/pkg-a",
+				packageJson: {
+					name: "@test/pkg-a",
+					version: "0.0.0",
+					packageJsonPath: "/test/workspace/packages/pkg-a/package.json",
+					publishConfig: { access: "public" },
+				},
+			},
+		]);
 
 		const result = await detectPublishableChanges("pnpm", false);
 
@@ -303,7 +349,7 @@ describe("detect-publishable-changes", () => {
 		expect(result.packages.length).toBe(1);
 	});
 
-	it("should handle read errors for package.json", async () => {
+	it("should handle package not in workspace", async () => {
 		const changesetStatus = {
 			releases: [{ name: "@test/error-pkg", newVersion: "1.0.0", type: "minor" }],
 			changesets: [],
@@ -316,12 +362,13 @@ describe("detect-publishable-changes", () => {
 			return 0;
 		});
 
-		vi.mocked(existsSync).mockReturnValue(true);
-		vi.mocked(readFile).mockRejectedValue(new Error("Permission denied"));
+		// Package not in workspaces
+		vi.mocked(getWorkspaces).mockReturnValue([]);
 
 		const result = await detectPublishableChanges("pnpm", false);
 
 		expect(result.hasChanges).toBe(false);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find package.json"));
 	});
 
 	it("should capture stderr output from changeset command", async () => {
@@ -340,9 +387,9 @@ describe("detect-publishable-changes", () => {
 		expect(result.hasChanges).toBe(false);
 	});
 
-	it("should handle non-Error throw when reading package.json", async () => {
+	it("should find package from root package.json when not in workspaces", async () => {
 		const changesetStatus = {
-			releases: [{ name: "@test/non-error-pkg", newVersion: "1.0.0", type: "minor" }],
+			releases: [{ name: "@test/root-pkg", newVersion: "1.0.0", type: "minor" }],
 			changesets: [],
 		};
 
@@ -353,12 +400,16 @@ describe("detect-publishable-changes", () => {
 			return 0;
 		});
 
-		vi.mocked(existsSync).mockReturnValue(true);
-		vi.mocked(readFile).mockRejectedValue("String error thrown"); // Non-Error throw to hit String(error) path
+		// No workspaces, but root package.json matches
+		vi.mocked(getWorkspaces).mockReturnValue([]);
+		vi.mocked(readFile).mockResolvedValue(
+			JSON.stringify({ name: "@test/root-pkg", publishConfig: { access: "public" } }),
+		);
 
 		const result = await detectPublishableChanges("pnpm", false);
 
-		expect(result.hasChanges).toBe(false);
-		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("String error thrown"));
+		expect(result.hasChanges).toBe(true);
+		expect(result.packages.length).toBe(1);
+		expect(result.packages[0].name).toBe("@test/root-pkg");
 	});
 });
