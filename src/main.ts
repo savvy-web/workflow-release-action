@@ -237,15 +237,41 @@ async function runPhase1BranchManagement(inputs: {
 async function runPhase2Validation(inputs: Inputs): Promise<void> {
 	const octokit = github.getOctokit(inputs.token);
 
-	// Fetch target branch for changeset comparisons
-	// The checkout may only have the release branch with depth=1, but changeset status
-	// needs to compare against the target branch to determine divergence point
-	core.startGroup(`Fetching target branch: ${inputs.targetBranch}`);
+	// Fetch full history for changeset comparisons
+	// Changesets needs to find the merge base between the release branch and target branch,
+	// which requires having enough commit history to find where they diverged.
+	// A shallow clone with depth=1 won't have the common ancestor.
+	core.startGroup("Fetching git history for changeset comparison");
 	try {
-		await exec.exec("git", ["fetch", "origin", `${inputs.targetBranch}:${inputs.targetBranch}`, "--depth=1"]);
+		// First, unshallow the current branch if it's a shallow clone
+		let isShallow = false;
+		try {
+			let shallowCheck = "";
+			await exec.exec("git", ["rev-parse", "--is-shallow-repository"], {
+				listeners: {
+					stdout: (data: Buffer) => {
+						shallowCheck += data.toString();
+					},
+				},
+			});
+			isShallow = shallowCheck.trim() === "true";
+		} catch {
+			// If the check fails, assume it's not shallow
+		}
+
+		if (isShallow) {
+			core.info("Repository is shallow, fetching full history...");
+			await exec.exec("git", ["fetch", "--unshallow", "origin"]);
+			core.info("✓ Unshallowed repository");
+		}
+
+		// Fetch the target branch
+		await exec.exec("git", ["fetch", "origin", inputs.targetBranch]);
 		core.info(`✓ Fetched ${inputs.targetBranch} branch`);
 	} catch (error) {
-		core.warning(`Failed to fetch ${inputs.targetBranch}: ${error instanceof Error ? error.message : String(error)}`);
+		core.warning(
+			`Failed to fetch git history: ${error instanceof Error ? error.message : String(error)}. Changeset status may fail.`,
+		);
 	}
 	core.endGroup();
 
