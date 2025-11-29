@@ -449,7 +449,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				status: "in_progress",
 			});
 
-			npmResult = await validateNPMPublish(inputs.packageManager, inputs.dryRun);
+			npmResult = await validateNPMPublish(inputs.packageManager, inputs.targetBranch, inputs.dryRun);
 
 			core.setOutput("npm_publish_ready", npmResult.success);
 			core.setOutput("npm_results", JSON.stringify(npmResult.results));
@@ -466,7 +466,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				status: "in_progress",
 			});
 
-			ghResult = await validatePublishGitHubPackages(inputs.packageManager, inputs.dryRun);
+			ghResult = await validatePublishGitHubPackages(inputs.packageManager, inputs.targetBranch, inputs.dryRun);
 
 			core.setOutput("github_packages_ready", ghResult.success);
 			core.setOutput("github_packages_results", JSON.stringify([]));

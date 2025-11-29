@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import type { PackageValidationResult } from "../types/shared-types.js";
+import { getChangesetStatus } from "./get-changeset-status.js";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
@@ -14,25 +15,6 @@ interface GitHubPackagesValidationResult {
 	packages: PackageValidationResult[];
 	/** GitHub check run ID */
 	checkId: number;
-}
-
-/**
- * Changeset status output
- */
-interface ChangesetStatus {
-	/** Releases to be published */
-	releases: Array<{
-		/** Package name */
-		name: string;
-		/** Package type (major, minor, patch) */
-		type: string;
-		/** Old version */
-		oldVersion: string;
-		/** New version */
-		newVersion: string;
-		/** Changelog entry */
-		changesets: string[];
-	}>;
 }
 
 /**
@@ -343,11 +325,8 @@ export async function validatePackageGitHubPublish(
 /**
  * Validates all publishable packages for GitHub Packages
  *
-
- * @param exec - GitHub Actions exec module
-
-
  * @param packageManager - Package manager to use
+ * @param targetBranch - Target branch for merge base comparison
  * @param dryRun - Whether this is a dry-run
  * @returns GitHub Packages validation result
  *
@@ -361,26 +340,15 @@ export async function validatePackageGitHubPublish(
  */
 export async function validatePublishGitHubPackages(
 	packageManager: string,
+	targetBranch: string,
 	dryRun: boolean,
 ): Promise<GitHubPackagesValidationResult> {
 	const token = core.getInput("token", { required: true });
 	const github = getOctokit(token);
 	core.startGroup("Validating GitHub Packages publish");
 
-	// Get changeset status
-	let changesetOutput = "";
-	const changesetOptions = {
-		listeners: {
-			stdout: (data: Buffer): void => {
-				changesetOutput += data.toString();
-			},
-		},
-		silent: true,
-	};
-
-	await exec.exec("npx", ["changeset", "status", "--output", "/dev/stdout"], changesetOptions);
-
-	const changesetStatus: ChangesetStatus = JSON.parse(changesetOutput);
+	// Get changeset status (handles consumed changesets by checking merge base)
+	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
 	const publishablePackages = changesetStatus.releases;
 
 	core.info(`Found ${publishablePackages.length} publishable package(s)`);

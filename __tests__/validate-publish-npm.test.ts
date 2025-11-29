@@ -287,7 +287,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			const result = await validateNPMPublish("pnpm", false);
+			const result = await validateNPMPublish("pnpm", "main", false);
 
 			expect(result.success).toBe(true);
 			expect(result.results).toHaveLength(1);
@@ -304,7 +304,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			const result = await validateNPMPublish("pnpm", false);
+			const result = await validateNPMPublish("pnpm", "main", false);
 
 			expect(result.success).toBe(false);
 			expect(result.results).toHaveLength(0);
@@ -320,7 +320,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			await validateNPMPublish("pnpm", true);
+			await validateNPMPublish("pnpm", "main", true);
 
 			expect(mockOctokit.rest.checks.create).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -339,7 +339,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			await validateNPMPublish("yarn", false);
+			await validateNPMPublish("yarn", "main", false);
 
 			expect(exec.exec).toHaveBeenCalledWith("yarn", ["changeset", "status", "--output=json"], expect.any(Object));
 		});
@@ -374,7 +374,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			await validateNPMPublish("pnpm", false);
+			await validateNPMPublish("pnpm", "main", false);
 
 			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find path"));
 		});
@@ -389,7 +389,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			await validateNPMPublish("npm", false);
+			await validateNPMPublish("npm", "main", false);
 
 			expect(exec.exec).toHaveBeenCalledWith(
 				"npm",
@@ -597,7 +597,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			const result = await validateNPMPublish("pnpm", false);
+			const result = await validateNPMPublish("pnpm", "main", false);
 
 			expect(result.results).toHaveLength(1);
 		});
@@ -646,7 +646,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			await validateNPMPublish("pnpm", false);
+			await validateNPMPublish("pnpm", "main", false);
 
 			expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("changeset status stderr"));
 		});
@@ -720,7 +720,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			const result = await validateNPMPublish("pnpm", false);
+			const result = await validateNPMPublish("pnpm", "main", false);
 
 			expect(result.success).toBe(false);
 			expect(result.results).toHaveLength(2);
@@ -787,7 +787,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			const result = await validateNPMPublish("pnpm", false);
+			const result = await validateNPMPublish("pnpm", "main", false);
 
 			expect(result.results).toHaveLength(1);
 			expect(result.results[0].name).toBe("@test/nested-pkg");
@@ -845,7 +845,7 @@ describe("validate-publish-npm", () => {
 				return 0;
 			});
 
-			const result = await validateNPMPublish("pnpm", false);
+			const result = await validateNPMPublish("pnpm", "main", false);
 
 			expect(result.results).toHaveLength(1);
 		});

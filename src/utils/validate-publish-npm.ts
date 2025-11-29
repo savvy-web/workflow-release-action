@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import type { PackageValidationResult } from "../types/shared-types.js";
+import { getChangesetStatus } from "./get-changeset-status.js";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
@@ -14,65 +15,6 @@ interface NPMPublishValidationResult {
 	results: PackageValidationResult[];
 	/** GitHub check run ID */
 	checkId: number;
-}
-
-/**
- * Gets changeset status to determine publishable packages
- *
-
- * @param exec - GitHub Actions exec module
- * @param packageManager - Package manager to use
- * @returns Promise resolving to changeset status JSON
- */
-async function getChangesetStatus(packageManager: string): Promise<{
-	releases: Array<{ name: string; newVersion: string; type: string }>;
-	changesets: Array<{ summary: string }>;
-}> {
-	let output = "";
-	let stderrOutput = "";
-
-	const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
-	const statusArgs =
-		packageManager === "pnpm"
-			? ["changeset", "status", "--output=json"]
-			: packageManager === "yarn"
-				? ["changeset", "status", "--output=json"]
-				: ["run", "changeset", "status", "--output=json"];
-
-	const exitCode = await exec.exec(statusCmd, statusArgs, {
-		listeners: {
-			stdout: (data: Buffer) => {
-				output += data.toString();
-			},
-			stderr: (data: Buffer) => {
-				stderrOutput += data.toString();
-				core.debug(`changeset status stderr: ${data.toString()}`);
-			},
-		},
-		ignoreReturnCode: true,
-	});
-
-	// Handle case where changesets have already been consumed (versioned)
-	// This happens on the release branch after `changeset version` has run
-	if (exitCode !== 0) {
-		const noChangesetsError =
-			stderrOutput.includes("no changesets were found") || stderrOutput.includes("No changesets present");
-
-		if (noChangesetsError) {
-			core.info("Changesets have been consumed (already versioned), skipping changeset-based validation");
-			return { releases: [], changesets: [] };
-		}
-
-		// For other errors, throw to surface the issue
-		throw new Error(`changeset status failed with exit code ${exitCode}: ${stderrOutput}`);
-	}
-
-	// If output is empty but command succeeded, return empty state
-	if (!output.trim()) {
-		return { releases: [], changesets: [] };
-	}
-
-	return JSON.parse(output.trim());
 }
 
 /**
@@ -247,22 +189,23 @@ export async function validatePackageNPMPublish(
 /**
  * Validates NPM publish for all publishable packages
  *
-
- * @param exec - GitHub Actions exec module
-
-
  * @param packageManager - Package manager to use
+ * @param targetBranch - Target branch for merge base comparison
  * @param dryRun - Whether this is a dry-run
  * @returns Promise resolving to validation result
  */
-export async function validateNPMPublish(packageManager: string, dryRun: boolean): Promise<NPMPublishValidationResult> {
+export async function validateNPMPublish(
+	packageManager: string,
+	targetBranch: string,
+	dryRun: boolean,
+): Promise<NPMPublishValidationResult> {
 	const token = core.getInput("token", { required: true });
 	const github = getOctokit(token);
 	core.startGroup("Validating NPM publish");
 
 	// Get changeset status
 	core.info("Getting changeset status");
-	const changesetStatus = await getChangesetStatus(packageManager);
+	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
 
 	core.info(`Found ${changesetStatus.releases.length} package(s) with version changes`);
 

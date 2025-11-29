@@ -326,7 +326,7 @@ describe("validate-publish-github-packages", () => {
 				return 0;
 			});
 
-			const result = await validatePublishGitHubPackages("npm", false);
+			const result = await validatePublishGitHubPackages("npm", "main", false);
 
 			expect(result.success).toBe(true);
 			expect(result.packages).toHaveLength(1);
@@ -362,7 +362,7 @@ describe("validate-publish-github-packages", () => {
 				return 0;
 			});
 
-			const result = await validatePublishGitHubPackages("npm", false);
+			const result = await validatePublishGitHubPackages("npm", "main", false);
 
 			expect(result.packages).toHaveLength(1);
 			expect(result.packages[0].canPublish).toBe(false);
@@ -379,7 +379,7 @@ describe("validate-publish-github-packages", () => {
 				return 0;
 			});
 
-			await validatePublishGitHubPackages("npm", true);
+			await validatePublishGitHubPackages("npm", "main", true);
 
 			expect(mockOctokit.rest.checks.create).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -619,7 +619,7 @@ describe("validate-publish-github-packages", () => {
 				return 0;
 			});
 
-			const result = await validatePublishGitHubPackages("npm", false);
+			const result = await validatePublishGitHubPackages("npm", "main", false);
 
 			expect(result.packages).toHaveLength(1);
 		});
@@ -665,7 +665,7 @@ describe("validate-publish-github-packages", () => {
 				return 0;
 			});
 
-			const result = await validatePublishGitHubPackages("npm", false);
+			const result = await validatePublishGitHubPackages("npm", "main", false);
 
 			expect(result.success).toBe(false);
 		});
@@ -696,7 +696,7 @@ describe("validate-publish-github-packages", () => {
 				return 0;
 			});
 
-			const result = await validatePublishGitHubPackages("npm", false);
+			const result = await validatePublishGitHubPackages("npm", "main", false);
 
 			expect(result.packages).toHaveLength(1);
 			expect(result.packages[0].canPublish).toBe(false);
@@ -758,7 +758,7 @@ describe("validate-publish-github-packages", () => {
 				return 0;
 			});
 
-			const result = await validatePublishGitHubPackages("npm", false);
+			const result = await validatePublishGitHubPackages("npm", "main", false);
 
 			expect(result.packages).toHaveLength(1);
 		});
