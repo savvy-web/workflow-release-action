@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
-import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
+import { getChangesetStatus } from "./get-changeset-status.js";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
@@ -31,40 +31,6 @@ interface ReleaseNotesPreviewResult {
 	packages: PackageReleaseNotes[];
 	/** GitHub check run ID */
 	checkId: number;
-}
-
-/**
- * Gets changeset status to determine packages being released
- *
- * @param packageManager - Package manager to use
- * @returns Promise resolving to changeset status JSON
- */
-async function getChangesetStatus(packageManager: string): Promise<{
-	releases: Array<{ name: string; newVersion: string; type: string }>;
-	changesets: Array<{ summary: string }>;
-}> {
-	let output = "";
-
-	const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
-	const statusArgs =
-		packageManager === "pnpm"
-			? ["changeset", "status", "--output=json"]
-			: packageManager === "yarn"
-				? ["changeset", "status", "--output=json"]
-				: ["run", "changeset", "status", "--output=json"];
-
-	await exec.exec(statusCmd, statusArgs, {
-		listeners: {
-			stdout: (data: Buffer) => {
-				output += data.toString();
-			},
-			stderr: (data: Buffer) => {
-				core.debug(`changeset status stderr: ${data.toString()}`);
-			},
-		},
-	});
-
-	return JSON.parse(output.trim());
 }
 
 /**
@@ -166,14 +132,15 @@ function extractVersionSection(changelogContent: string, version: string): strin
 export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreviewResult> {
 	// Read all inputs
 	const packageManager = core.getInput("package-manager") || "pnpm";
+	const targetBranch = core.getInput("target-branch") || "main";
 	const workspaceRoot = process.cwd();
 	const dryRun = core.getBooleanInput("dry-run") || false;
 	const token = core.getInput("token", { required: true });
 	const github = getOctokit(token);
 	core.startGroup("Generating release notes preview");
 
-	// Get packages from changeset status
-	const changesetStatus = await getChangesetStatus(packageManager);
+	// Get packages from changeset status (handles consumed changesets)
+	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
 	core.info(`Found ${changesetStatus.releases.length} package(s) to release`);
 
 	const packageNotes: PackageReleaseNotes[] = [];

@@ -34,12 +34,14 @@ export async function getChangesetStatus(
 	let stderrOutput = "";
 
 	const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
+	// Use --output=/dev/stdout to get JSON output on stdout
+	// Note: --output=json would write to a file named "json"
 	const statusArgs =
 		packageManager === "pnpm"
-			? ["changeset", "status", "--output=json"]
+			? ["changeset", "status", "--output=/dev/stdout"]
 			: packageManager === "yarn"
-				? ["changeset", "status", "--output=json"]
-				: ["run", "changeset", "status", "--output=json"];
+				? ["changeset", "status", "--output=/dev/stdout"]
+				: ["run", "changeset", "status", "--", "--output=/dev/stdout"];
 
 	const exitCode = await exec.exec(statusCmd, statusArgs, {
 		listeners: {
@@ -142,12 +144,13 @@ async function getChangesetStatusFromMergeBase(
 	try {
 		let output = "";
 		const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
+		// Use --output=/dev/stdout to get JSON output on stdout
 		const statusArgs =
 			packageManager === "pnpm"
-				? ["changeset", "status", "--output=json"]
+				? ["changeset", "status", "--output=/dev/stdout"]
 				: packageManager === "yarn"
-					? ["changeset", "status", "--output=json"]
-					: ["run", "changeset", "status", "--output=json"];
+					? ["changeset", "status", "--output=/dev/stdout"]
+					: ["run", "changeset", "status", "--", "--output=/dev/stdout"];
 
 		const exitCode = await exec.exec(statusCmd, statusArgs, {
 			listeners: {

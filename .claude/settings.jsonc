@@ -176,7 +176,12 @@
 			// System modification
 			"Bash(npm config:*)",
 			"Bash(pnpm config:*)",
-			"Bash(yarn config:*)"
+			"Bash(yarn config:*)",
+
+			"Bash(gh run list:*)",
+			"Bash(gh run view:*)",
+			"Bash(gh run watch:*)",
+			"Bash(gh run rerun:*)"
 		],
 		"deny": [
 			// Destructive system operations
