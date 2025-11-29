@@ -1,4 +1,5 @@
 import * as core from "@actions/core";
+import * as exec from "@actions/exec";
 import * as github from "@actions/github";
 import { context } from "@actions/github";
 import { checkReleaseBranch } from "./utils/check-release-branch.js";
@@ -235,6 +236,18 @@ async function runPhase1BranchManagement(inputs: {
  */
 async function runPhase2Validation(inputs: Inputs): Promise<void> {
 	const octokit = github.getOctokit(inputs.token);
+
+	// Fetch target branch for changeset comparisons
+	// The checkout may only have the release branch with depth=1, but changeset status
+	// needs to compare against the target branch to determine divergence point
+	core.startGroup(`Fetching target branch: ${inputs.targetBranch}`);
+	try {
+		await exec.exec("git", ["fetch", "origin", `${inputs.targetBranch}:${inputs.targetBranch}`, "--depth=1"]);
+		core.info(`✓ Fetched ${inputs.targetBranch} branch`);
+	} catch (error) {
+		core.warning(`Failed to fetch ${inputs.targetBranch}: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	core.endGroup();
 
 	const checkIds: number[] = [];
 	const checkNames = [
