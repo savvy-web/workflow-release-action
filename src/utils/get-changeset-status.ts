@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
@@ -37,7 +36,8 @@ export async function getChangesetStatus(
 
 	// Create a temp file for changeset output
 	// Changeset's --output flag writes to a file, not stdout
-	const tempFile = path.join(os.tmpdir(), `changeset-status-${Date.now()}.json`);
+	// Use process.cwd() as the changeset CLI resolves paths relative to cwd
+	const tempFile = path.join(process.cwd(), `.changeset-status-${Date.now()}.json`);
 
 	const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
 	const statusArgs =
@@ -152,8 +152,9 @@ async function getChangesetStatusFromMergeBase(
 	}
 
 	// Get changeset status at merge base using temp file
+	// Use process.cwd() as the changeset CLI resolves paths relative to cwd
 	let result: ChangesetStatusResult | null = null;
-	const tempFile = path.join(os.tmpdir(), `changeset-mergebase-${Date.now()}.json`);
+	const tempFile = path.join(process.cwd(), `.changeset-mergebase-${Date.now()}.json`);
 	try {
 		const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
 		const statusArgs =
