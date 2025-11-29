@@ -29,6 +29,7 @@ async function getChangesetStatus(packageManager: string): Promise<{
 	changesets: Array<{ summary: string }>;
 }> {
 	let output = "";
+	let stderrOutput = "";
 
 	const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
 	const statusArgs =
@@ -38,16 +39,38 @@ async function getChangesetStatus(packageManager: string): Promise<{
 				? ["changeset", "status", "--output=json"]
 				: ["run", "changeset", "status", "--output=json"];
 
-	await exec.exec(statusCmd, statusArgs, {
+	const exitCode = await exec.exec(statusCmd, statusArgs, {
 		listeners: {
 			stdout: (data: Buffer) => {
 				output += data.toString();
 			},
 			stderr: (data: Buffer) => {
+				stderrOutput += data.toString();
 				core.debug(`changeset status stderr: ${data.toString()}`);
 			},
 		},
+		ignoreReturnCode: true,
 	});
+
+	// Handle case where changesets have already been consumed (versioned)
+	// This happens on the release branch after `changeset version` has run
+	if (exitCode !== 0) {
+		const noChangesetsError =
+			stderrOutput.includes("no changesets were found") || stderrOutput.includes("No changesets present");
+
+		if (noChangesetsError) {
+			core.info("Changesets have been consumed (already versioned), skipping changeset-based validation");
+			return { releases: [], changesets: [] };
+		}
+
+		// For other errors, throw to surface the issue
+		throw new Error(`changeset status failed with exit code ${exitCode}: ${stderrOutput}`);
+	}
+
+	// If output is empty but command succeeded, return empty state
+	if (!output.trim()) {
+		return { releases: [], changesets: [] };
+	}
 
 	return JSON.parse(output.trim());
 }
@@ -268,16 +291,28 @@ export async function validateNPMPublish(packageManager: string, dryRun: boolean
 		results.push(result);
 	}
 
-	const success = results.length > 0 && results.every((r) => r.canPublish);
+	// Determine success based on results
+	// - No packages: success (nothing to validate)
+	// - Has packages: all must be publishable
+	const noPackagesToValidate = results.length === 0;
+	const allPackagesReady = results.length > 0 && results.every((r) => r.canPublish);
+	const success = noPackagesToValidate || allPackagesReady;
 
-	core.info(`Validation result: ${success ? "✅ All packages ready" : "❌ Some packages not ready"}`);
+	if (noPackagesToValidate) {
+		core.info("Validation result: ⚪ No packages to validate (changesets already versioned)");
+	} else {
+		core.info(`Validation result: ${allPackagesReady ? "✅ All packages ready" : "❌ Some packages not ready"}`);
+	}
 	core.endGroup();
 
 	// Create GitHub check run
 	const checkTitle = dryRun ? "🧪 NPM Publish Validation (Dry Run)" : "NPM Publish Validation";
-	const checkSummary = success
-		? `All ${results.length} package(s) ready for NPM publish`
-		: `${results.filter((r) => !r.canPublish).length} package(s) not ready for NPM publish`;
+	const checkSummary = noPackagesToValidate
+		? "No packages to validate (changesets already versioned)"
+		: allPackagesReady
+			? `All ${results.length} package(s) ready for NPM publish`
+			: `${results.filter((r) => !r.canPublish).length} package(s) not ready for NPM publish`;
+	const checkConclusion = noPackagesToValidate ? "skipped" : allPackagesReady ? "success" : "failure";
 
 	// Build check details using summaryWriter (markdown, not HTML)
 	const packagesList =
@@ -299,7 +334,7 @@ export async function validateNPMPublish(packageManager: string, dryRun: boolean
 		name: checkTitle,
 		head_sha: context.sha,
 		status: "completed",
-		conclusion: success ? "success" : "failure",
+		conclusion: checkConclusion,
 		output: {
 			title: checkSummary,
 			summary: checkDetails,

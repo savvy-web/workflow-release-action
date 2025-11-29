@@ -269,14 +269,6 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		// Changesets needs a local branch ref, not just origin/main
 		await exec.exec("git", ["fetch", "origin", `${inputs.targetBranch}:${inputs.targetBranch}`]);
 		core.info(`✓ Fetched ${inputs.targetBranch} branch`);
-
-		// Debug: show git state
-		core.info("Git branch state:");
-		await exec.exec("git", ["branch", "-a"]);
-		core.info("Git log (last 5 commits):");
-		await exec.exec("git", ["log", "--oneline", "-5"]);
-		core.info(`Checking merge-base between HEAD and ${inputs.targetBranch}:`);
-		await exec.exec("git", ["merge-base", "HEAD", inputs.targetBranch], { ignoreReturnCode: true });
 	} catch (error) {
 		core.warning(
 			`Failed to fetch git history: ${error instanceof Error ? error.message : String(error)}. Changeset status may fail.`,
