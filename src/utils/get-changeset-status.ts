@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 
@@ -30,24 +33,22 @@ export async function getChangesetStatus(
 	packageManager: string,
 	targetBranch: string = "main",
 ): Promise<ChangesetStatusResult> {
-	let output = "";
 	let stderrOutput = "";
 
+	// Create a temp file for changeset output
+	// Changeset's --output flag writes to a file, not stdout
+	const tempFile = path.join(os.tmpdir(), `changeset-status-${Date.now()}.json`);
+
 	const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
-	// Use --output=/dev/stdout to get JSON output on stdout
-	// Note: --output=json would write to a file named "json"
 	const statusArgs =
 		packageManager === "pnpm"
-			? ["changeset", "status", "--output=/dev/stdout"]
+			? ["changeset", "status", `--output=${tempFile}`]
 			: packageManager === "yarn"
-				? ["changeset", "status", "--output=/dev/stdout"]
-				: ["run", "changeset", "status", "--", "--output=/dev/stdout"];
+				? ["changeset", "status", `--output=${tempFile}`]
+				: ["run", "changeset", "status", "--", `--output=${tempFile}`];
 
 	const exitCode = await exec.exec(statusCmd, statusArgs, {
 		listeners: {
-			stdout: (data: Buffer) => {
-				output += data.toString();
-			},
 			stderr: (data: Buffer) => {
 				stderrOutput += data.toString();
 				core.debug(`changeset status stderr: ${data.toString()}`);
@@ -55,6 +56,17 @@ export async function getChangesetStatus(
 		},
 		ignoreReturnCode: true,
 	});
+
+	// Try to read the output file if it exists
+	let output = "";
+	try {
+		if (fs.existsSync(tempFile)) {
+			output = fs.readFileSync(tempFile, "utf8");
+			fs.unlinkSync(tempFile); // Clean up
+		}
+	} catch (error) {
+		core.debug(`Failed to read changeset output file: ${error instanceof Error ? error.message : String(error)}`);
+	}
 
 	// If successful and has output, parse and return
 	if (exitCode === 0 && output.trim()) {
@@ -139,36 +151,43 @@ async function getChangesetStatusFromMergeBase(
 		return null;
 	}
 
-	// Get changeset status at merge base
+	// Get changeset status at merge base using temp file
 	let result: ChangesetStatusResult | null = null;
+	const tempFile = path.join(os.tmpdir(), `changeset-mergebase-${Date.now()}.json`);
 	try {
-		let output = "";
 		const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
-		// Use --output=/dev/stdout to get JSON output on stdout
 		const statusArgs =
 			packageManager === "pnpm"
-				? ["changeset", "status", "--output=/dev/stdout"]
+				? ["changeset", "status", `--output=${tempFile}`]
 				: packageManager === "yarn"
-					? ["changeset", "status", "--output=/dev/stdout"]
-					: ["run", "changeset", "status", "--", "--output=/dev/stdout"];
+					? ["changeset", "status", `--output=${tempFile}`]
+					: ["run", "changeset", "status", "--", `--output=${tempFile}`];
 
 		const exitCode = await exec.exec(statusCmd, statusArgs, {
-			listeners: {
-				stdout: (data: Buffer) => {
-					output += data.toString();
-				},
-			},
 			ignoreReturnCode: true,
 		});
 
-		if (exitCode === 0 && output.trim()) {
-			result = JSON.parse(output.trim()) as ChangesetStatusResult;
-			core.info(`Found ${result.releases.length} package(s) to release from merge base`);
+		// Read output from temp file
+		if (exitCode === 0 && fs.existsSync(tempFile)) {
+			const output = fs.readFileSync(tempFile, "utf8");
+			if (output.trim()) {
+				result = JSON.parse(output.trim()) as ChangesetStatusResult;
+				core.info(`Found ${result.releases.length} package(s) to release from merge base`);
+			}
 		}
 	} catch (error) {
 		core.warning(
 			`Failed to get changeset status at merge base: ${error instanceof Error ? error.message : String(error)}`,
 		);
+	} finally {
+		// Clean up temp file
+		try {
+			if (fs.existsSync(tempFile)) {
+				fs.unlinkSync(tempFile);
+			}
+		} catch {
+			// Ignore cleanup errors
+		}
 	}
 
 	// Always restore to original HEAD
