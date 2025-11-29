@@ -35,17 +35,18 @@ export async function getChangesetStatus(
 	let stderrOutput = "";
 
 	// Create a temp file for changeset output
-	// Changeset's --output flag writes to a file, not stdout
-	// Use process.cwd() as the changeset CLI resolves paths relative to cwd
-	const tempFile = path.join(process.cwd(), `.changeset-status-${Date.now()}.json`);
+	// Changeset's --output flag writes to a file relative to cwd
+	// Use just a filename (no path) to avoid path resolution issues
+	const tempFileName = `.changeset-status-${Date.now()}.json`;
+	const tempFile = path.join(process.cwd(), tempFileName);
 
 	const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
 	const statusArgs =
 		packageManager === "pnpm"
-			? ["changeset", "status", `--output=${tempFile}`]
+			? ["changeset", "status", `--output=${tempFileName}`]
 			: packageManager === "yarn"
-				? ["changeset", "status", `--output=${tempFile}`]
-				: ["run", "changeset", "status", "--", `--output=${tempFile}`];
+				? ["changeset", "status", `--output=${tempFileName}`]
+				: ["run", "changeset", "status", "--", `--output=${tempFileName}`];
 
 	const exitCode = await exec.exec(statusCmd, statusArgs, {
 		listeners: {
@@ -152,17 +153,19 @@ async function getChangesetStatusFromMergeBase(
 	}
 
 	// Get changeset status at merge base using temp file
-	// Use process.cwd() as the changeset CLI resolves paths relative to cwd
+	// Changeset writes output relative to cwd, so use just filename for --output
+	// but full path for fs operations
 	let result: ChangesetStatusResult | null = null;
-	const tempFile = path.join(process.cwd(), `.changeset-mergebase-${Date.now()}.json`);
+	const tempFileName = `.changeset-mergebase-${Date.now()}.json`;
+	const tempFile = path.join(process.cwd(), tempFileName);
 	try {
 		const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
 		const statusArgs =
 			packageManager === "pnpm"
-				? ["changeset", "status", `--output=${tempFile}`]
+				? ["changeset", "status", `--output=${tempFileName}`]
 				: packageManager === "yarn"
-					? ["changeset", "status", `--output=${tempFile}`]
-					: ["run", "changeset", "status", "--", `--output=${tempFile}`];
+					? ["changeset", "status", `--output=${tempFileName}`]
+					: ["run", "changeset", "status", "--", `--output=${tempFileName}`];
 
 		const exitCode = await exec.exec(statusCmd, statusArgs, {
 			ignoreReturnCode: true,
