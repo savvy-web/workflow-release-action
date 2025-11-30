@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import type { PackageValidationResult } from "../types/shared-types.js";
+import { findPublishablePath } from "./find-package-path.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -213,10 +214,8 @@ export async function validateNPMPublish(
 	const results: PackageValidationResult[] = [];
 
 	for (const release of changesetStatus.releases) {
-		// Determine package path (assume packages are in workspace)
-		// For now, assume standard monorepo structure: packages/package-name or node_modules/.pnpm/...
-		// We'll use the package name to find the path
-		const packagePath = await findPackagePath(release.name);
+		// Find the publishable path (workspace path + dist/npm)
+		const packagePath = findPublishablePath(release.name);
 
 		if (!packagePath) {
 			core.warning(`Could not find path for package ${release.name}, skipping`);
@@ -313,86 +312,4 @@ export async function validateNPMPublish(
 		results,
 		checkId: checkRun.id,
 	};
-}
-
-/**
- * Finds the file system path for a package
- *
-
- * @param exec - GitHub Actions exec module
- * @param packageName - Package name
- * @returns Promise resolving to package path or null if not found
- */
-async function findPackagePath(packageName: string): Promise<string | null> {
-	let output = "";
-
-	try {
-		// Try to use npm list to find package path
-		await exec.exec("npm", ["list", packageName, "--json"], {
-			listeners: {
-				stdout: (data: Buffer) => {
-					output += data.toString();
-				},
-			},
-			ignoreReturnCode: true,
-		});
-
-		const listResult = JSON.parse(output);
-
-		// Extract path from dependencies
-		const findPath = (obj: Record<string, unknown>, pkgName: string): string | null => {
-			if (obj.dependencies && typeof obj.dependencies === "object") {
-				const deps = obj.dependencies as Record<string, { resolved?: string; path?: string }>;
-				if (deps[pkgName]) {
-					return deps[pkgName].path || deps[pkgName].resolved || null;
-				}
-
-				// Recursively search nested dependencies
-				for (const dep of Object.values(deps)) {
-					if (dep && typeof dep === "object") {
-						const path = findPath(dep as Record<string, unknown>, pkgName);
-						if (path) return path;
-					}
-				}
-			}
-
-			return null;
-		};
-
-		const path = findPath(listResult as Record<string, unknown>, packageName);
-
-		if (path) {
-			core.debug(`Found package ${packageName} at: ${path}`);
-			return path;
-		}
-	} catch (error) {
-		core.debug(`Could not find package path using npm list: ${error instanceof Error ? error.message : String(error)}`);
-	}
-
-	// Fallback: try common monorepo patterns
-	const commonPaths = [
-		`packages/${packageName.split("/").pop()}`,
-		`pkgs/${packageName.split("/").pop()}`,
-		`apps/${packageName.split("/").pop()}`,
-		`./${packageName.split("/").pop()}`,
-	];
-
-	for (const path of commonPaths) {
-		try {
-			// Check if package.json exists at path
-			const exitCode = await exec.exec("test", ["-f", `${path}/package.json`], {
-				ignoreReturnCode: true,
-			});
-
-			if (exitCode === 0) {
-				core.debug(`Found package ${packageName} at: ${path}`);
-				return path;
-			}
-		} catch {
-			// Continue to next path
-		}
-	}
-
-	core.warning(`Could not find path for package: ${packageName}`);
-	return null;
 }

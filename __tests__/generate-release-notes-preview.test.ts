@@ -48,17 +48,24 @@ describe("generate-release-notes-preview", () => {
 		});
 		Object.defineProperty(vi.mocked(context), "sha", { value: "abc123", writable: true });
 
-		// Default exec mock for changeset status
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
-			}
-			return 0;
-		});
+		// Default exec mock
+		vi.mocked(exec.exec).mockResolvedValue(0);
 
-		// Default fs mocks
-		vi.mocked(fs.existsSync).mockReturnValue(false);
-		vi.mocked(fs.readFileSync).mockReturnValue("");
+		// Default fs mocks - changeset writes to a temp file
+		vi.mocked(fs.existsSync).mockImplementation((path) => {
+			const pathStr = String(path);
+			// Return true for changeset status temp files
+			return pathStr.includes(".changeset-status");
+		});
+		vi.mocked(fs.readFileSync).mockImplementation((path) => {
+			const pathStr = String(path);
+			// Return empty changeset status for temp files
+			if (pathStr.includes(".changeset-status")) {
+				return JSON.stringify({ releases: [], changesets: [] });
+			}
+			return "";
+		});
+		vi.mocked(fs.unlinkSync).mockImplementation(() => {});
 	});
 
 	afterEach(() => {
@@ -73,27 +80,21 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should extract release notes from CHANGELOG", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(
-					Buffer.from(
-						JSON.stringify({
-							releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
-							changesets: [],
-						}),
-					),
-				);
-			}
-			return 0;
-		});
-
 		vi.mocked(fs.existsSync).mockImplementation((path) => {
 			const pathStr = String(path);
-			return pathStr.includes("package.json") || pathStr.includes("CHANGELOG.md");
+			return (
+				pathStr.includes(".changeset-status") || pathStr.includes("package.json") || pathStr.includes("CHANGELOG.md")
+			);
 		});
 
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
+			if (pathStr.includes(".changeset-status")) {
+				return JSON.stringify({
+					releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+					changesets: [],
+				});
+			}
 			if (pathStr.includes("package.json")) {
 				return JSON.stringify({ name: "@test/pkg" });
 			}
@@ -124,27 +125,22 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle missing CHANGELOG", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(
-					Buffer.from(
-						JSON.stringify({
-							releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
-							changesets: [],
-						}),
-					),
-				);
-			}
-			return 0;
-		});
-
 		vi.mocked(fs.existsSync).mockImplementation((path) => {
 			const pathStr = String(path);
-			return pathStr.includes("package.json") && !pathStr.includes("CHANGELOG");
+			// Changeset temp file exists, package.json exists, but CHANGELOG does not
+			return (
+				pathStr.includes(".changeset-status") || (pathStr.includes("package.json") && !pathStr.includes("CHANGELOG"))
+			);
 		});
 
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
+			if (pathStr.includes(".changeset-status")) {
+				return JSON.stringify({
+					releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+					changesets: [],
+				});
+			}
 			if (pathStr.includes("package.json")) {
 				return JSON.stringify({ name: "@test/pkg" });
 			}
@@ -159,21 +155,22 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle package directory not found", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(
-					Buffer.from(
-						JSON.stringify({
-							releases: [{ name: "@test/unknown-pkg", newVersion: "1.0.0", type: "minor" }],
-							changesets: [],
-						}),
-					),
-				);
-			}
-			return 0;
+		vi.mocked(fs.existsSync).mockImplementation((path) => {
+			const pathStr = String(path);
+			// Only changeset temp file exists, package.json does not exist
+			return pathStr.includes(".changeset-status");
 		});
 
-		vi.mocked(fs.existsSync).mockReturnValue(false);
+		vi.mocked(fs.readFileSync).mockImplementation((path) => {
+			const pathStr = String(path);
+			if (pathStr.includes(".changeset-status")) {
+				return JSON.stringify({
+					releases: [{ name: "@test/unknown-pkg", newVersion: "1.0.0", type: "minor" }],
+					changesets: [],
+				});
+			}
+			return "";
+		});
 
 		const result = await generateReleaseNotesPreview();
 
@@ -197,23 +194,15 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle version section not found in CHANGELOG", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(
-					Buffer.from(
-						JSON.stringify({
-							releases: [{ name: "@test/pkg", newVersion: "2.0.0", type: "major" }],
-							changesets: [],
-						}),
-					),
-				);
-			}
-			return 0;
-		});
-
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
+			if (pathStr.includes(".changeset-status")) {
+				return JSON.stringify({
+					releases: [{ name: "@test/pkg", newVersion: "2.0.0", type: "major" }],
+					changesets: [],
+				});
+			}
 			if (pathStr.includes("package.json")) {
 				return JSON.stringify({ name: "@test/pkg" });
 			}
@@ -236,26 +225,18 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle multiple packages", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(
-					Buffer.from(
-						JSON.stringify({
-							releases: [
-								{ name: "@test/pkg-a", newVersion: "1.0.0", type: "minor" },
-								{ name: "@test/pkg-b", newVersion: "2.0.0", type: "major" },
-							],
-							changesets: [],
-						}),
-					),
-				);
-			}
-			return 0;
-		});
-
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
+			if (pathStr.includes(".changeset-status")) {
+				return JSON.stringify({
+					releases: [
+						{ name: "@test/pkg-a", newVersion: "1.0.0", type: "minor" },
+						{ name: "@test/pkg-b", newVersion: "2.0.0", type: "major" },
+					],
+					changesets: [],
+				});
+			}
 			if (pathStr.includes("package.json")) {
 				if (pathStr.includes("pkg-a")) {
 					return JSON.stringify({ name: "@test/pkg-a" });
@@ -284,7 +265,14 @@ describe("generate-release-notes-preview", () => {
 
 		await generateReleaseNotesPreview();
 
-		expect(exec.exec).toHaveBeenCalledWith("yarn", ["changeset", "status", "--output=json"], expect.any(Object));
+		// Command uses a temp filename: --output=.changeset-status-{timestamp}.json
+		expect(exec.exec).toHaveBeenCalledWith("yarn", expect.arrayContaining(["changeset", "status"]), expect.any(Object));
+		// Verify the output flag format
+		const calls = vi.mocked(exec.exec).mock.calls;
+		const yarnCall = calls.find((call) => call[0] === "yarn" && (call[1] as string[])?.includes("changeset"));
+		expect(yarnCall).toBeDefined();
+		const args = yarnCall?.[1] as string[];
+		expect(args?.some((arg) => arg.startsWith("--output=.changeset-status"))).toBe(true);
 	});
 
 	it("should use correct changeset command for npm", async () => {
@@ -296,27 +284,30 @@ describe("generate-release-notes-preview", () => {
 
 		await generateReleaseNotesPreview();
 
-		expect(exec.exec).toHaveBeenCalledWith("npm", ["run", "changeset", "status", "--output=json"], expect.any(Object));
+		// Command uses a temp filename: --output=.changeset-status-{timestamp}.json
+		expect(exec.exec).toHaveBeenCalledWith(
+			"npm",
+			expect.arrayContaining(["run", "changeset", "status"]),
+			expect.any(Object),
+		);
+		// Verify the output flag format
+		const calls = vi.mocked(exec.exec).mock.calls;
+		const npmCall = calls.find((call) => call[0] === "npm" && (call[1] as string[])?.includes("changeset"));
+		expect(npmCall).toBeDefined();
+		const args = npmCall?.[1] as string[];
+		expect(args?.some((arg) => arg.startsWith("--output=.changeset-status") || arg === "--")).toBe(true);
 	});
 
 	it("should handle error when reading CHANGELOG throws", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(
-					Buffer.from(
-						JSON.stringify({
-							releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
-							changesets: [],
-						}),
-					),
-				);
-			}
-			return 0;
-		});
-
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
+			if (pathStr.includes(".changeset-status")) {
+				return JSON.stringify({
+					releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+					changesets: [],
+				});
+			}
 			if (pathStr.includes("package.json")) {
 				return JSON.stringify({ name: "@test/pkg" });
 			}
@@ -335,23 +326,15 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle non-Error throw when reading CHANGELOG", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(
-					Buffer.from(
-						JSON.stringify({
-							releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
-							changesets: [],
-						}),
-					),
-				);
-			}
-			return 0;
-		});
-
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
+			if (pathStr.includes(".changeset-status")) {
+				return JSON.stringify({
+					releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+					changesets: [],
+				});
+			}
 			if (pathStr.includes("package.json")) {
 				return JSON.stringify({ name: "@test/pkg" });
 			}
@@ -368,23 +351,15 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should show 'no release notes' when notes are empty", async () => {
-		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
-			if (options?.listeners?.stdout) {
-				options.listeners.stdout(
-					Buffer.from(
-						JSON.stringify({
-							releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
-							changesets: [],
-						}),
-					),
-				);
-			}
-			return 0;
-		});
-
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
+			if (pathStr.includes(".changeset-status")) {
+				return JSON.stringify({
+					releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+					changesets: [],
+				});
+			}
 			if (pathStr.includes("package.json")) {
 				return JSON.stringify({ name: "@test/pkg" });
 			}

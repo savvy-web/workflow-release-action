@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import type { PackageValidationResult } from "../types/shared-types.js";
+import { findPublishablePath } from "./find-package-path.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -91,102 +92,6 @@ async function isPackagePublishable(packagePath: string, packageName: string): P
 		/* v8 ignore next -- @preserve */
 		return false;
 	}
-}
-
-/**
- * Finds the file system path for a package
- *
-
- * @param exec - GitHub Actions exec module
- * @param packageName - Package name to find
- * @returns Package path or null if not found
- *
- * @remarks
- * This function tries multiple strategies:
- * 1. Use npm list to find the package
- * 2. Try common monorepo directory patterns
- */
-async function findPackagePath(packageName: string): Promise<string | null> {
-	// Try npm list first
-	let listResult = "";
-	const listOptions = {
-		listeners: {
-			stdout: (data: Buffer): void => {
-				listResult += data.toString();
-			},
-		},
-		silent: true,
-		ignoreReturnCode: true,
-	};
-
-	try {
-		await exec.exec("npm", ["list", packageName, "--json"], listOptions);
-
-		if (listResult) {
-			const parsed = JSON.parse(listResult);
-			const path = findPath(parsed, packageName);
-
-			if (path) {
-				core.debug(`Found package ${packageName} at: ${path}`);
-				return path;
-			}
-		}
-	} catch (error) {
-		core.debug(`Could not find package path using npm list: ${error instanceof Error ? error.message : String(error)}`);
-	}
-
-	// Fallback: try common monorepo patterns
-	const baseName = packageName.split("/").pop();
-	const commonPaths = [`packages/${baseName}`, `pkgs/${baseName}`, `apps/${baseName}`, `./${baseName}`];
-
-	for (const path of commonPaths) {
-		const exitCode = await exec.exec("test", ["-f", `${path}/package.json`], {
-			ignoreReturnCode: true,
-			silent: true,
-		});
-
-		if (exitCode === 0) {
-			core.debug(`Found package ${packageName} at: ${path}`);
-			return path;
-		}
-	}
-
-	core.warning(`Could not find path for package: ${packageName}`);
-	return null;
-}
-
-/**
- * Recursively finds package path in npm list output
- *
- * @param obj - npm list JSON output
- * @param packageName - Package to find
- * @param currentPath - Current path being explored
- * @returns Package path or null
- */
-function findPath(
-	obj: { dependencies?: Record<string, unknown> },
-	packageName: string,
-	currentPath: string = ".",
-): string | null {
-	if (!obj.dependencies) {
-		return null;
-	}
-
-	if (packageName in obj.dependencies) {
-		return currentPath;
-	}
-
-	for (const [_name, dep] of Object.entries(obj.dependencies)) {
-		const depObj = dep as { dependencies?: Record<string, unknown> };
-		if (depObj.dependencies) {
-			const result = findPath(depObj, packageName, currentPath);
-			if (result) {
-				return result;
-			}
-		}
-	}
-
-	return null;
 }
 
 /**
@@ -357,7 +262,8 @@ export async function validatePublishGitHubPackages(
 	const validationResults: PackageValidationResult[] = [];
 
 	for (const pkg of publishablePackages) {
-		const packagePath = await findPackagePath(pkg.name);
+		// Find the publishable path (workspace path + dist/npm)
+		const packagePath = findPublishablePath(pkg.name);
 
 		if (!packagePath) {
 			core.warning(`Could not find path for package: ${pkg.name}`);

@@ -1,7 +1,10 @@
+import * as fs from "node:fs";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getWorkspaces } from "workspace-tools";
+import { clearWorkspaceCache } from "../src/utils/find-package-path.js";
 import { validateNPMPublish, validatePackageNPMPublish } from "../src/utils/validate-publish-npm.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.js";
@@ -10,12 +13,17 @@ import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.j
 vi.mock("@actions/core");
 vi.mock("@actions/exec");
 vi.mock("@actions/github");
+vi.mock("workspace-tools");
+vi.mock("node:fs");
 
 describe("validate-publish-npm", () => {
 	let mockOctokit: MockOctokit;
 
 	beforeEach(() => {
 		setupTestEnvironment({ suppressOutput: true });
+
+		// Clear workspace cache before each test
+		clearWorkspaceCache();
 
 		vi.mocked(core.getInput).mockImplementation((name: string) => {
 			if (name === "token") return "test-token";
@@ -44,10 +52,28 @@ describe("validate-publish-npm", () => {
 
 		// Default exec mock
 		vi.mocked(exec.exec).mockResolvedValue(0);
+
+		// Default workspace-tools mock - empty workspaces
+		vi.mocked(getWorkspaces).mockReturnValue([]);
+
+		// Default fs mocks for changeset status temp file
+		vi.mocked(fs.existsSync).mockImplementation((path) => {
+			const pathStr = String(path);
+			return pathStr.includes(".changeset-status");
+		});
+		vi.mocked(fs.readFileSync).mockImplementation((path) => {
+			const pathStr = String(path);
+			if (pathStr.includes(".changeset-status")) {
+				return JSON.stringify({ releases: [], changesets: [] });
+			}
+			return "";
+		});
+		vi.mocked(fs.unlinkSync).mockImplementation(() => {});
 	});
 
 	afterEach(() => {
 		cleanupTestEnvironment();
+		clearWorkspaceCache();
 	});
 
 	describe("validatePackageNPMPublish", () => {
@@ -233,36 +259,29 @@ describe("validate-publish-npm", () => {
 
 	describe("validateNPMPublish", () => {
 		it("should validate all packages successfully", async () => {
+			// Mock workspace-tools to return a package
+			vi.mocked(getWorkspaces).mockReturnValue([
+				{
+					name: "@test/pkg",
+					path: "/path/to/pkg",
+					packageJson: { name: "@test/pkg", version: "1.0.0", packageJsonPath: "/path/to/pkg/package.json" },
+				},
+			]);
+
+			// Mock fs to return changeset status
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				return "";
+			});
+
 			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-				// Changeset status
-				if (cmd === "pnpm" && args?.includes("changeset")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(
-							Buffer.from(
-								JSON.stringify({
-									releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
-									changesets: [],
-								}),
-							),
-						);
-					}
-					return 0;
-				}
-				// npm list for finding package path
-				if (cmd === "npm" && args?.includes("list")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(
-							Buffer.from(
-								JSON.stringify({
-									dependencies: {
-										"@test/pkg": { path: "/path/to/pkg" },
-									},
-								}),
-							),
-						);
-					}
-					return 0;
-				}
 				// cat for package.json
 				if (cmd === "cat") {
 					if (options?.listeners?.stdout) {
@@ -295,31 +314,16 @@ describe("validate-publish-npm", () => {
 		});
 
 		it("should handle no packages to validate", async () => {
-			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-				if (cmd === "pnpm" && args?.includes("changeset")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
-					}
-				}
-				return 0;
-			});
-
+			// Default fs mock already returns empty releases
 			const result = await validateNPMPublish("pnpm", "main", false);
 
-			expect(result.success).toBe(false);
+			// No packages = success (nothing to validate)
+			expect(result.success).toBe(true);
 			expect(result.results).toHaveLength(0);
 		});
 
 		it("should include dry-run in check name", async () => {
-			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-				if (cmd === "pnpm" && args?.includes("changeset")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
-					}
-				}
-				return 0;
-			});
-
+			// Default fs mock already returns empty releases
 			await validateNPMPublish("pnpm", "main", true);
 
 			expect(mockOctokit.rest.checks.create).toHaveBeenCalledWith(
@@ -330,70 +334,44 @@ describe("validate-publish-npm", () => {
 		});
 
 		it("should use yarn command for yarn package manager", async () => {
-			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-				if (cmd === "yarn" && args?.includes("changeset")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
-					}
-				}
-				return 0;
-			});
-
 			await validateNPMPublish("yarn", "main", false);
 
-			expect(exec.exec).toHaveBeenCalledWith("yarn", ["changeset", "status", "--output=json"], expect.any(Object));
+			// Command uses a temp filename: --output=.changeset-status-{timestamp}.json
+			expect(exec.exec).toHaveBeenCalledWith(
+				"yarn",
+				expect.arrayContaining(["changeset", "status"]),
+				expect.any(Object),
+			);
 		});
 
 		it("should skip packages when path is not found", async () => {
-			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-				// Changeset status
-				if (cmd === "pnpm" && args?.includes("changeset")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(
-							Buffer.from(
-								JSON.stringify({
-									releases: [{ name: "@test/unknown-pkg", newVersion: "1.0.0", type: "minor" }],
-									changesets: [],
-								}),
-							),
-						);
-					}
-					return 0;
+			// workspace-tools returns empty array (no matching package)
+			vi.mocked(getWorkspaces).mockReturnValue([]);
+
+			// Mock fs to return a release
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/unknown-pkg", newVersion: "1.0.0", type: "minor" }],
+						changesets: [],
+					});
 				}
-				// npm list for finding package path - return empty
-				if (cmd === "npm" && args?.includes("list")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify({})));
-					}
-					return 0;
-				}
-				// test for package.json existence - all fail
-				if (cmd === "test") {
-					return 1;
-				}
-				return 0;
+				return "";
 			});
 
 			await validateNPMPublish("pnpm", "main", false);
 
-			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find path"));
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find"));
 		});
 
 		it("should use npm run for npm package manager", async () => {
-			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-				if (cmd === "npm" && args?.includes("run") && args?.includes("changeset")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
-					}
-				}
-				return 0;
-			});
-
 			await validateNPMPublish("npm", "main", false);
 
+			// Command uses a temp filename: --output=.changeset-status-{timestamp}.json
 			expect(exec.exec).toHaveBeenCalledWith(
 				"npm",
-				["run", "changeset", "status", "--output=json"],
+				expect.arrayContaining(["run", "changeset", "status"]),
 				expect.any(Object),
 			);
 		});
@@ -549,33 +527,34 @@ describe("validate-publish-npm", () => {
 			expect(result.canPublish).toBe(false);
 		});
 
-		it("should find package via common monorepo paths when npm list fails", async () => {
+		it("should find package via workspace-tools", async () => {
+			// Mock workspace-tools to return a package
+			vi.mocked(getWorkspaces).mockReturnValue([
+				{
+					name: "@test/my-pkg",
+					path: "/path/to/packages/my-pkg",
+					packageJson: {
+						name: "@test/my-pkg",
+						version: "1.0.0",
+						packageJsonPath: "/path/to/packages/my-pkg/package.json",
+					},
+				},
+			]);
+
+			// Mock fs to return changeset status
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/my-pkg", newVersion: "1.0.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				return "";
+			});
+
 			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-				// Changeset status
-				if (cmd === "pnpm" && args?.includes("changeset")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(
-							Buffer.from(
-								JSON.stringify({
-									releases: [{ name: "@test/my-pkg", newVersion: "1.0.0", type: "minor" }],
-									changesets: [],
-								}),
-							),
-						);
-					}
-					return 0;
-				}
-				// npm list - throws error
-				if (cmd === "npm" && args?.includes("list")) {
-					throw new Error("npm list failed");
-				}
-				// test for package.json - packages/my-pkg exists
-				if (cmd === "test" && args?.[1]?.includes("packages/my-pkg")) {
-					return 0;
-				}
-				if (cmd === "test") {
-					return 1;
-				}
 				// cat for package.json
 				if (cmd === "cat") {
 					if (options?.listeners?.stdout) {
@@ -652,40 +631,45 @@ describe("validate-publish-npm", () => {
 		});
 
 		it("should report failure check summary when some packages fail", async () => {
+			// Mock workspace-tools to return both packages
+			vi.mocked(getWorkspaces).mockReturnValue([
+				{
+					name: "@test/pkg-a",
+					path: "/path/to/pkg-a",
+					packageJson: {
+						name: "@test/pkg-a",
+						version: "1.0.0",
+						packageJsonPath: "/path/to/pkg-a/package.json",
+					},
+				},
+				{
+					name: "@test/pkg-b",
+					path: "/path/to/pkg-b",
+					packageJson: {
+						name: "@test/pkg-b",
+						version: "2.0.0",
+						packageJsonPath: "/path/to/pkg-b/package.json",
+					},
+				},
+			]);
+
+			// Mock fs to return changeset status with two packages
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [
+							{ name: "@test/pkg-a", newVersion: "1.0.0", type: "minor" },
+							{ name: "@test/pkg-b", newVersion: "2.0.0", type: "major" },
+						],
+						changesets: [],
+					});
+				}
+				return "";
+			});
+
 			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-				// Changeset status - return two packages
-				if (cmd === "pnpm" && args?.includes("changeset")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(
-							Buffer.from(
-								JSON.stringify({
-									releases: [
-										{ name: "@test/pkg-a", newVersion: "1.0.0", type: "minor" },
-										{ name: "@test/pkg-b", newVersion: "2.0.0", type: "major" },
-									],
-									changesets: [],
-								}),
-							),
-						);
-					}
-					return 0;
-				}
-				// npm list for finding package paths
-				if (cmd === "npm" && args?.includes("list")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(
-							Buffer.from(
-								JSON.stringify({
-									dependencies: {
-										"@test/pkg-a": { path: "/path/to/pkg-a" },
-										"@test/pkg-b": { path: "/path/to/pkg-b" },
-									},
-								}),
-							),
-						);
-					}
-					return 0;
-				}
 				// cat for package.json - first pkg is publishable, second is private
 				if (cmd === "cat") {
 					if (args?.[0]?.includes("pkg-a")) {
@@ -731,41 +715,34 @@ describe("validate-publish-npm", () => {
 			);
 		});
 
-		it("should find package via recursive dependency search", async () => {
+		it("should find nested package via workspace-tools", async () => {
+			// Mock workspace-tools to return a nested package
+			vi.mocked(getWorkspaces).mockReturnValue([
+				{
+					name: "@test/nested-pkg",
+					path: "/path/to/packages/nested/nested-pkg",
+					packageJson: {
+						name: "@test/nested-pkg",
+						version: "1.0.0",
+						packageJsonPath: "/path/to/packages/nested/nested-pkg/package.json",
+					},
+				},
+			]);
+
+			// Mock fs to return changeset status
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/nested-pkg", newVersion: "1.0.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				return "";
+			});
+
 			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-				// Changeset status
-				if (cmd === "pnpm" && args?.includes("changeset")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(
-							Buffer.from(
-								JSON.stringify({
-									releases: [{ name: "@test/nested-pkg", newVersion: "1.0.0", type: "minor" }],
-									changesets: [],
-								}),
-							),
-						);
-					}
-					return 0;
-				}
-				// npm list - return nested structure where package is in a nested dependency
-				if (cmd === "npm" && args?.includes("list")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(
-							Buffer.from(
-								JSON.stringify({
-									dependencies: {
-										"@other/pkg": {
-											dependencies: {
-												"@test/nested-pkg": { path: "/path/to/nested-pkg" },
-											},
-										},
-									},
-								}),
-							),
-						);
-					}
-					return 0;
-				}
 				// cat for package.json
 				if (cmd === "cat") {
 					if (options?.listeners?.stdout) {
@@ -793,38 +770,35 @@ describe("validate-publish-npm", () => {
 			expect(result.results[0].name).toBe("@test/nested-pkg");
 		});
 
-		it("should handle npm list returning dependency with resolved field", async () => {
+		it("should use dist/npm path for publishable packages", async () => {
+			// Mock workspace-tools to return a package
+			vi.mocked(getWorkspaces).mockReturnValue([
+				{
+					name: "@test/resolved-pkg",
+					path: "/path/to/packages/resolved-pkg",
+					packageJson: {
+						name: "@test/resolved-pkg",
+						version: "1.0.0",
+						packageJsonPath: "/path/to/packages/resolved-pkg/package.json",
+					},
+				},
+			]);
+
+			// Mock fs to return changeset status
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/resolved-pkg", newVersion: "1.0.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				return "";
+			});
+
 			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-				// Changeset status
-				if (cmd === "pnpm" && args?.includes("changeset")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(
-							Buffer.from(
-								JSON.stringify({
-									releases: [{ name: "@test/resolved-pkg", newVersion: "1.0.0", type: "minor" }],
-									changesets: [],
-								}),
-							),
-						);
-					}
-					return 0;
-				}
-				// npm list - return dependency with resolved field instead of path
-				if (cmd === "npm" && args?.includes("list")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(
-							Buffer.from(
-								JSON.stringify({
-									dependencies: {
-										"@test/resolved-pkg": { resolved: "/path/to/resolved-pkg" },
-									},
-								}),
-							),
-						);
-					}
-					return 0;
-				}
-				// cat for package.json
+				// cat for package.json - note the path includes dist/npm
 				if (cmd === "cat") {
 					if (options?.listeners?.stdout) {
 						options.listeners.stdout(
@@ -848,6 +822,8 @@ describe("validate-publish-npm", () => {
 			const result = await validateNPMPublish("pnpm", "main", false);
 
 			expect(result.results).toHaveLength(1);
+			// The path should include dist/npm subdirectory
+			expect(result.results[0].path).toContain("dist/npm");
 		});
 	});
 });
