@@ -629,7 +629,7 @@ describe("get-changeset-status", () => {
 		});
 
 		// Should fall through to merge-base handling
-		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, _options?: ExecOptionsWithListeners) => {
 			if (cmd === "git" && args?.[0] === "rev-parse") {
 				throw new Error("Not a git repo");
 			}

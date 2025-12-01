@@ -1,7 +1,5 @@
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
-import type { Context } from "@actions/github/lib/context";
-import type { GitHub } from "@actions/github/lib/utils";
 import Anthropic from "@anthropic-ai/sdk";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -96,53 +94,51 @@ async function withRetry<T>(
 /**
  * Generates PR description using Claude API
  *
- * @param coreModule - GitHub Actions core module
- * @param AnthropicClass - Anthropic SDK class
  * @param linkedIssues - Linked issues from commits
  * @param commits - Commit information
  * @param apiKey - Anthropic API key
  * @returns Generated description
  */
 async function generateDescriptionWithClaude(
-	coreModule: typeof core,
-	AnthropicClass: typeof Anthropic,
 	linkedIssues: LinkedIssue[],
 	commits: CommitInfo[],
 	apiKey: string,
 ): Promise<string> {
-	const core = coreModule;
-
 	core.info("Calling Claude API to generate PR description");
 
-	// Build prompt
-	const issuesContext =
-		linkedIssues.length > 0
-			? `
-## Linked Issues
+	// Build prompt using summaryWriter
+	const promptSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
+		{
+			content:
+				"You are helping to generate a pull request description for a release. Based on the linked issues and commits below, create a concise bulleted list of changes.",
+		},
+	];
 
-${linkedIssues.map((issue) => `- #${issue.number}: ${issue.title} (${issue.state})`).join("\n")}
-`
-			: "";
+	if (linkedIssues.length > 0) {
+		promptSections.push({
+			heading: "Linked Issues",
+			content: summaryWriter.list(linkedIssues.map((issue) => `#${issue.number}: ${issue.title} (${issue.state})`)),
+		});
+	}
 
-	const commitsContext = `
-## Commits
+	promptSections.push({
+		heading: "Commits",
+		content: summaryWriter.list(
+			commits.map((c) => `${c.sha.slice(0, 7)}: ${c.message.split("\n")[0]} (by ${c.author})`),
+		),
+	});
 
-${commits.map((c) => `- ${c.sha.slice(0, 7)}: ${c.message.split("\n")[0]} (by ${c.author})`).join("\n")}
-`;
+	promptSections.push({
+		content:
+			'Please generate a bulleted markdown list (using "-" not "*") that summarizes the key changes. Focus on user-facing changes and improvements. Group related changes together. Be concise but informative.\n\nDo not include any preamble or explanation - just output the bulleted list.',
+	});
 
-	const prompt = `You are helping to generate a pull request description for a release. Based on the linked issues and commits below, create a concise bulleted list of changes.
-
-${issuesContext}
-${commitsContext}
-
-Please generate a bulleted markdown list (using "-" not "*") that summarizes the key changes. Focus on user-facing changes and improvements. Group related changes together. Be concise but informative.
-
-Do not include any preamble or explanation - just output the bulleted list.`;
+	const prompt = summaryWriter.build(promptSections);
 
 	core.debug(`Prompt sent to Claude:\n${prompt}`);
 
 	// Call Claude API with retry
-	const anthropic = new AnthropicClass({ apiKey });
+	const anthropic = new Anthropic({ apiKey });
 
 	const response = await withRetry(async () => {
 		return await anthropic.messages.create({
@@ -174,29 +170,23 @@ Do not include any preamble or explanation - just output the bulleted list.`;
 /**
  * Generates PR description and updates the pull request
  *
- * @param coreModule - GitHub Actions core module
- * @param AnthropicClass - Anthropic SDK class
- * @param github - GitHub API client
- * @param context - GitHub Actions context
+ * @param token - GitHub token
  * @param linkedIssues - Linked issues from commits
  * @param commits - Commits in the release
- * @param prNumber - Pull request number
+ * @param prNumber - Pull request number to update
  * @param apiKey - Anthropic API key
  * @param dryRun - Whether this is a dry-run
  * @returns PR description result
  */
-async function generatePRDescription(
-	coreModule: typeof core,
-	AnthropicClass: typeof Anthropic,
-	github: InstanceType<typeof GitHub>,
-	context: Context,
+export async function generatePRDescriptionDirect(
+	token: string,
 	linkedIssues: LinkedIssue[],
 	commits: CommitInfo[],
 	prNumber: number,
 	apiKey: string,
 	dryRun: boolean,
 ): Promise<PRDescriptionResult> {
-	const core = coreModule;
+	const github = getOctokit(token);
 
 	core.startGroup("Generating PR description");
 
@@ -205,27 +195,34 @@ async function generatePRDescription(
 	// Handle empty inputs
 	if (linkedIssues.length === 0 && commits.length === 0) {
 		core.warning("No linked issues or commits provided");
-		description = "## Changes\n\n_No changes detected_";
+		description = summaryWriter.build([{ heading: "Changes", content: "_No changes detected_" }]);
 	} else {
 		// Generate description with Claude
 		try {
-			description = await generateDescriptionWithClaude(core, AnthropicClass, linkedIssues, commits, apiKey);
+			description = await generateDescriptionWithClaude(linkedIssues, commits, apiKey);
 		} catch (error) {
 			core.warning(
 				`Failed to generate description with Claude: ${error instanceof Error ? error.message : String(error)}`,
 			);
 
 			// Fallback to basic description
-			description = "## Changes\n\n";
+			const fallbackSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
+				{ heading: "Changes", content: "" },
+			];
+
 			if (linkedIssues.length > 0) {
-				description += "### Linked Issues\n\n";
-				description += linkedIssues.map((issue) => `- Fixes #${issue.number}: ${issue.title}`).join("\n");
-				description += "\n\n";
+				const issuesList = summaryWriter.list(linkedIssues.map((issue) => `Fixes #${issue.number}: ${issue.title}`));
+				fallbackSections.push({ heading: "Linked Issues", level: 3, content: issuesList });
 			}
+
 			if (commits.length > 0) {
-				description += "### Commits\n\n";
-				description += commits.map((c) => `- ${c.message.split("\n")[0]} (${c.sha.slice(0, 7)})`).join("\n");
+				const commitsList = summaryWriter.list(
+					commits.map((c) => `${c.message.split("\n")[0]} (${c.sha.slice(0, 7)})`),
+				);
+				fallbackSections.push({ heading: "Commits", level: 3, content: commitsList });
 			}
+
+			description = summaryWriter.build(fallbackSections);
 		}
 	}
 
@@ -320,28 +317,4 @@ async function generatePRDescription(
 		description,
 		checkId: checkRun.id,
 	};
-}
-
-/**
- * Direct function export for calling from main.ts
- *
- * @param token - GitHub token
- * @param linkedIssues - Linked issues from commits
- * @param commits - Commits in the release
- * @param prNumber - Pull request number to update
- * @param apiKey - Anthropic API key (optional)
- * @param dryRun - Whether this is a dry-run
- * @returns PR description result
- */
-export async function generatePRDescriptionDirect(
-	token: string,
-	linkedIssues: LinkedIssue[],
-	commits: CommitInfo[],
-	prNumber: number,
-	apiKey: string,
-	dryRun: boolean,
-): Promise<PRDescriptionResult> {
-	const github = getOctokit(token);
-
-	return generatePRDescription(core, Anthropic, github, context, linkedIssues, commits, prNumber, apiKey, dryRun);
 }

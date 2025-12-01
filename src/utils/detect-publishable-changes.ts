@@ -4,6 +4,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { getWorkspaceRoot, getWorkspaces } from "workspace-tools";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * Package information from changeset status
@@ -289,32 +290,35 @@ export async function detectPublishableChanges(
 			? `Found ${publishablePackages.length} publishable package(s) with changes`
 			: "No publishable packages with changes";
 
-	// Build check details using markdown (not core.summary HTML methods)
+	// Build check details using summaryWriter
 	// The checks API output field expects markdown, not HTML
-	const checkDetailParts: string[] = ["## Publishable Packages\n"];
+	const checkDetailSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [];
 
-	if (publishablePackages.length > 0) {
-		checkDetailParts.push(
-			publishablePackages
-				.map((pkg) => `- **${pkg.name}**: \`${pkg.oldVersion}\` → \`${pkg.newVersion}\` (${pkg.type})`)
-				.join("\n"),
-		);
-	} else {
-		checkDetailParts.push("_No publishable packages found_");
-	}
+	const packagesContent =
+		publishablePackages.length > 0
+			? summaryWriter.list(
+					publishablePackages.map(
+						(pkg) => `**${pkg.name}**: \`${pkg.oldVersion}\` → \`${pkg.newVersion}\` (${pkg.type})`,
+					),
+				)
+			: "_No publishable packages found_";
+
+	checkDetailSections.push({ heading: "Publishable Packages", content: packagesContent });
 
 	if (dryRun) {
-		checkDetailParts.push("\n\n> **Dry Run Mode**: This is a preview run. No actual publishing will occur.");
+		checkDetailSections.push({
+			content: "> **Dry Run Mode**: This is a preview run. No actual publishing will occur.",
+		});
 	}
 
-	checkDetailParts.push("\n\n## Changeset Summary\n");
-	checkDetailParts.push(
+	const changesetContent =
 		changesetStatus.changesets.length > 0
 			? `Found ${changesetStatus.changesets.length} changeset(s)`
-			: "No changesets found",
-	);
+			: "No changesets found";
 
-	const checkDetails = checkDetailParts.join("");
+	checkDetailSections.push({ heading: "Changeset Summary", content: changesetContent });
+
+	const checkDetails = summaryWriter.build(checkDetailSections);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -331,29 +335,23 @@ export async function detectPublishableChanges(
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary using markdown (core.summary HTML methods don't render well)
-	const jobSummaryParts: string[] = [`## ${checkTitle}`, "", checkSummary, "", "### Publishable Packages", ""];
+	// Write job summary using summaryWriter
+	const jobSummarySections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
+		{ heading: checkTitle, content: checkSummary },
+	];
 
-	if (publishablePackages.length > 0) {
-		jobSummaryParts.push("| Package | Current | Next | Type |");
-		jobSummaryParts.push("|---------|---------|------|------|");
-		for (const pkg of publishablePackages) {
-			jobSummaryParts.push(`| ${pkg.name} | ${pkg.oldVersion} | ${pkg.newVersion} | ${pkg.type} |`);
-		}
-	} else {
-		jobSummaryParts.push("_No publishable packages found_");
-	}
+	const jobPackagesContent =
+		publishablePackages.length > 0
+			? summaryWriter.table(
+					["Package", "Current", "Next", "Type"],
+					publishablePackages.map((pkg) => [pkg.name, pkg.oldVersion, pkg.newVersion, pkg.type]),
+				)
+			: "_No publishable packages found_";
 
-	jobSummaryParts.push("");
-	jobSummaryParts.push("### Changeset Summary");
-	jobSummaryParts.push("");
-	jobSummaryParts.push(
-		changesetStatus.changesets.length > 0
-			? `Found ${changesetStatus.changesets.length} changeset(s)`
-			: "No changesets found",
-	);
+	jobSummarySections.push({ heading: "Publishable Packages", level: 3, content: jobPackagesContent });
+	jobSummarySections.push({ heading: "Changeset Summary", level: 3, content: changesetContent });
 
-	await core.summary.addRaw(`${jobSummaryParts.join("\n")}\n\n`).write();
+	await summaryWriter.write(summaryWriter.build(jobSummarySections));
 
 	return {
 		hasChanges: publishablePackages.length > 0,

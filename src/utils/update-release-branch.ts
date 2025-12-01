@@ -252,17 +252,16 @@ function buildLinkedIssuesSection(linkedIssues: LinkedIssue[]): string {
 		return "";
 	}
 
-	let section = "## Linked Issues\n\n";
-	for (const issue of linkedIssues) {
+	const issueItems = linkedIssues.map((issue) => {
 		if (issue.state === "closed") {
 			// Already closed issues - just show as strikethrough (don't use Closes keyword)
-			section += `- ~~#${issue.number}: ${issue.title}~~ (already closed)\n`;
-		} else {
-			// Open issues - use "Closes" keyword so GitHub detects them for closingIssuesReferences
-			section += `- Closes #${issue.number}: ${issue.title}\n`;
+			return `~~#${issue.number}: ${issue.title}~~ (already closed)`;
 		}
-	}
-	return section;
+		// Open issues - use "Closes" keyword so GitHub detects them for closingIssuesReferences
+		return `Closes #${issue.number}: ${issue.title}`;
+	});
+
+	return summaryWriter.build([{ heading: "Linked Issues", content: summaryWriter.list(issueItems) }]);
 }
 
 /**

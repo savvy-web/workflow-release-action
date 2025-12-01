@@ -41,13 +41,14 @@ describe("summary-writer", () => {
 				],
 			);
 
-			expect(result).toBe("| Name | Value |\n" + "|---|---|\n" + "| foo | bar |\n" + "| baz | qux |");
+			// ts-markdown pads columns for alignment
+			expect(result).toBe("| Name | Value |\n" + "| ---- | ----- |\n" + "| foo  | bar   |\n" + "| baz  | qux   |");
 		});
 
 		it("should handle empty rows", () => {
 			const result = summaryWriter.table(["A", "B"], []);
 
-			expect(result).toBe("| A | B |\n|---|---|");
+			expect(result).toBe("| A   | B   |\n" + "| --- | --- |");
 		});
 	});
 
@@ -58,15 +59,16 @@ describe("summary-writer", () => {
 				{ key: "Count", value: "5" },
 			]);
 
+			// ts-markdown pads columns for alignment
 			expect(result).toBe(
-				"| Property | Value |\n" + "|----------|-------|\n" + "| Status | Success |\n" + "| Count | 5 |",
+				"| Property | Value   |\n" + "| -------- | ------- |\n" + "| Status   | Success |\n" + "| Count    | 5       |",
 			);
 		});
 
 		it("should handle empty entries", () => {
 			const result = summaryWriter.keyValueTable([]);
 
-			expect(result).toBe("| Property | Value |\n|----------|-------|");
+			expect(result).toBe("| Property | Value |\n" + "| -------- | ----- |");
 		});
 	});
 

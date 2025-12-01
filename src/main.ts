@@ -12,6 +12,7 @@ import { generatePRDescriptionDirect } from "./utils/generate-pr-description.js"
 import { generateReleaseNotesPreview } from "./utils/generate-release-notes-preview.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
 import { PHASE, logger } from "./utils/logger.js";
+import { summaryWriter } from "./utils/summary-writer.js";
 import { updateReleaseBranch } from "./utils/update-release-branch.js";
 import { updateStickyComment } from "./utils/update-sticky-comment.js";
 import { validateBuilds } from "./utils/validate-builds.js";
@@ -602,23 +603,39 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				const allSuccess = validationResults.every((r) => r.success);
 				const failedChecks = validationResults.filter((r) => !r.success);
 
+				// Build validation results table
+				const validationTable = summaryWriter.table(
+					["Check", "Status"],
+					validationResults.map((r) => [r.name, r.success ? "✅ Passed" : "❌ Failed"]),
+				);
+
+				// Build failed checks section or success message
+				const statusSection =
+					failedChecks.length > 0
+						? summaryWriter.build([
+								{
+									heading: "❌ Failed Checks",
+									level: 3,
+									content: `${summaryWriter.list(failedChecks.map((c) => `**${c.name}**`))}\n\nPlease resolve the issues above before merging.`,
+								},
+							])
+						: summaryWriter.build([
+								{
+									heading: "✅ All Validations Passed",
+									level: 3,
+									content: "This PR is ready to merge!",
+								},
+							]);
+
 				const commentBody = `<!-- sticky-comment-id: release-validation -->
 ## 📦 Release Validation ${allSuccess ? "✅" : "❌"}
 
 ${inputs.dryRun ? "> 🧪 **DRY RUN MODE** - No actual publishing will occur\n\n" : ""}
-
 ### Validation Results
 
-| Check | Status |
-|-------|--------|
-${validationResults.map((r) => `| ${r.name} | ${r.success ? "✅ Passed" : "❌ Failed"} |`).join("\n")}
+${validationTable}
 
-${
-	failedChecks.length > 0
-		? `### ❌ Failed Checks\n\n${failedChecks.map((c) => `- **${c.name}**`).join("\n")}\n\nPlease resolve the issues above before merging.`
-		: "### ✅ All Validations Passed\n\nThis PR is ready to merge!"
-}
-
+${statusSection}
 ---
 
 <sub>Updated at ${new Date().toISOString()}</sub>

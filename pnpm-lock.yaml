@@ -44,6 +44,9 @@ importers:
       semver:
         specifier: ^7.7.3
         version: 7.7.3
+      ts-markdown:
+        specifier: ^1.3.0
+        version: 1.3.0
       workspace-tools:
         specifier: 0.38.6
         version: 0.38.6
@@ -2355,6 +2358,9 @@ packages:
 
   ts-algebra@2.0.0:
     resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
+
+  ts-markdown@1.3.0:
+    resolution: {integrity: sha512-0A4vh4xUQfcLK17cmiNmDPu4CE0nBk5Yjk7QJPwVaqPpoKDssG2/cuev6KDymbqj8cfUBmEhN6BxP9Mwi+dz6w==}
 
   tslib@1.14.1:
     resolution: {integrity: sha512-Xni35NKzjgMrwevysHTCArtLDpPvye8zV/0E4EyYn43P7/7qvQwPh9BGkHewbMulVntbigmcT7rdX3BNo9wRJg==}
@@ -4966,6 +4972,10 @@ snapshots:
   tr46@0.0.3: {}
 
   ts-algebra@2.0.0: {}
+
+  ts-markdown@1.3.0:
+    dependencies:
+      yaml: 2.8.1
 
   tslib@1.14.1: {}
 

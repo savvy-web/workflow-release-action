@@ -1,20 +1,10 @@
 {
 	"mcpServers": {
-		"github": {
-			"command": "docker",
-			"args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "-e", "GITHUB_HOST"],
-			"image": "ghcr.io/github/github-mcp-server:latest"
-		},
 		"playwright": {
+			"type": "stdio",
 			"command": "npx",
-			"args": ["-y", "@playwright/mcp@latest"],
-			"env": {
-				"PLAYWRIGHT_BROWSERS_PATH": "0"
-			}
-		},
-		"npm-sentinel-mcp": {
-			"command": "npx",
-			"args": ["-y", "@nekzus/mcp-server@latest"]
+			"args": ["@playwright/mcp@latest"],
+			"env": {}
 		}
 	}
 }
