@@ -1,30 +1,28 @@
-# **tests**/CLAUDE.md
+# __tests__/CLAUDE.md
 
-Unit testing strategy, mocking patterns, and coverage requirements for workflow-runtime-action.
+Unit testing strategy, mocking patterns, and coverage requirements for workflow-release-action.
 
-**See also:** [Root CLAUDE.md](../CLAUDE.md) for repository overview | [**fixtures**/CLAUDE.md](../__fixtures__/CLAUDE.md) for integration testing.
+__See also:__ [Root CLAUDE.md](../CLAUDE.md) for repository overview | [src/CLAUDE.md](../src/CLAUDE.md) for source code architecture.
 
 ## Testing Strategy
 
-This action uses a **dual testing approach**:
+This action uses __unit tests__ with Vitest for fast, isolated testing of individual utility functions. All external dependencies (GitHub API, exec, file system) are mocked to ensure tests are:
 
-1. **Unit Tests** (this document) - Fast, isolated tests of individual utility functions with Vitest
-2. **Fixture Tests** (see [**fixtures**/CLAUDE.md](../__fixtures__/CLAUDE.md)) - Real-world integration tests in GitHub Actions workflows
-
-Unit tests provide fast feedback during development and ensure code coverage thresholds are met.
+- __Fast__ - No network requests or file system operations
+- __Reliable__ - No flaky tests due to external dependencies
+- __Isolated__ - Each test runs independently
 
 ## Test Organization
 
 ```text
 __tests__/
-├── cache-utils.test.ts       # Dependency caching tests
-├── install-biome.test.ts     # Biome installation tests
-├── install-bun.test.ts       # Bun installation tests
-├── install-deno.test.ts      # Deno installation tests
-├── install-node.test.ts      # Node.js installation tests
-├── main.test.ts              # Main action orchestration tests
+├── check-release-branch.test.ts      # Release branch detection tests
+├── detect-publishable-changes.test.ts # Changeset status parsing tests
+├── update-sticky-comment.test.ts     # PR comment management tests
+├── validate-builds.test.ts           # Build validation tests
 └── utils/
-    └── github-mocks.ts       # Shared test utilities
+    ├── github-mocks.ts               # Shared mock factory functions
+    └── test-types.ts                 # Type definitions for mocks
 ```
 
 ## Running Tests
@@ -37,7 +35,7 @@ pnpm test
 pnpm test --watch
 
 # Run specific test file
-pnpm test __tests__/install-node.test.ts
+pnpm test __tests__/check-release-branch.test.ts
 
 # View coverage report
 open coverage/index.html
@@ -45,165 +43,409 @@ open coverage/index.html
 
 ## Coverage Requirements
 
-Configured in [../vitest.config.ts](../vitest.config.ts):
+Configured in [vitest.config.ts](../vitest.config.ts):
 
 ```json
 {
   "branches": 85,
-  "functions": 90,
-  "lines": 90,
-  "statements": 90
+  "functions": 85,
+  "lines": 85,
+  "statements": 85
 }
 ```
 
-**Current Coverage:**
+## Type-Safe Mocking Strategy
 
-* **88% branch coverage** ✅ (exceeds 85% threshold)
-* **~95%+ function/line/statement coverage** ✅ (exceeds 90% threshold)
+### Core Principle: No `any` Types
 
-## Mocking Strategy
-
-All external dependencies are mocked using Vitest to ensure tests are:
-
-* **Fast** - No network requests or file system operations
-* **Reliable** - No flaky tests due to external dependencies
-* **Isolated** - Each test runs independently
-
-### Basic Mock Setup
+__Never use `any` types in tests.__ This ensures type safety and catches errors at compile time.
 
 ```typescript
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as core from "@actions/core";
-import * as tc from "@actions/tool-cache";
-import { HttpClient } from "@actions/http-client";
-import { readdirSync } from "node:fs";
+// ❌ WRONG - Using 'any' type
+const mockOctokit = { rest: { checks: { create: vi.fn() } } } as any;
 
-// Mock all external modules
-vi.mock("@actions/core");
-vi.mock("@actions/tool-cache");
-vi.mock("@actions/http-client");
-vi.mock("node:fs");
+// ✅ CORRECT - Using proper types
+const mockOctokit = createMockOctokit();
+```
 
-describe("installNode", () => {
+### Mock Factory Functions
+
+Use the factory functions in `utils/github-mocks.ts` for consistent, type-safe mock creation:
+
+```typescript
+import { createMockOctokit, setupTestEnvironment, cleanupTestEnvironment } from "./utils/github-mocks.js";
+import type { MockOctokit } from "./utils/test-types.js";
+
+describe("my-feature", () => {
+  let mockOctokit: MockOctokit;
+
   beforeEach(() => {
-    vi.clearAllMocks();
-
-    // Setup default mocks
-    vi.mocked(core.info).mockImplementation(() => {});
-    vi.mocked(tc.find).mockReturnValue("");
+    setupTestEnvironment({ suppressOutput: true });
+    mockOctokit = createMockOctokit();
+    vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
   });
 
-  it("should install Node.js", async () => {
-    // Test implementation
+  afterEach(() => {
+    cleanupTestEnvironment();
   });
 });
 ```
 
-### Type-Safe Mocking
+### Available Mock Factories
 
-**Never use `any` types.** Always use `as unknown as Type`:
+| Function | Purpose |
+| -------- | ------- |
+| `createMockOctokit()` | GitHub Octokit client with REST API methods |
+| `createMockCore()` | @actions/core module (inputs, outputs, logging) |
+| `createMockExec()` | @actions/exec module |
+| `createMockCache()` | @actions/cache module |
+| `createMockToolCache()` | @actions/tool-cache module |
+| `createMockGlob()` | @actions/glob module |
+| `createMockHttpClient()` | @actions/http-client module |
+| `setupTestEnvironment()` | Initialize test environment |
+| `cleanupTestEnvironment()` | Clean up after tests |
+
+### MockOctokit Type Structure
+
+The `MockOctokit` interface in `test-types.ts` defines all available mock methods:
 
 ```typescript
-// ✅ Correct - Type-safe mock
-vi.mocked(readdirSync).mockReturnValue(
-  ["node-v20.11.0-linux-x64"] as unknown as ReturnType<typeof readdirSync>
-);
-
-// ✅ Correct - Class instance mock
-vi.mocked(HttpClient).mockImplementation(
-  () => ({ get: mockGet }) as unknown as InstanceType<typeof HttpClient>
-);
-
-// ❌ Incorrect - Using 'any'
-vi.mocked(readdirSync).mockReturnValue(["file.txt"] as any);
+export interface MockOctokit {
+  rest: {
+    checks: {
+      create: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+    repos: {
+      getBranch: ReturnType<typeof vi.fn>;
+    };
+    pulls: {
+      list: ReturnType<typeof vi.fn>;
+    };
+    issues: {
+      listComments: ReturnType<typeof vi.fn>;
+      createComment: ReturnType<typeof vi.fn>;
+      updateComment: ReturnType<typeof vi.fn>;
+    };
+  };
+}
 ```
 
-This ensures type safety and catches errors at compile time.
+__Important:__ All properties are required (not optional) to ensure mocks are properly initialized. This prevents issues with optional chaining not setting up mocks correctly.
 
 ## Common Mocking Patterns
 
-### Mocking HTTP Requests
-
-For functions that download binaries from external sources:
+### Mocking GitHub API Calls
 
 ```typescript
-import * as tc from "@actions/tool-cache";
+// Mock successful branch check
+mockOctokit.rest.repos.getBranch.mockResolvedValue({
+  data: { name: "release/main", commit: { sha: "abc123" } },
+});
 
-beforeEach(() => {
-  vi.mocked(tc.downloadTool).mockResolvedValue("/tmp/download-path");
-  vi.mocked(tc.extractTar).mockResolvedValue("/tmp/extracted-path");
-  vi.mocked(tc.cacheDir).mockResolvedValue("/cached/tool/path");
+// Mock branch not found
+mockOctokit.rest.repos.getBranch.mockRejectedValue(new Error("Not Found"));
+
+// Mock PR list
+mockOctokit.rest.pulls.list.mockResolvedValue({
+  data: [{ number: 123, title: "Release PR", state: "open" }],
+});
+
+// Mock check creation
+mockOctokit.rest.checks.create.mockResolvedValue({ data: { id: 12345 } });
+```
+
+### Mocking @actions/exec
+
+```typescript
+import * as exec from "@actions/exec";
+import type { ExecOptionsWithListeners } from "./utils/test-types.js";
+
+vi.mock("@actions/exec");
+
+// Mock successful execution with stdout
+vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+  if (options?.listeners?.stdout) {
+    options.listeners.stdout(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
+  }
+  return 0;
+});
+
+// Mock execution with stderr (error output)
+vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options?: ExecOptionsWithListeners) => {
+  if (options?.listeners?.stderr) {
+    options.listeners.stderr(Buffer.from("Error: Build failed\n"));
+  }
+  throw new Error("Build failed");
 });
 ```
 
 ### Mocking File System Operations
 
-For functions that read or write files:
-
 ```typescript
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 
-beforeEach(() => {
-  // Mock file existence checks
-  vi.mocked(existsSync).mockReturnValue(true);
+vi.mock("node:fs");
+vi.mock("node:fs/promises");
 
-  // Mock file reads
-  vi.mocked(readFileSync).mockReturnValue('{"version": "2.3.6"}');
+// Mock file existence
+vi.mocked(existsSync).mockReturnValue(true);
 
-  // Mock directory listings
-  vi.mocked(readdirSync).mockReturnValue(
-    ["node-v20.11.0-linux-x64"] as unknown as ReturnType<typeof readdirSync>
-  );
-});
-```
-
-### Mocking @actions/tool-cache
-
-For functions that download and cache binaries:
-
-```typescript
-import * as tc from "@actions/tool-cache";
-
-beforeEach(() => {
-  // Mock tool cache lookup
-  vi.mocked(tc.find).mockReturnValue("");
-
-  // Mock downloads
-  vi.mocked(tc.downloadTool).mockResolvedValue("/tmp/download");
-
-  // Mock extraction
-  vi.mocked(tc.extractTar).mockResolvedValue("/tmp/extracted");
-  vi.mocked(tc.extractZip).mockResolvedValue("/tmp/extracted");
-
-  // Mock caching
-  vi.mocked(tc.cacheDir).mockResolvedValue("/cached/path");
+// Mock file read with dynamic content based on path
+vi.mocked(readFile).mockImplementation(async (path) => {
+  const pathStr = String(path);
+  if (pathStr.includes("pkg-a")) {
+    return JSON.stringify({ name: "@test/pkg-a", publishConfig: { access: "public" } });
+  }
+  return '{"name": "@test/unknown"}';
 });
 ```
 
 ### Mocking @actions/core
 
-For action inputs, outputs, and logging:
-
 ```typescript
 import * as core from "@actions/core";
+
+vi.mock("@actions/core");
 
 beforeEach(() => {
   // Mock inputs
   vi.mocked(core.getInput).mockImplementation((name: string) => {
-    const inputs: Record<string, string> = {
-      "node-version": "20.x",
-      "package-manager": "pnpm",
-    };
-    return inputs[name] || "";
+    if (name === "token") return "test-token";
+    if (name === "package-manager") return "pnpm";
+    return "";
   });
 
-  // Mock outputs
-  vi.mocked(core.setOutput).mockImplementation(() => {});
+  // Mock boolean inputs
+  vi.mocked(core.getBooleanInput).mockImplementation((name: string) => {
+    if (name === "dry-run") return false;
+    return false;
+  });
 
-  // Mock logging
-  vi.mocked(core.info).mockImplementation(() => {});
-  vi.mocked(core.warning).mockImplementation(() => {});
-  vi.mocked(core.error).mockImplementation(() => {});
+  // Mock core.summary for check run output
+  const mockSummary = {
+    addHeading: vi.fn().mockReturnThis(),
+    addEOL: vi.fn().mockReturnThis(),
+    addTable: vi.fn().mockReturnThis(),
+    addRaw: vi.fn().mockReturnThis(),
+    addCodeBlock: vi.fn().mockReturnThis(),
+    write: vi.fn().mockResolvedValue(undefined),
+    stringify: vi.fn().mockReturnValue(""),
+  };
+  Object.defineProperty(core, "summary", { value: mockSummary, writable: true });
+});
+```
+
+### Mocking GitHub Context
+
+```typescript
+import { context, getOctokit } from "@actions/github";
+
+vi.mock("@actions/github");
+
+beforeEach(() => {
+  // Mock repository context
+  Object.defineProperty(vi.mocked(context), "repo", {
+    value: { owner: "test-owner", repo: "test-repo" },
+    writable: true,
+  });
+
+  // Mock commit SHA
+  Object.defineProperty(vi.mocked(context), "sha", { value: "abc123", writable: true });
+
+  // Mock Octokit
+  const mockOctokit = createMockOctokit();
+  vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
+});
+```
+
+## Testing Retry Logic with Fake Timers
+
+Functions that implement retry logic with exponential backoff should use Vitest fake timers to avoid actually waiting for delays during tests. This makes tests run instantly instead of waiting for real timeouts.
+
+### Pattern for Retry Tests
+
+```typescript
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+describe("retry logic", () => {
+  // Always reset timers in afterEach to prevent state bleeding between tests
+  afterEach(() => {
+    vi.useRealTimers(); // Reset to real timers after each test
+  });
+
+  it("should retry on transient failures", async () => {
+    vi.useFakeTimers(); // Enable fake timers for this test
+
+    // Setup mocks to fail then succeed
+    mockApiCall
+      .mockRejectedValueOnce(new Error("ECONNRESET"))
+      .mockRejectedValueOnce(new Error("Timeout"))
+      .mockResolvedValueOnce({ data: "success" });
+
+    // Start the action and advance timers
+    const actionPromise = myAction(mockArgs);
+    await vi.advanceTimersByTimeAsync(60000); // Advance 60 seconds to cover all retries
+    const result = await actionPromise;
+
+    // Verify retries happened
+    expect(mockApiCall).toHaveBeenCalledTimes(3);
+    expect(result.success).toBe(true);
+  });
+
+  it("should fail after exhausting retries", async () => {
+    vi.useFakeTimers();
+
+    mockApiCall.mockRejectedValue(new Error("ETIMEDOUT: Persistent error"));
+
+    const actionPromise = myAction(mockArgs);
+
+    // Catch rejection in a controlled way to avoid unhandled rejection errors
+    let caughtError: Error | null = null;
+    actionPromise.catch((e: Error) => {
+      caughtError = e;
+    });
+
+    await vi.advanceTimersByTimeAsync(60000); // Advance time to cover all retries
+    await vi.runAllTimersAsync(); // Ensure all timers complete
+
+    expect(caughtError).not.toBeNull();
+    expect(caughtError?.message).toContain("ETIMEDOUT");
+  });
+});
+```
+
+### Key Points
+
+| Guideline | Reason |
+| --------- | ------ |
+| Use `vi.useFakeTimers()` at the start of each retry test (not globally in `beforeEach`) | Global fake timers affect ALL async operations, not just `setTimeout`, which can break normal Promise resolution |
+| Use `vi.advanceTimersByTimeAsync(milliseconds)` instead of `vi.runAllTimersAsync()` | More reliable timer advancement for exponential backoff |
+| Set timeout to 60000ms (60 seconds) | Sufficient to cover all retry delays with exponential backoff up to 30s |
+| Always call `vi.useRealTimers()` in `afterEach()` | Prevents timer state from affecting other tests |
+| For expected rejections, use `.catch()` pattern | Avoids "Unhandled Rejection" errors in test output |
+
+### Why Not Use Fake Timers Globally?
+
+Using `vi.useFakeTimers()` in `beforeEach()` affects ALL async operations, not just `setTimeout`. This can break normal Promise resolution and cause tests to hang or fail. Only apply fake timers to specific tests that need them.
+
+### Real-World Example
+
+From [create-release-branch.test.ts](create-release-branch.test.ts):
+
+```typescript
+it("should retry on ECONNRESET errors", async () => {
+  vi.useFakeTimers(); // Enable fake timers for retry test
+
+  let versionCallCount = 0;
+  vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+    if (cmd === "pnpm" && args?.[0] === "ci:version") {
+      versionCallCount++;
+      if (versionCallCount === 1) {
+        throw new Error("ECONNRESET: Connection reset by peer");
+      }
+      return 0;
+    }
+    if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+      if (options?.listeners?.stdout) {
+        options.listeners.stdout(Buffer.from("M package.json\n"));
+      }
+    }
+    return 0;
+  });
+
+  const actionPromise = createReleaseBranch();
+  await vi.advanceTimersByTimeAsync(60000); // Advance time to cover all retries
+  const result = await actionPromise;
+
+  expect(result.created).toBe(true);
+  expect(versionCallCount).toBe(2);
+  expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("ECONNRESET"));
+});
+```
+
+### Performance Improvement
+
+Using fake timers dramatically improves test execution time:
+
+| Without Fake Timers | With Fake Timers |
+| ------------------- | ---------------- |
+| ~14.5s (waiting for real delays) | ~2.4s (instant timer advancement) |
+
+## Test File Template
+
+```typescript
+import * as core from "@actions/core";
+import { context, getOctokit } from "@actions/github";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { myFunction } from "../src/utils/my-module.js";
+import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
+import type { MockOctokit } from "./utils/test-types.js";
+
+// Mock all external dependencies at the top
+vi.mock("@actions/core");
+vi.mock("@actions/github");
+
+describe("my-module", () => {
+  let mockOctokit: MockOctokit;
+
+  beforeEach(() => {
+    setupTestEnvironment({ suppressOutput: true });
+
+    // Mock core.summary
+    const mockSummary = {
+      addHeading: vi.fn().mockReturnThis(),
+      addEOL: vi.fn().mockReturnThis(),
+      addTable: vi.fn().mockReturnThis(),
+      addRaw: vi.fn().mockReturnThis(),
+      write: vi.fn().mockResolvedValue(undefined),
+      stringify: vi.fn().mockReturnValue(""),
+    };
+    Object.defineProperty(core, "summary", { value: mockSummary, writable: true });
+
+    // Setup octokit mock
+    mockOctokit = createMockOctokit();
+    vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
+    Object.defineProperty(vi.mocked(context), "repo", {
+      value: { owner: "test-owner", repo: "test-repo" },
+      writable: true,
+    });
+    Object.defineProperty(vi.mocked(context), "sha", { value: "abc123", writable: true });
+  });
+
+  afterEach(() => {
+    cleanupTestEnvironment();
+  });
+
+  it("should do X when Y", async () => {
+    // Arrange - Setup specific mock behavior
+    mockOctokit.rest.repos.getBranch.mockResolvedValue({
+      data: { name: "main", commit: { sha: "abc123" } },
+    });
+
+    // Act - Call the function under test
+    const result = await myFunction();
+
+    // Assert - Verify results and mock calls
+    expect(result.success).toBe(true);
+    expect(mockOctokit.rest.repos.getBranch).toHaveBeenCalledWith({
+      owner: "test-owner",
+      repo: "test-repo",
+      branch: "main",
+    });
+  });
+
+  it("should handle errors gracefully", async () => {
+    // Arrange
+    mockOctokit.rest.repos.getBranch.mockRejectedValue(new Error("Not Found"));
+
+    // Act
+    const result = await myFunction();
+
+    // Assert
+    expect(result.success).toBe(false);
+  });
 });
 ```
 
@@ -214,163 +456,86 @@ beforeEach(() => {
 Cover all branches, switch cases, and error handling:
 
 ```typescript
-describe("installNode", () => {
-  it("should handle cached Node.js", async () => {
-    vi.mocked(tc.find).mockReturnValue("/cached/node");
-    // Test cached path
+describe("checkReleaseBranch", () => {
+  it("should detect when branch does not exist", async () => {
+    mockOctokit.rest.repos.getBranch.mockRejectedValue(new Error("Not Found"));
+    const result = await checkReleaseBranch("release/main", "main", false);
+    expect(result.exists).toBe(false);
   });
 
-  it("should download Node.js if not cached", async () => {
-    vi.mocked(tc.find).mockReturnValue("");
-    vi.mocked(tc.downloadTool).mockResolvedValue("/tmp/download");
-    // Test download path
-  });
-
-  it("should throw error on download failure", async () => {
-    vi.mocked(tc.find).mockReturnValue("");
-    vi.mocked(tc.downloadTool).mockRejectedValue(new Error("Network error"));
-    // Test error handling
+  it("should detect when branch exists with open PR", async () => {
+    mockOctokit.rest.repos.getBranch.mockResolvedValue({ data: { name: "release/main" } });
+    mockOctokit.rest.pulls.list.mockResolvedValue({
+      data: [{ number: 123, state: "open" }],
+    });
+    const result = await checkReleaseBranch("release/main", "main", false);
+    expect(result.exists).toBe(true);
+    expect(result.hasOpenPr).toBe(true);
   });
 });
 ```
 
-### 2. Test Configuration Validation
+### 2. Use Descriptive Test Names
 
-Test validation of package.json devEngines configuration:
+Test names should describe the scenario and expected outcome:
 
 ```typescript
-describe("validateRuntimeConfig", () => {
-  it("should validate exact versions", () => {
-    const config = { name: "node", version: "24.10.0", onFail: "error" };
-    expect(() => validateRuntimeConfig(config, 0)).not.toThrow();
-  });
+// ✅ Good - Clear scenario and expectation
+it("should skip packages with type 'none' in changeset status", async () => {});
+it("should create new comment when no existing sticky comment found", async () => {});
 
-  it("should reject missing onFail", () => {
-    const config = { name: "node", version: "24.10.0" };
-    expect(() => validateRuntimeConfig(config, 0)).toThrow("onFail must be");
-  });
-
-  it("should reject wrong onFail value", () => {
-    const config = { name: "node", version: "24.10.0", onFail: "warn" };
-    expect(() => validateRuntimeConfig(config, 0)).toThrow('onFail must be "error"');
-  });
-});
+// ❌ Bad - Vague or unclear
+it("should work", async () => {});
+it("test error", async () => {});
 ```
 
-### 3. Test Platform Differences
-
-Test platform-specific behavior (Linux tar vs Windows zip):
+### 3. Use Arrange-Act-Assert Pattern
 
 ```typescript
-describe("platform-specific extraction", () => {
-  it("should use extractTar on Linux", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    await installNode({ version: "20.11.0" });
-    expect(tc.extractTar).toHaveBeenCalled();
+it("should detect publishable changes", async () => {
+  // Arrange - Setup test data and mocks
+  const changesetStatus = {
+    releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+    changesets: [],
+  };
+  vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+    options?.listeners?.stdout?.(Buffer.from(JSON.stringify(changesetStatus)));
+    return 0;
   });
 
-  it("should use extractZip on Windows", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    await installNode({ version: "20.11.0" });
-    expect(tc.extractZip).toHaveBeenCalled();
-  });
+  // Act - Execute the function under test
+  const result = await detectPublishableChanges("pnpm", false);
+
+  // Assert - Verify results
+  expect(result.hasChanges).toBe(true);
+  expect(result.packages).toHaveLength(1);
 });
 ```
 
-### 4. Test Error Scenarios
+### 4. Test Edge Cases
 
-Ensure errors are handled gracefully:
-
-```typescript
-describe("error handling", () => {
-  it("should throw on download failure", async () => {
-    vi.mocked(tc.downloadTool).mockRejectedValue(new Error("Network error"));
-
-    await expect(installNode({ version: "20.11.0" }))
-      .rejects.toThrow("Network error");
-  });
-
-  it("should throw on extraction failure", async () => {
-    vi.mocked(tc.extractTar).mockRejectedValue(new Error("Extraction failed"));
-
-    await expect(installNode({ version: "20.11.0" }))
-      .rejects.toThrow("Extraction failed");
-  });
-});
-```
-
-### 5. Test Edge Cases
-
-Cover empty inputs, malformed data, missing configuration:
+Cover empty inputs, malformed data, and boundary conditions:
 
 ```typescript
 describe("edge cases", () => {
-  it("should handle missing devEngines", async () => {
-    vi.mocked(readFile).mockResolvedValue("{}");
-
-    await expect(parsePackageJson()).rejects.toThrow("devEngines not found");
-  });
-
-  it("should handle malformed package.json", async () => {
-    vi.mocked(readFile).mockResolvedValue("invalid json");
-
-    await expect(parsePackageJson()).rejects.toThrow();
-  });
-});
-```
-
-## Test File Structure
-
-Each test file should follow this structure:
-
-```typescript
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as core from "@actions/core";
-import * as tc from "@actions/tool-cache";
-import { myFunction } from "../src/utils/my-module.js";
-
-// Mock all external dependencies at the top
-vi.mock("@actions/core");
-vi.mock("@actions/tool-cache");
-
-describe("myFunction", () => {
-  beforeEach(() => {
-    // Clear all mocks before each test
-    vi.clearAllMocks();
-
-    // Setup default mocks
-    vi.mocked(core.info).mockImplementation(() => {});
-  });
-
-  describe("happy path", () => {
-    it("should do X when Y", async () => {
-      // Arrange
-      vi.mocked(tc.find).mockReturnValue("/cached");
-
-      // Act
-      await myFunction();
-
-      // Assert
-      expect(tc.find).toHaveBeenCalledWith("tool", "1.0.0");
+  it("should handle empty changeset releases array", async () => {
+    vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+      options?.listeners?.stdout?.(Buffer.from(JSON.stringify({ releases: [], changesets: [] })));
+      return 0;
     });
+
+    const result = await detectPublishableChanges("pnpm", false);
+    expect(result.hasChanges).toBe(false);
   });
 
-  describe("error handling", () => {
-    it("should throw when X fails", async () => {
-      // Arrange
-      vi.mocked(tc.find).mockImplementation(() => {
-        throw new Error("Not found");
-      });
-
-      // Act & Assert
-      await expect(myFunction()).rejects.toThrow("Not found");
+  it("should handle malformed JSON from changeset", async () => {
+    vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+      options?.listeners?.stdout?.(Buffer.from("invalid json"));
+      return 0;
     });
-  });
 
-  describe("edge cases", () => {
-    it("should handle empty input", async () => {
-      // Test edge case
-    });
+    const result = await detectPublishableChanges("pnpm", false);
+    expect(result.packages).toEqual([]);
   });
 });
 ```
@@ -383,89 +548,78 @@ describe("myFunction", () => {
 # Run with verbose output
 pnpm test --reporter=verbose
 
-# Run single test file with output
-pnpm test __tests__/install-node.test.ts --reporter=verbose
+# Run single test file
+pnpm test __tests__/check-release-branch.test.ts --reporter=verbose
 ```
 
-### Debug Mocks
+### Debug Mock Calls
 
 ```typescript
-// Log mock calls
-console.log(vi.mocked(core.info).mock.calls);
+// Log all calls to a mock
+console.log(mockOctokit.rest.repos.getBranch.mock.calls);
 
-// Check if mock was called
-expect(core.info).toHaveBeenCalled();
-
-// Check mock call arguments
-expect(core.info).toHaveBeenCalledWith("Installing Node.js 20.11.0");
+// Check if mock was called with specific args
+expect(mockOctokit.rest.repos.getBranch).toHaveBeenCalledWith({
+  owner: "test-owner",
+  repo: "test-repo",
+  branch: "release/main",
+});
 
 // Check number of calls
-expect(core.info).toHaveBeenCalledTimes(3);
-```
-
-### Coverage Reports
-
-```bash
-# Generate coverage report
-pnpm test
-
-# Open HTML report
-open coverage/index.html
-
-# View coverage summary
-pnpm test --coverage
+expect(mockOctokit.rest.repos.getBranch).toHaveBeenCalledTimes(1);
 ```
 
 ## Common Issues
 
-### "Module not mocked"
+### "Mock not being called"
 
-**Issue:** Test fails because a module isn't mocked
+__Issue:__ Test expects mock to be called but it isn't
 
-**Solution:** Add mock at the top of the test file:
-
-```typescript
-vi.mock("@actions/core");
-vi.mock("node:fs");
-```
-
-### "Type error in mock"
-
-**Issue:** TypeScript complains about mock types
-
-**Solution:** Use `as unknown as Type`:
-
-```typescript
-vi.mocked(func).mockReturnValue(value as unknown as ReturnType<typeof func>);
-```
-
-### "Mock not reset between tests"
-
-**Issue:** Mock state carries over between tests
-
-**Solution:** Clear mocks in `beforeEach`:
+__Solution:__ Ensure the mock is set up before the function is called, and the function actually uses the mocked module:
 
 ```typescript
 beforeEach(() => {
-  vi.clearAllMocks();
+  mockOctokit = createMockOctokit();
+  vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
 });
+```
+
+### "Optional chaining prevents mock setup"
+
+__Issue:__ Using `?.` when setting up mocks prevents them from being configured
+
+```typescript
+// ❌ WRONG - Optional chaining short-circuits if property is undefined
+mockOctokit.rest.repos?.getBranch.mockResolvedValue({ data: {} });
+
+// ✅ CORRECT - Use factory function that ensures all properties exist
+mockOctokit = createMockOctokit();
+mockOctokit.rest.repos.getBranch.mockResolvedValue({ data: {} });
+```
+
+### "Type error with mock return value"
+
+__Issue:__ TypeScript complains about mock return value types
+
+__Solution:__ Use `as unknown as Type` pattern:
+
+```typescript
+vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
 ```
 
 ### "Coverage not meeting threshold"
 
-**Issue:** Tests pass but coverage is below threshold
+__Issue:__ Tests pass but coverage is below threshold
 
-**Solution:** Add tests for uncovered branches:
+__Solution:__
 
-1. Run `pnpm test --coverage`
-2. Open `coverage/index.html`
-3. Find uncovered lines (highlighted in red)
-4. Add tests for those code paths
+1. Run `pnpm test` to see coverage report
+2. Look at uncovered line numbers in the output
+3. Add tests for those code paths
 
 ## Related Documentation
 
-* [Root CLAUDE.md](../CLAUDE.md) - Repository overview
-* [src/CLAUDE.md](../src/CLAUDE.md) - Source code architecture
-* [**fixtures**/CLAUDE.md](../__fixtures__/CLAUDE.md) - Integration testing
-* [Vitest Documentation](https://vitest.dev/) - Testing framework
-* [Vitest Mocking](https://vitest.dev/guide/mocking.html) - Mocking guide
+- [Root CLAUDE.md](../CLAUDE.md) - Repository overview
+- [src/CLAUDE.md](../src/CLAUDE.md) - Source code architecture
+- [Vitest Documentation](https://vitest.dev/) - Testing framework
+- [Vitest Mocking](https://vitest.dev/guide/mocking.html) - Mocking guide

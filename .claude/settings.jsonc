@@ -97,6 +97,12 @@
 			"Bash(gh:issue list)",
 			"Bash(gh:repo view)",
 
+			// GitHub CLI workflow operations (integration testing)
+			"Bash(gh workflow run:*)",
+			"Bash(gh run list:*)",
+			"Bash(gh run view:*)",
+			"Bash(gh run watch:*)",
+
 			// Docker read-only
 			"Bash(docker ps:*)",
 			"Bash(docker logs:*)",
@@ -170,7 +176,12 @@
 			// System modification
 			"Bash(npm config:*)",
 			"Bash(pnpm config:*)",
-			"Bash(yarn config:*)"
+			"Bash(yarn config:*)",
+
+			"Bash(gh run list:*)",
+			"Bash(gh run view:*)",
+			"Bash(gh run watch:*)",
+			"Bash(gh run rerun:*)"
 		],
 		"deny": [
 			// Destructive system operations
@@ -230,6 +241,6 @@
 	"model": "sonnet",
 	"enableAllProjectMcpServers": true,
 	"enabledPlugins": {
-		"workflow@savvy-web-claude-tools": true
+		"workflow@savvy-web-bun-tools": true
 	}
 }

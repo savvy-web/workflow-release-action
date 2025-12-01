@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * Build validation result
@@ -48,7 +49,7 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 	core.startGroup("Validating builds");
 
 	// Determine build command
-	const buildCmd = buildCommand || (packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm");
+	const buildCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
 	const buildArgs =
 		buildCommand === ""
 			? packageManager === "pnpm"
@@ -56,7 +57,7 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 				: packageManager === "yarn"
 					? ["ci:build"]
 					: ["run", "ci:build"]
-			: buildCommand.split(" ");
+			: ["run", buildCommand];
 
 	core.info(`Running build command: ${buildCmd} ${buildArgs.join(" ")}`);
 
@@ -152,33 +153,29 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 					.join("\n")
 			: "";
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary
-		.addHeading("Build Results", 2)
-		.addEOL()
-		.addTable([
-			[
-				{ data: "Status", header: true },
-				{ data: "Details", header: true },
-			],
+	// Build check details using summaryWriter (markdown, not HTML)
+	const resultsTable = summaryWriter.table(
+		["Status", "Details"],
+		[
 			["Result", success ? "✅ Success" : "❌ Failed"],
 			["Command", `\`${buildCmd} ${buildArgs.join(" ")}\``],
 			["Errors", annotations.length.toString()],
-		]);
+		],
+	);
+
+	const checkSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: "Build Results", content: resultsTable },
+	];
 
 	if (!success && errorSummary) {
-		checkSummaryBuilder.addEOL().addHeading("Build Errors", 3).addEOL().addCodeBlock(errorSummary, "text");
+		checkSections.push({ heading: "Build Errors", level: 3, content: summaryWriter.codeBlock(errorSummary, "text") });
 
 		if (annotations.length > 20) {
-			checkSummaryBuilder.addEOL().addRaw(`_Showing first 20 of ${annotations.length} errors_`);
+			checkSections.push({ content: `_Showing first 20 of ${annotations.length} errors_` });
 		}
 	}
 
-	if (dryRun) {
-		checkSummaryBuilder.addEOL().addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
-	}
-
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = summaryWriter.build(checkSections);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -206,31 +203,27 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 		});
 	}
 
-	// Write job summary
-	const summaryBuilder = core.summary
-		.addHeading(checkTitle, 2)
-		.addRaw(checkSummary)
-		.addEOL()
-		.addHeading("Build Results", 3)
-		.addTable([
-			[
-				{ data: "Property", header: true },
-				{ data: "Value", header: true },
-			],
-			["Result", success ? "✅ Success" : "❌ Failed"],
-			["Command", `\`${buildCmd} ${buildArgs.join(" ")}\``],
-			["Errors Found", annotations.length.toString()],
-		]);
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const jobResultsTable = summaryWriter.keyValueTable([
+		{ key: "Result", value: success ? "✅ Success" : "❌ Failed" },
+		{ key: "Command", value: `\`${buildCmd} ${buildArgs.join(" ")}\`` },
+		{ key: "Errors Found", value: annotations.length.toString() },
+	]);
+
+	const jobSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: checkTitle, content: checkSummary },
+		{ heading: "Build Results", level: 3, content: jobResultsTable },
+	];
 
 	if (!success && errorSummary) {
-		summaryBuilder.addHeading("Build Errors", 3).addCodeBlock(errorSummary, "text").addEOL();
+		jobSections.push({ heading: "Build Errors", level: 3, content: summaryWriter.codeBlock(errorSummary, "text") });
 
 		if (annotations.length > 20) {
-			summaryBuilder.addRaw(`_Showing first 20 of ${annotations.length} errors_`).addEOL();
+			jobSections.push({ content: `_Showing first 20 of ${annotations.length} errors_` });
 		}
 	}
 
-	await summaryBuilder.write();
+	await summaryWriter.write(summaryWriter.build(jobSections));
 
 	return {
 		success,

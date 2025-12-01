@@ -1,9 +1,10 @@
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, unlink } from "node:fs/promises";
+import { dirname } from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
+import { getWorkspaceRoot, getWorkspaces } from "workspace-tools";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * Package information from changeset status
@@ -11,6 +12,8 @@ import { context, getOctokit } from "@actions/github";
 interface ChangesetPackage {
 	/** Package name */
 	name: string;
+	/** Current version before changeset application */
+	oldVersion: string;
 	/** New version after changeset application */
 	newVersion: string;
 	/** Type of version bump */
@@ -87,23 +90,30 @@ export async function detectPublishableChanges(
 	const token = core.getInput("token", { required: true });
 	const github = getOctokit(token);
 
+	// Create temp file for changeset status output
+	// The --output flag writes JSON to a file, not stdout
+	// Use relative path because changeset CLI treats absolute paths as relative
+	const statusFile = `.changeset-status-${Date.now()}.json`;
+
 	// Determine changeset command based on package manager
 	const changesetCommand = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npx";
 	const changesetArgs =
 		packageManager === "pnpm"
-			? ["exec", "changeset", "status", "--output=json"]
+			? ["exec", "changeset", "status", "--output", statusFile]
 			: packageManager === "yarn"
-				? ["changeset", "status", "--output=json"]
-				: ["changeset", "status", "--output=json"];
+				? ["changeset", "status", "--output", statusFile]
+				: ["changeset", "status", "--output", statusFile];
 
 	// Run changeset status
-	let statusOutput = "";
 	let statusError = "";
+	let statusStdout = "";
 
-	await exec.exec(changesetCommand, changesetArgs, {
+	core.info(`Running: ${changesetCommand} ${changesetArgs.join(" ")}`);
+
+	const exitCode = await exec.exec(changesetCommand, changesetArgs, {
 		listeners: {
 			stdout: (data: Buffer) => {
-				statusOutput += data.toString();
+				statusStdout += data.toString();
 			},
 			stderr: (data: Buffer) => {
 				statusError += data.toString();
@@ -113,18 +123,124 @@ export async function detectPublishableChanges(
 		silent: true,
 	});
 
-	// Parse changeset status
+	core.info(`Changeset status exit code: ${exitCode}`);
+	if (statusStdout) {
+		core.info(`Changeset stdout: ${statusStdout.trim()}`);
+	}
+	if (statusError) {
+		core.info(`Changeset stderr: ${statusError.trim()}`);
+	}
+
+	// Check for changeset validation errors (exit code 1 with specific error patterns)
+	if (exitCode !== 0 && statusError) {
+		const isValidationError =
+			statusError.includes("ValidationError") ||
+			statusError.includes("depends on the ignored package") ||
+			statusError.includes("is not being ignored");
+
+		if (isValidationError) {
+			// Extract the specific error messages for clearer reporting
+			const errorLines = statusError
+				.split("\n")
+				.filter((line) => line.includes("error") && !line.includes("at "))
+				.map((line) => line.replace(/^\s*🦋\s*error\s*/, "").trim())
+				.filter((line) => line.length > 0 && !line.startsWith("{"));
+
+			const errorSummary = errorLines.length > 0 ? errorLines.join("\n") : "Changeset configuration validation failed";
+
+			core.error(`Changeset validation error:\n${errorSummary}`);
+			throw new Error(`Changeset configuration is invalid:\n${errorSummary}`);
+		}
+	}
+
+	// Parse changeset status from temp file
 	let changesetStatus: ChangesetStatus;
+
 	try {
-		changesetStatus = JSON.parse(statusOutput) as ChangesetStatus;
+		const statusContent = await readFile(statusFile, "utf-8");
+		const trimmedOutput = statusContent.trim();
+		core.info(`Changeset status file contents (${statusContent.length} bytes): ${trimmedOutput.slice(0, 500)}`);
+
+		if (!trimmedOutput || trimmedOutput === "") {
+			core.info("Changeset status file is empty (no changesets present)");
+			changesetStatus = { releases: [], changesets: [] };
+		} else {
+			changesetStatus = JSON.parse(trimmedOutput) as ChangesetStatus;
+			core.info(`Parsed ${changesetStatus.changesets.length} changesets, ${changesetStatus.releases.length} releases`);
+		}
 	} catch (error) {
-		core.warning(`Failed to parse changeset status: ${error instanceof Error ? error.message : String(error)}`);
-		core.debug(`Changeset output: ${statusOutput}`);
-		core.debug(`Changeset error: ${statusError}`);
-		changesetStatus = { releases: [], changesets: [] };
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			// File not created means no changesets or command failed
+			core.info(`Changeset status file not created at ${statusFile}`);
+			changesetStatus = { releases: [], changesets: [] };
+		} else {
+			core.warning(`Failed to read/parse changeset status: ${error instanceof Error ? error.message : String(error)}`);
+			changesetStatus = { releases: [], changesets: [] };
+		}
+	} finally {
+		// Clean up temp file
+		try {
+			await unlink(statusFile);
+		} catch {
+			// Ignore cleanup errors
+		}
 	}
 
 	core.debug(`Changeset status: ${JSON.stringify(changesetStatus, null, 2)}`);
+
+	// Log what changesets found
+	if (changesetStatus.changesets.length > 0) {
+		core.info(`Found ${changesetStatus.changesets.length} changeset(s)`);
+	}
+	if (changesetStatus.releases.length > 0) {
+		core.info(`Found ${changesetStatus.releases.length} package(s) with pending releases`);
+	} else {
+		core.info("No packages with pending releases found");
+	}
+
+	// Build a map of package name -> package info using workspace-tools
+	const cwd = process.cwd();
+	const workspaceRoot = getWorkspaceRoot(cwd);
+	const workspaces = workspaceRoot ? getWorkspaces(workspaceRoot) : [];
+
+	// Create lookup map: package name -> { path, packageJson }
+	const packageMap = new Map<string, { path: string; packageJson: PackageJson }>();
+
+	for (const workspace of workspaces) {
+		packageMap.set(workspace.name, {
+			path: workspace.path,
+			packageJson: workspace.packageJson as PackageJson,
+		});
+	}
+
+	// Also check root package.json for single-package repos
+	try {
+		const rootPkgPath = `${cwd}/package.json`;
+		const rootContent = await readFile(rootPkgPath, "utf-8");
+		const rootPkg = JSON.parse(rootContent) as PackageJson;
+		if (rootPkg.name && !packageMap.has(rootPkg.name)) {
+			packageMap.set(rootPkg.name, { path: dirname(rootPkgPath), packageJson: rootPkg });
+		}
+	} catch {
+		// Root package.json may not exist or be readable
+	}
+
+	// Log discovered packages and their publish configurations
+	if (packageMap.size > 0) {
+		core.info(`📦 Discovered ${packageMap.size} package(s) in workspace:`);
+		for (const [name, info] of packageMap) {
+			const access = info.packageJson.publishConfig?.access;
+			const isPrivate = info.packageJson.private;
+			const strategy = access
+				? `publishConfig.access: ${access}`
+				: isPrivate
+					? "private (no publish)"
+					: "no publishConfig";
+			core.info(`   • ${name} (${strategy})`);
+		}
+	} else {
+		core.info("📦 No packages found in workspace");
+	}
 
 	// Filter for publishable packages
 	const publishablePackages: ChangesetPackage[] = [];
@@ -136,38 +252,15 @@ export async function detectPublishableChanges(
 			continue;
 		}
 
-		// Find package.json for this package
-		// For monorepos, packages are typically in workspaces
-		// For single-package repos, it's the root package.json
-		const possiblePaths = [
-			join(process.cwd(), "package.json"), // Root package
-			join(process.cwd(), "packages", release.name.replace("@", "").replace("/", "-"), "package.json"), // Scoped packages
-			join(process.cwd(), "packages", release.name, "package.json"), // Non-scoped packages
-		];
+		// Find package info from workspace map
+		const pkgInfo = packageMap.get(release.name);
 
-		let packageJson: PackageJson | null = null;
-		let packagePath: string | null = null;
-
-		for (const path of possiblePaths) {
-			if (existsSync(path)) {
-				try {
-					const content = await readFile(path, "utf-8");
-					const parsed = JSON.parse(content) as PackageJson;
-					if (parsed.name === release.name) {
-						packageJson = parsed;
-						packagePath = path;
-						break;
-					}
-				} catch (error) {
-					core.debug(`Failed to read ${path}: ${error instanceof Error ? error.message : String(error)}`);
-				}
-			}
-		}
-
-		if (!packageJson) {
+		if (!pkgInfo) {
 			core.warning(`Could not find package.json for ${release.name}, skipping`);
 			continue;
 		}
+
+		const { path: packagePath, packageJson } = pkgInfo;
 
 		core.debug(`Found package.json for ${release.name} at ${packagePath}`);
 		core.debug(`Package config: ${JSON.stringify(packageJson, null, 2)}`);
@@ -181,7 +274,12 @@ export async function detectPublishableChanges(
 			core.info(`✓ ${release.name} is publishable (access: ${packageJson.publishConfig?.access})`);
 			publishablePackages.push(release);
 		} else {
-			core.debug(`Skipping ${release.name}: no valid publishConfig.access (private or missing)`);
+			// Log at info level so users can see why packages are skipped
+			const reason =
+				packageJson.private && !hasPublishConfig
+					? "package is private without publishConfig.access"
+					: "missing publishConfig.access (public or restricted)";
+			core.info(`⚪ Skipping ${release.name}: ${reason}`);
 		}
 	}
 
@@ -192,40 +290,35 @@ export async function detectPublishableChanges(
 			? `Found ${publishablePackages.length} publishable package(s) with changes`
 			: "No publishable packages with changes";
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary.addHeading("Publishable Packages", 2).addEOL();
+	// Build check details using summaryWriter
+	// The checks API output field expects markdown, not HTML
+	const checkDetailSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [];
 
-	if (publishablePackages.length > 0) {
-		checkSummaryBuilder.addRaw(
-			publishablePackages.map((pkg) => `- **${pkg.name}** → \`${pkg.newVersion}\` (${pkg.type})`).join("\n"),
-		);
-	} else {
-		checkSummaryBuilder.addRaw("_No publishable packages found_");
-	}
+	const packagesContent =
+		publishablePackages.length > 0
+			? summaryWriter.list(
+					publishablePackages.map(
+						(pkg) => `**${pkg.name}**: \`${pkg.oldVersion}\` → \`${pkg.newVersion}\` (${pkg.type})`,
+					),
+				)
+			: "_No publishable packages found_";
 
-	if (dryRun) {
-		checkSummaryBuilder
-			.addEOL()
-			.addEOL()
-			.addRaw("> **Dry Run Mode**: This is a preview run. No actual publishing will occur.");
-	}
-
-	checkSummaryBuilder
-		.addEOL()
-		.addEOL()
-		.addHeading("Changeset Summary", 2)
-		.addEOL()
-		.addRaw(
-			changesetStatus.changesets.length > 0
-				? `Found ${changesetStatus.changesets.length} changeset(s)`
-				: "No changesets found",
-		);
+	checkDetailSections.push({ heading: "Publishable Packages", content: packagesContent });
 
 	if (dryRun) {
-		checkSummaryBuilder.addEOL().addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
+		checkDetailSections.push({
+			content: "> **Dry Run Mode**: This is a preview run. No actual publishing will occur.",
+		});
 	}
 
-	const checkDetails = checkSummaryBuilder.stringify();
+	const changesetContent =
+		changesetStatus.changesets.length > 0
+			? `Found ${changesetStatus.changesets.length} changeset(s)`
+			: "No changesets found";
+
+	checkDetailSections.push({ heading: "Changeset Summary", content: changesetContent });
+
+	const checkDetails = summaryWriter.build(checkDetailSections);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -242,32 +335,23 @@ export async function detectPublishableChanges(
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary
-	await core.summary
-		.addHeading(checkTitle, 2)
-		.addRaw(checkSummary)
-		.addEOL()
-		.addHeading("Publishable Packages", 3)
-		.addTable(
-			publishablePackages.length > 0
-				? [
-						[
-							{ data: "Package", header: true },
-							{ data: "Version", header: true },
-							{ data: "Type", header: true },
-						],
-						...publishablePackages.map((pkg) => [pkg.name, pkg.newVersion, pkg.type]),
-					]
-				: [[{ data: "No publishable packages found", header: false }]],
-		)
-		.addHeading("Changeset Summary", 3)
-		.addRaw(
-			changesetStatus.changesets.length > 0
-				? `Found ${changesetStatus.changesets.length} changeset(s)`
-				: "No changesets found",
-		)
-		.addEOL()
-		.write();
+	// Write job summary using summaryWriter
+	const jobSummarySections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
+		{ heading: checkTitle, content: checkSummary },
+	];
+
+	const jobPackagesContent =
+		publishablePackages.length > 0
+			? summaryWriter.table(
+					["Package", "Current", "Next", "Type"],
+					publishablePackages.map((pkg) => [pkg.name, pkg.oldVersion, pkg.newVersion, pkg.type]),
+				)
+			: "_No publishable packages found_";
+
+	jobSummarySections.push({ heading: "Publishable Packages", level: 3, content: jobPackagesContent });
+	jobSummarySections.push({ heading: "Changeset Summary", level: 3, content: changesetContent });
+
+	await summaryWriter.write(summaryWriter.build(jobSummarySections));
 
 	return {
 		hasChanges: publishablePackages.length > 0,

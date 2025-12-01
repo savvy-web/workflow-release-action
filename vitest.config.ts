@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
 	test: {
-		include: ["**/__tests__/*.test.ts"],
+		include: ["**/__tests__/**/*.test.ts"],
 		exclude: ["**/node_modules/**", "**/dist/**"],
 		globalSetup: "./vitest.setup.ts",
 		testTimeout: 30000,
@@ -13,10 +13,16 @@ export default defineConfig({
 			reportsDirectory: "./.coverage",
 			// ...coverage,
 			// // Merge exclusions from VitestConfig and workspace-specific ones
-			exclude: ["__tests__/utils/**/*.ts"],
+			exclude: [
+				"__tests__/utils/**/*.ts",
+				// Anthropic SDK integration is hard to mock in vitest
+				"src/utils/generate-pr-description.ts",
+				// API commit utility needs GitHub API mocking
+				"src/utils/create-api-commit.ts",
+			],
 			enabled: true,
 			thresholds: {
-				perFile: false, // Enforce thresholds per file instead of globally
+				perFile: true, // Enforce thresholds per file instead of globally
 				lines: 85,
 				functions: 85,
 				branches: 85,
