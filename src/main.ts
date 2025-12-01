@@ -431,11 +431,24 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		core.setOutput("builds_passed", buildResult.success);
 		core.setOutput("build_results", JSON.stringify([]));
 
+		// Complete the placeholder check
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[2],
+			status: "completed",
+			conclusion: buildResult.success ? "success" : "failure",
+			output: {
+				title: buildResult.success ? "Build Validation Passed" : "Build Validation Failed",
+				summary: buildResult.success ? "All builds completed successfully" : buildResult.errors,
+			},
+		});
+
 		logger.endStep();
 
 		// Initialize result variables
-		let npmResult: { success: boolean; results?: unknown[] } = { success: false };
-		let ghResult: { success: boolean; results?: unknown[] } = { success: false };
+		let npmResult: { success: boolean; results: Array<{ canPublish: boolean }> } = { success: false, results: [] };
+		let ghResult: { success: boolean; packages: Array<{ canPublish: boolean }> } = { success: false, packages: [] };
 
 		// Only continue with publish validation if builds passed
 		if (buildResult.success) {
@@ -454,6 +467,19 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			core.setOutput("npm_publish_ready", npmResult.success);
 			core.setOutput("npm_results", JSON.stringify(npmResult.results));
 
+			// Complete the placeholder check
+			await octokit.rest.checks.update({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				check_run_id: checkIds[3],
+				status: "completed",
+				conclusion: npmResult.success ? "success" : "failure",
+				output: {
+					title: npmResult.success ? "NPM Publish Ready" : "NPM Publish Validation Failed",
+					summary: `${npmResult.results.filter((r) => r.canPublish).length}/${npmResult.results.length} package(s) ready`,
+				},
+			});
+
 			logger.endStep();
 
 			// Step 5: Validate GitHub Packages publish
@@ -470,6 +496,19 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 			core.setOutput("github_packages_ready", ghResult.success);
 			core.setOutput("github_packages_results", JSON.stringify([]));
+
+			// Complete the placeholder check
+			await octokit.rest.checks.update({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				check_run_id: checkIds[4],
+				status: "completed",
+				conclusion: ghResult.success ? "success" : "failure",
+				output: {
+					title: ghResult.success ? "GitHub Packages Ready" : "GitHub Packages Validation Failed",
+					summary: `${ghResult.packages.filter((r) => r.canPublish).length}/${ghResult.packages.length} package(s) ready`,
+				},
+			});
 
 			logger.endStep();
 		} else {
@@ -501,7 +540,20 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			status: "in_progress",
 		});
 
-		await generateReleaseNotesPreview();
+		const releaseNotesResult = await generateReleaseNotesPreview();
+
+		// Complete the placeholder check
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[5],
+			status: "completed",
+			conclusion: "success",
+			output: {
+				title: "Release Notes Preview Generated",
+				summary: `Generated release notes for ${releaseNotesResult.packages.length} package(s)`,
+			},
+		});
 
 		logger.endStep();
 
