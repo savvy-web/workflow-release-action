@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { MockOctokit } from "./test-types.js";
 
 /**
  * Type for mocked @actions/core module
@@ -281,4 +282,55 @@ export function setupTestEnvironment(options: { suppressOutput?: boolean } = {})
  */
 export function cleanupTestEnvironment(): void {
 	vi.restoreAllMocks();
+}
+
+/**
+ * Creates a mock Octokit instance with all commonly used API methods
+ *
+ * @returns Mock Octokit instance with fully initialized rest API
+ *
+ * @example
+ * ```typescript
+ * const mockOctokit = createMockOctokit();
+ * mockOctokit.rest.repos.getBranch.mockResolvedValue({
+ *   data: { name: "main" }
+ * });
+ * vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
+ * ```
+ */
+export function createMockOctokit(): MockOctokit {
+	return {
+		rest: {
+			checks: {
+				create: vi.fn().mockResolvedValue({ data: { id: 12345, html_url: "https://github.com/test/checks/12345" } }),
+				update: vi.fn().mockResolvedValue({ data: { id: 12345 } }),
+				get: vi.fn().mockResolvedValue({ data: { id: 12345, status: "in_progress", name: "Test Check" } }),
+			},
+			repos: {
+				getBranch: vi.fn(),
+				compareCommits: vi.fn().mockResolvedValue({ data: { commits: [] } }),
+			},
+			pulls: {
+				list: vi.fn().mockResolvedValue({ data: [] }),
+				get: vi.fn().mockResolvedValue({ data: { body: "" } }),
+				create: vi.fn().mockResolvedValue({
+					data: { number: 123, html_url: "https://github.com/test/pull/123" },
+				}),
+				update: vi.fn().mockResolvedValue({ data: { number: 123 } }),
+			},
+			issues: {
+				listComments: vi.fn().mockResolvedValue({ data: [] }),
+				createComment: vi.fn().mockResolvedValue({
+					data: { id: 456, html_url: "https://github.com/test/comment/456" },
+				}),
+				updateComment: vi.fn().mockResolvedValue({ data: { id: 456 } }),
+				addLabels: vi.fn().mockResolvedValue({ data: [] }),
+				get: vi.fn().mockResolvedValue({
+					data: { number: 1, title: "Test Issue", state: "open", html_url: "https://github.com/test/issues/1" },
+				}),
+				update: vi.fn().mockResolvedValue({ data: { number: 1 } }),
+			},
+		},
+		graphql: vi.fn().mockResolvedValue({}),
+	};
 }

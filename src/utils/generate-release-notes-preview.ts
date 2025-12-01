@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
-import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
+import { getChangesetStatus } from "./get-changeset-status.js";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * Package release notes
@@ -30,40 +31,6 @@ interface ReleaseNotesPreviewResult {
 	packages: PackageReleaseNotes[];
 	/** GitHub check run ID */
 	checkId: number;
-}
-
-/**
- * Gets changeset status to determine packages being released
- *
- * @param packageManager - Package manager to use
- * @returns Promise resolving to changeset status JSON
- */
-async function getChangesetStatus(packageManager: string): Promise<{
-	releases: Array<{ name: string; newVersion: string; type: string }>;
-	changesets: Array<{ summary: string }>;
-}> {
-	let output = "";
-
-	const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
-	const statusArgs =
-		packageManager === "pnpm"
-			? ["changeset", "status", "--output=json"]
-			: packageManager === "yarn"
-				? ["changeset", "status", "--output=json"]
-				: ["run", "changeset", "status", "--output=json"];
-
-	await exec.exec(statusCmd, statusArgs, {
-		listeners: {
-			stdout: (data: Buffer) => {
-				output += data.toString();
-			},
-			stderr: (data: Buffer) => {
-				core.debug(`changeset status stderr: ${data.toString()}`);
-			},
-		},
-	});
-
-	return JSON.parse(output.trim());
 }
 
 /**
@@ -165,14 +132,15 @@ function extractVersionSection(changelogContent: string, version: string): strin
 export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreviewResult> {
 	// Read all inputs
 	const packageManager = core.getInput("package-manager") || "pnpm";
+	const targetBranch = core.getInput("target-branch") || "main";
 	const workspaceRoot = process.cwd();
 	const dryRun = core.getBooleanInput("dry-run") || false;
 	const token = core.getInput("token", { required: true });
 	const github = getOctokit(token);
 	core.startGroup("Generating release notes preview");
 
-	// Get packages from changeset status
-	const changesetStatus = await getChangesetStatus(packageManager);
+	// Get packages from changeset status (handles consumed changesets)
+	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
 	core.info(`Found ${changesetStatus.releases.length} package(s) to release`);
 
 	const packageNotes: PackageReleaseNotes[] = [];
@@ -261,30 +229,28 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 			? `Preview of release notes for ${packageNotes.length} package(s)`
 			: "No packages to release";
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary.addHeading("Release Notes Preview", 2).addEOL();
+	// Build check details using summaryWriter (markdown, not HTML)
+	const checkSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: "Release Notes Preview", content: "" },
+	];
 
 	if (packageNotes.length > 0) {
 		for (const pkg of packageNotes) {
-			checkSummaryBuilder.addHeading(`${pkg.name} v${pkg.version}`, 3).addEOL();
-
+			let content: string;
 			if (pkg.error) {
-				checkSummaryBuilder.addRaw(`⚠️ **Error**: ${pkg.error}`).addEOL().addEOL();
+				content = `⚠️ **Error**: ${pkg.error}`;
 			} else if (pkg.notes) {
-				checkSummaryBuilder.addRaw(pkg.notes).addEOL().addEOL();
+				content = pkg.notes;
 			} else {
-				checkSummaryBuilder.addRaw("_No release notes available_").addEOL().addEOL();
+				content = "_No release notes available_";
 			}
+			checkSections.push({ heading: `${pkg.name} v${pkg.version}`, level: 3, content });
 		}
 	} else {
-		checkSummaryBuilder.addRaw("_No packages to release_").addEOL();
+		checkSections.push({ content: "_No packages to release_" });
 	}
 
-	if (dryRun) {
-		checkSummaryBuilder.addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
-	}
-
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = summaryWriter.build(checkSections);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -301,47 +267,42 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary
-	const summaryBuilder = core.summary.addHeading(checkTitle, 2).addRaw(checkSummary).addEOL().addEOL();
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const jobSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
+		{ heading: checkTitle, content: checkSummary },
+	];
 
 	if (packageNotes.length > 0) {
 		// Add summary table
-		summaryBuilder
-			.addHeading("Summary", 3)
-			.addEOL()
-			.addTable([
-				[
-					{ data: "Package", header: true },
-					{ data: "Version", header: true },
-					{ data: "Status", header: true },
-				],
-				...packageNotes.map((pkg) => [
-					pkg.name,
-					pkg.version,
-					pkg.error ? `⚠️ ${pkg.error}` : pkg.notes ? "✓ Notes available" : "⚠️ No notes",
-				]),
-			])
-			.addEOL();
+		const summaryTable = summaryWriter.table(
+			["Package", "Version", "Status"],
+			packageNotes.map((pkg) => [
+				pkg.name,
+				pkg.version,
+				pkg.error ? `⚠️ ${pkg.error}` : pkg.notes ? "✓ Notes available" : "⚠️ No notes",
+			]),
+		);
+		jobSections.push({ heading: "Summary", level: 3, content: summaryTable });
 
 		// Add full release notes
-		summaryBuilder.addHeading("Release Notes", 3).addEOL();
+		jobSections.push({ heading: "Release Notes", level: 3, content: "" });
 
 		for (const pkg of packageNotes) {
-			summaryBuilder.addHeading(`${pkg.name} v${pkg.version}`, 4).addEOL();
-
+			let content: string;
 			if (pkg.error) {
-				summaryBuilder.addRaw(`⚠️ **Error**: ${pkg.error}`).addEOL().addEOL();
+				content = `⚠️ **Error**: ${pkg.error}`;
 			} else if (pkg.notes) {
-				summaryBuilder.addRaw(pkg.notes).addEOL().addEOL();
+				content = pkg.notes;
 			} else {
-				summaryBuilder.addRaw("_No release notes available_").addEOL().addEOL();
+				content = "_No release notes available_";
 			}
+			jobSections.push({ heading: `${pkg.name} v${pkg.version}`, level: 4, content });
 		}
 	} else {
-		summaryBuilder.addRaw("_No packages to release_").addEOL();
+		jobSections.push({ content: "_No packages to release_" });
 	}
 
-	await summaryBuilder.write();
+	await summaryWriter.write(summaryWriter.build(jobSections));
 
 	return {
 		packages: packageNotes,

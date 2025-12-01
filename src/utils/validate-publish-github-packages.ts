@@ -2,6 +2,9 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import type { PackageValidationResult } from "../types/shared-types.js";
+import { findPublishablePath } from "./find-package-path.js";
+import { getChangesetStatus } from "./get-changeset-status.js";
+import { summaryWriter } from "./summary-writer.js";
 
 /**
  * GitHub Packages validation result
@@ -13,25 +16,6 @@ interface GitHubPackagesValidationResult {
 	packages: PackageValidationResult[];
 	/** GitHub check run ID */
 	checkId: number;
-}
-
-/**
- * Changeset status output
- */
-interface ChangesetStatus {
-	/** Releases to be published */
-	releases: Array<{
-		/** Package name */
-		name: string;
-		/** Package type (major, minor, patch) */
-		type: string;
-		/** Old version */
-		oldVersion: string;
-		/** New version */
-		newVersion: string;
-		/** Changelog entry */
-		changesets: string[];
-	}>;
 }
 
 /**
@@ -108,102 +92,6 @@ async function isPackagePublishable(packagePath: string, packageName: string): P
 		/* v8 ignore next -- @preserve */
 		return false;
 	}
-}
-
-/**
- * Finds the file system path for a package
- *
-
- * @param exec - GitHub Actions exec module
- * @param packageName - Package name to find
- * @returns Package path or null if not found
- *
- * @remarks
- * This function tries multiple strategies:
- * 1. Use npm list to find the package
- * 2. Try common monorepo directory patterns
- */
-async function findPackagePath(packageName: string): Promise<string | null> {
-	// Try npm list first
-	let listResult = "";
-	const listOptions = {
-		listeners: {
-			stdout: (data: Buffer): void => {
-				listResult += data.toString();
-			},
-		},
-		silent: true,
-		ignoreReturnCode: true,
-	};
-
-	try {
-		await exec.exec("npm", ["list", packageName, "--json"], listOptions);
-
-		if (listResult) {
-			const parsed = JSON.parse(listResult);
-			const path = findPath(parsed, packageName);
-
-			if (path) {
-				core.debug(`Found package ${packageName} at: ${path}`);
-				return path;
-			}
-		}
-	} catch (error) {
-		core.debug(`Could not find package path using npm list: ${error instanceof Error ? error.message : String(error)}`);
-	}
-
-	// Fallback: try common monorepo patterns
-	const baseName = packageName.split("/").pop();
-	const commonPaths = [`packages/${baseName}`, `pkgs/${baseName}`, `apps/${baseName}`, `./${baseName}`];
-
-	for (const path of commonPaths) {
-		const exitCode = await exec.exec("test", ["-f", `${path}/package.json`], {
-			ignoreReturnCode: true,
-			silent: true,
-		});
-
-		if (exitCode === 0) {
-			core.debug(`Found package ${packageName} at: ${path}`);
-			return path;
-		}
-	}
-
-	core.warning(`Could not find path for package: ${packageName}`);
-	return null;
-}
-
-/**
- * Recursively finds package path in npm list output
- *
- * @param obj - npm list JSON output
- * @param packageName - Package to find
- * @param currentPath - Current path being explored
- * @returns Package path or null
- */
-function findPath(
-	obj: { dependencies?: Record<string, unknown> },
-	packageName: string,
-	currentPath: string = ".",
-): string | null {
-	if (!obj.dependencies) {
-		return null;
-	}
-
-	if (packageName in obj.dependencies) {
-		return currentPath;
-	}
-
-	for (const [_name, dep] of Object.entries(obj.dependencies)) {
-		const depObj = dep as { dependencies?: Record<string, unknown> };
-		if (depObj.dependencies) {
-			const result = findPath(depObj, packageName, currentPath);
-			if (result) {
-				return result;
-			}
-		}
-	}
-
-	return null;
 }
 
 /**
@@ -342,11 +230,8 @@ export async function validatePackageGitHubPublish(
 /**
  * Validates all publishable packages for GitHub Packages
  *
-
- * @param exec - GitHub Actions exec module
-
-
  * @param packageManager - Package manager to use
+ * @param targetBranch - Target branch for merge base comparison
  * @param dryRun - Whether this is a dry-run
  * @returns GitHub Packages validation result
  *
@@ -360,26 +245,15 @@ export async function validatePackageGitHubPublish(
  */
 export async function validatePublishGitHubPackages(
 	packageManager: string,
+	targetBranch: string,
 	dryRun: boolean,
 ): Promise<GitHubPackagesValidationResult> {
 	const token = core.getInput("token", { required: true });
 	const github = getOctokit(token);
 	core.startGroup("Validating GitHub Packages publish");
 
-	// Get changeset status
-	let changesetOutput = "";
-	const changesetOptions = {
-		listeners: {
-			stdout: (data: Buffer): void => {
-				changesetOutput += data.toString();
-			},
-		},
-		silent: true,
-	};
-
-	await exec.exec("npx", ["changeset", "status", "--output", "/dev/stdout"], changesetOptions);
-
-	const changesetStatus: ChangesetStatus = JSON.parse(changesetOutput);
+	// Get changeset status (handles consumed changesets by checking merge base)
+	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
 	const publishablePackages = changesetStatus.releases;
 
 	core.info(`Found ${publishablePackages.length} publishable package(s)`);
@@ -388,7 +262,8 @@ export async function validatePublishGitHubPackages(
 	const validationResults: PackageValidationResult[] = [];
 
 	for (const pkg of publishablePackages) {
-		const packagePath = await findPackagePath(pkg.name);
+		// Find the publishable path (workspace path + dist/npm)
+		const packagePath = findPublishablePath(pkg.name);
 
 		if (!packagePath) {
 			core.warning(`Could not find path for package: ${pkg.name}`);
@@ -420,38 +295,30 @@ export async function validatePublishGitHubPackages(
 		? `All ${validationResults.length} package(s) ready for GitHub Packages`
 		: `${failedPackages.length} of ${validationResults.length} package(s) failed validation`;
 
-	// Build check details using core.summary methods
-	const checkSummaryBuilder = core.summary
-		.addHeading("Validation Results", 2)
-		.addEOL()
-		.addTable([
-			[
-				{ data: "Package", header: true },
-				{ data: "Version", header: true },
-				{ data: "Status", header: true },
-				{ data: "Message", header: true },
-			],
-			...validationResults.map((pkg) => [
-				pkg.name,
-				pkg.version,
-				pkg.canPublish ? "✅ Ready" : "❌ Failed",
-				`${pkg.message}${pkg.hasProvenance ? " 🔐" : ""}`,
-			]),
-		]);
+	// Build check details using summaryWriter (markdown, not HTML)
+	const resultsTable = summaryWriter.table(
+		["Package", "Version", "Status", "Message"],
+		validationResults.map((pkg) => [
+			pkg.name,
+			pkg.version,
+			pkg.canPublish ? "✅ Ready" : "❌ Failed",
+			`${pkg.message}${pkg.hasProvenance ? " 🔐" : ""}`,
+		]),
+	);
+
+	const checkSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: "Validation Results", content: resultsTable },
+	];
 
 	if (failedPackages.length > 0) {
-		checkSummaryBuilder
-			.addEOL()
-			.addHeading("Failed Packages", 3)
-			.addEOL()
-			.addRaw(failedPackages.map((pkg) => `- **${pkg.name}@${pkg.version}**: ${pkg.message}`).join("\n"));
+		checkSections.push({
+			heading: "Failed Packages",
+			level: 3,
+			content: summaryWriter.list(failedPackages.map((pkg) => `**${pkg.name}@${pkg.version}**: ${pkg.message}`)),
+		});
 	}
 
-	if (dryRun) {
-		checkSummaryBuilder.addEOL().addEOL().addRaw("---").addEOL().addRaw("**Mode**: Dry Run (Preview Only)");
-	}
-
-	const checkDetails = checkSummaryBuilder.stringify();
+	const checkDetails = summaryWriter.build(checkSections);
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -468,36 +335,31 @@ export async function validatePublishGitHubPackages(
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary
-	const summaryBuilder = core.summary
-		.addHeading(checkTitle, 2)
-		.addRaw(checkSummary)
-		.addEOL()
-		.addHeading("Validation Results", 3)
-		.addTable([
-			[
-				{ data: "Package", header: true },
-				{ data: "Version", header: true },
-				{ data: "Status", header: true },
-				{ data: "Message", header: true },
-			],
-			...validationResults.map((pkg) => [
-				pkg.name,
-				pkg.version,
-				pkg.canPublish ? "✅ Ready" : "❌ Failed",
-				`${pkg.message}${pkg.hasProvenance ? " 🔐" : ""}`,
-			]),
-		]);
+	// Write job summary using summaryWriter (markdown, not HTML)
+	const jobResultsTable = summaryWriter.table(
+		["Package", "Version", "Status", "Message"],
+		validationResults.map((pkg) => [
+			pkg.name,
+			pkg.version,
+			pkg.canPublish ? "✅ Ready" : "❌ Failed",
+			`${pkg.message}${pkg.hasProvenance ? " 🔐" : ""}`,
+		]),
+	);
+
+	const jobSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
+		{ heading: checkTitle, content: checkSummary },
+		{ heading: "Validation Results", level: 3, content: jobResultsTable },
+	];
 
 	if (failedPackages.length > 0) {
-		summaryBuilder.addHeading("Failed Packages", 3);
-
-		for (const pkg of failedPackages) {
-			summaryBuilder.addRaw(`- **${pkg.name}@${pkg.version}**: ${pkg.message}`).addEOL();
-		}
+		jobSections.push({
+			heading: "Failed Packages",
+			level: 3,
+			content: summaryWriter.list(failedPackages.map((pkg) => `**${pkg.name}@${pkg.version}**: ${pkg.message}`)),
+		});
 	}
 
-	await summaryBuilder.write();
+	await summaryWriter.write(summaryWriter.build(jobSections));
 
 	return {
 		success,
