@@ -76,19 +76,24 @@ export async function validatePublish(
 	// Resolve targets for all packages
 	const allTargets: ResolvedTarget[] = [];
 	const packageTargetsMap = new Map<string, { path: string; targets: ResolvedTarget[] }>();
+	const packageDiscoveryErrors = new Map<string, string>();
 
 	for (const release of changesetStatus.releases) {
 		// Find the workspace package path (not the publish directory)
 		const workspacePath = findPackagePath(release.name);
 		if (!workspacePath) {
-			core.warning(`Could not find workspace path for package ${release.name}, skipping`);
+			const errorMsg = `Could not find workspace path for package ${release.name} - ensure package is configured in workspace`;
+			core.error(errorMsg);
+			packageDiscoveryErrors.set(release.name, errorMsg);
 			continue;
 		}
 
 		// Read the source package.json to get publishConfig
 		const pkgJsonPath = path.join(workspacePath, "package.json");
 		if (!fs.existsSync(pkgJsonPath)) {
-			core.warning(`package.json not found at ${pkgJsonPath}, skipping`);
+			const errorMsg = `package.json not found at ${pkgJsonPath}`;
+			core.error(errorMsg);
+			packageDiscoveryErrors.set(release.name, errorMsg);
 			continue;
 		}
 
@@ -119,6 +124,22 @@ export async function validatePublish(
 	const validations: PackagePublishValidation[] = [];
 
 	for (const release of changesetStatus.releases) {
+		// Check if package had discovery errors
+		const discoveryError = packageDiscoveryErrors.get(release.name);
+		if (discoveryError) {
+			core.error(`Package ${release.name}: ${discoveryError}`);
+			validations.push({
+				name: release.name,
+				version: release.newVersion,
+				path: "",
+				targets: [],
+				allTargetsValid: false, // Mark as failed
+				hasPublishableTargets: false,
+				discoveryError, // Include the error message
+			});
+			continue;
+		}
+
 		const packageInfo = packageTargetsMap.get(release.name);
 		if (!packageInfo || packageInfo.targets.length === 0) {
 			core.info(`Package ${release.name} has no publish targets (private or no publishConfig)`);

@@ -294,7 +294,7 @@ describe("validate-publish", () => {
 			expect(result.validations[0].allTargetsValid).toBe(false);
 		});
 
-		it("logs warning when workspace path cannot be found", async () => {
+		it("fails when workspace path cannot be found", async () => {
 			const changesetStatus: ChangesetStatus = {
 				changesets: [{ id: "test", summary: "Test", releases: [] }],
 				releases: [{ name: "@unknown/package", type: "patch", oldVersion: "1.0.0", newVersion: "1.0.1" }],
@@ -306,12 +306,13 @@ describe("validate-publish", () => {
 
 			const result = await validatePublish("pnpm", "main", false);
 
-			// Package with unknown path should be skipped with warning
-			expect(result.success).toBe(true);
-			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find workspace path"));
+			// Package with unknown path should fail validation
+			expect(result.success).toBe(false);
+			expect(result.validations[0].discoveryError).toContain("Could not find workspace path");
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("Could not find workspace path"));
 		});
 
-		it("logs warning when package.json is not found", async () => {
+		it("fails when package.json is not found", async () => {
 			const changesetStatus: ChangesetStatus = {
 				changesets: [{ id: "test", summary: "Test", releases: [] }],
 				releases: [{ name: "@test/package", type: "patch", oldVersion: "1.0.0", newVersion: "1.0.1" }],
@@ -329,8 +330,10 @@ describe("validate-publish", () => {
 
 			const result = await validatePublish("pnpm", "main", false);
 
-			expect(result.success).toBe(true);
-			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("package.json not found"));
+			// Package with missing package.json should fail validation
+			expect(result.success).toBe(false);
+			expect(result.validations[0].discoveryError).toContain("package.json not found");
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("package.json not found"));
 		});
 
 		it("reports missing auth tokens", async () => {

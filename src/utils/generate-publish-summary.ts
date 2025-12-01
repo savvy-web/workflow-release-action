@@ -59,6 +59,12 @@ export function generatePublishSummary(validations: PackagePublishValidation[], 
 		const status = pkg.allTargetsValid ? "\u2705" : "\u274C";
 		sections.push(`### ${status} ${pkg.name}@${pkg.version}\n`);
 
+		// Handle discovery errors (package path or package.json not found)
+		if (pkg.discoveryError) {
+			sections.push(`**\u274C Error:** ${pkg.discoveryError}\n`);
+			continue;
+		}
+
 		if (pkg.targets.length === 0) {
 			sections.push("_No publish targets configured_\n");
 			continue;

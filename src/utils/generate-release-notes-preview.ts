@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
+import { findPackagePath } from "./find-package-path.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -31,39 +32,6 @@ interface ReleaseNotesPreviewResult {
 	packages: PackageReleaseNotes[];
 	/** GitHub check run ID */
 	checkId: number;
-}
-
-/**
- * Finds package directory path
- *
- * @param packageName - Package name
- * @param workspaceRoot - Workspace root directory
- * @returns Package directory path or null if not found
- */
-function findPackagePath(packageName: string, workspaceRoot: string): string | null {
-	// Common monorepo package locations
-	const possiblePaths = [
-		path.join(workspaceRoot, "packages", packageName.split("/").pop() || ""),
-		path.join(workspaceRoot, "pkgs", packageName.split("/").pop() || ""),
-		path.join(workspaceRoot, "libs", packageName.split("/").pop() || ""),
-		workspaceRoot, // Single package repo
-	];
-
-	for (const pkgPath of possiblePaths) {
-		const packageJsonPath = path.join(pkgPath, "package.json");
-		if (fs.existsSync(packageJsonPath)) {
-			try {
-				const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-				if (packageJson.name === packageName) {
-					return pkgPath;
-				}
-			} catch {
-				// Ignore parse errors, continue searching
-			}
-		}
-	}
-
-	return null;
 }
 
 /**
@@ -124,16 +92,16 @@ function extractVersionSection(changelogContent: string, version: string): strin
 /**
  * Generates release notes preview for all packages
  *
- * @param packageManager - Package manager to use
- * @param workspaceRoot - Workspace root directory
- * @param dryRun - Whether this is a dry-run
  * @returns Release notes preview result
+ *
+ * @remarks
+ * Uses workspace-tools to discover package paths from workspace configuration.
+ * This handles cases where directory names don't match package names.
  */
 export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreviewResult> {
 	// Read all inputs
 	const packageManager = core.getInput("package-manager") || "pnpm";
 	const targetBranch = core.getInput("target-branch") || "main";
-	const workspaceRoot = process.cwd();
 	const dryRun = core.getBooleanInput("dry-run") || false;
 	const token = core.getInput("token", { required: true });
 	const github = getOctokit(token);
@@ -148,8 +116,8 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 	for (const release of changesetStatus.releases) {
 		core.info(`Processing ${release.name}@${release.newVersion}`);
 
-		// Find package directory
-		const packagePath = findPackagePath(release.name, workspaceRoot);
+		// Find package directory using workspace-tools
+		const packagePath = findPackagePath(release.name);
 
 		if (!packagePath) {
 			core.warning(`Could not find package directory for ${release.name}`);

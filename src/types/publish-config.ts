@@ -176,6 +176,9 @@ export interface PackagePublishValidation {
 
 	/** At least one target can be published */
 	hasPublishableTargets: boolean;
+
+	/** Error message if package discovery failed (workspace path or package.json not found) */
+	discoveryError?: string;
 }
 
 /**

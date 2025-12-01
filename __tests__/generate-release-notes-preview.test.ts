@@ -3,15 +3,26 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkspaceInfos } from "workspace-tools";
+import { getWorkspaces } from "workspace-tools";
+import { clearWorkspaceCache } from "../src/utils/find-package-path.js";
 import { generateReleaseNotesPreview } from "../src/utils/generate-release-notes-preview.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.js";
+
+// Helper to create minimal workspace info for mocking
+const createWorkspace = (name: string, path: string): WorkspaceInfos[number] => ({
+	name,
+	path,
+	packageJson: { packageJsonPath: `${path}/package.json`, name, version: "1.0.0" },
+});
 
 // Mock modules
 vi.mock("@actions/core");
 vi.mock("@actions/exec");
 vi.mock("@actions/github");
 vi.mock("node:fs");
+vi.mock("workspace-tools");
 
 describe("generate-release-notes-preview", () => {
 	let mockOctokit: MockOctokit;
@@ -51,6 +62,9 @@ describe("generate-release-notes-preview", () => {
 		// Default exec mock
 		vi.mocked(exec.exec).mockResolvedValue(0);
 
+		// Default workspace-tools mock - returns empty workspace by default
+		vi.mocked(getWorkspaces).mockReturnValue([]);
+
 		// Default fs mocks - changeset writes to a temp file
 		vi.mocked(fs.existsSync).mockImplementation((path) => {
 			const pathStr = String(path);
@@ -69,6 +83,7 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	afterEach(() => {
+		clearWorkspaceCache();
 		cleanupTestEnvironment();
 	});
 
@@ -80,11 +95,12 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should extract release notes from CHANGELOG", async () => {
+		// Mock workspace-tools to return the package
+		vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
 		vi.mocked(fs.existsSync).mockImplementation((path) => {
 			const pathStr = String(path);
-			return (
-				pathStr.includes(".changeset-status") || pathStr.includes("package.json") || pathStr.includes("CHANGELOG.md")
-			);
+			return pathStr.includes(".changeset-status") || pathStr.includes("CHANGELOG.md");
 		});
 
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
@@ -94,9 +110,6 @@ describe("generate-release-notes-preview", () => {
 					releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
 					changesets: [],
 				});
-			}
-			if (pathStr.includes("package.json")) {
-				return JSON.stringify({ name: "@test/pkg" });
 			}
 			if (pathStr.includes("CHANGELOG.md")) {
 				return `# Changelog
@@ -125,12 +138,13 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle missing CHANGELOG", async () => {
+		// Mock workspace-tools to return the package
+		vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
 		vi.mocked(fs.existsSync).mockImplementation((path) => {
 			const pathStr = String(path);
-			// Changeset temp file exists, package.json exists, but CHANGELOG does not
-			return (
-				pathStr.includes(".changeset-status") || (pathStr.includes("package.json") && !pathStr.includes("CHANGELOG"))
-			);
+			// Changeset temp file exists, but CHANGELOG does not
+			return pathStr.includes(".changeset-status");
 		});
 
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
@@ -140,9 +154,6 @@ describe("generate-release-notes-preview", () => {
 					releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
 					changesets: [],
 				});
-			}
-			if (pathStr.includes("package.json")) {
-				return JSON.stringify({ name: "@test/pkg" });
 			}
 			return "";
 		});
@@ -155,9 +166,9 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle package directory not found", async () => {
+		// Default getWorkspaces mock returns empty array, so package won't be found
 		vi.mocked(fs.existsSync).mockImplementation((path) => {
 			const pathStr = String(path);
-			// Only changeset temp file exists, package.json does not exist
 			return pathStr.includes(".changeset-status");
 		});
 
@@ -194,6 +205,9 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle version section not found in CHANGELOG", async () => {
+		// Mock workspace-tools to return the package
+		vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
@@ -202,9 +216,6 @@ describe("generate-release-notes-preview", () => {
 					releases: [{ name: "@test/pkg", newVersion: "2.0.0", type: "major" }],
 					changesets: [],
 				});
-			}
-			if (pathStr.includes("package.json")) {
-				return JSON.stringify({ name: "@test/pkg" });
 			}
 			if (pathStr.includes("CHANGELOG.md")) {
 				return `# Changelog
@@ -225,6 +236,12 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle multiple packages", async () => {
+		// Mock workspace-tools to return both packages
+		vi.mocked(getWorkspaces).mockReturnValue([
+			createWorkspace("@test/pkg-a", "/test/pkg-a"),
+			createWorkspace("@test/pkg-b", "/test/pkg-b"),
+		]);
+
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
@@ -236,14 +253,6 @@ describe("generate-release-notes-preview", () => {
 					],
 					changesets: [],
 				});
-			}
-			if (pathStr.includes("package.json")) {
-				if (pathStr.includes("pkg-a")) {
-					return JSON.stringify({ name: "@test/pkg-a" });
-				}
-				if (pathStr.includes("pkg-b")) {
-					return JSON.stringify({ name: "@test/pkg-b" });
-				}
 			}
 			if (pathStr.includes("CHANGELOG.md")) {
 				return `# Changelog\n\n## 1.0.0\n\nNotes for 1.0.0\n\n## 2.0.0\n\nNotes for 2.0.0`;
@@ -299,6 +308,9 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle error when reading CHANGELOG throws", async () => {
+		// Mock workspace-tools to return the package
+		vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
@@ -307,9 +319,6 @@ describe("generate-release-notes-preview", () => {
 					releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
 					changesets: [],
 				});
-			}
-			if (pathStr.includes("package.json")) {
-				return JSON.stringify({ name: "@test/pkg" });
 			}
 			if (pathStr.includes("CHANGELOG.md")) {
 				throw new Error("Permission denied");
@@ -326,6 +335,9 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle non-Error throw when reading CHANGELOG", async () => {
+		// Mock workspace-tools to return the package
+		vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
@@ -334,9 +346,6 @@ describe("generate-release-notes-preview", () => {
 					releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
 					changesets: [],
 				});
-			}
-			if (pathStr.includes("package.json")) {
-				return JSON.stringify({ name: "@test/pkg" });
 			}
 			if (pathStr.includes("CHANGELOG.md")) {
 				throw "String error"; // Non-Error throw
@@ -351,6 +360,9 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should show 'no release notes' when notes are empty", async () => {
+		// Mock workspace-tools to return the package
+		vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
 		vi.mocked(fs.existsSync).mockReturnValue(true);
 		vi.mocked(fs.readFileSync).mockImplementation((path) => {
 			const pathStr = String(path);
@@ -359,9 +371,6 @@ describe("generate-release-notes-preview", () => {
 					releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
 					changesets: [],
 				});
-			}
-			if (pathStr.includes("package.json")) {
-				return JSON.stringify({ name: "@test/pkg" });
 			}
 			if (pathStr.includes("CHANGELOG.md")) {
 				// Version header exists but has empty content before next header
