@@ -47,8 +47,8 @@ inputs:
     description: |
       Additional registry tokens in format: registry=token (one per line)
       Example:
-        https://registry.savvyweb.dev/=${{ secrets.SAVVY_TOKEN }}
-        https://npm.internal.com/=${{ secrets.INTERNAL_TOKEN }}
+        https://registry.example.com/=<YOUR_PUBLIC_TOKEN>
+        https://internal.registry.example.com/=<YOUR_INTERNAL_TOKEN>
     required: false
     default: ""
 
