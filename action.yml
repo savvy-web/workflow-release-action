@@ -33,6 +33,26 @@ inputs:
     description: Run in dry-run mode (preview only, no actual changes)
     required: false
     default: "false"
+
+  # Authentication inputs for multi-registry publishing
+  npm-token:
+    description: NPM registry auth token (for registry.npmjs.org)
+    required: false
+    default: ""
+  jsr-token:
+    description: JSR auth token (optional, OIDC preferred in GitHub Actions)
+    required: false
+    default: ""
+  registry-tokens:
+    description: |
+      Additional registry tokens in format: registry=token (one per line)
+      Example:
+        https://registry.savvyweb.dev/=${{ secrets.SAVVY_TOKEN }}
+        https://npm.internal.com/=${{ secrets.INTERNAL_TOKEN }}
+    required: false
+    default: ""
+
+  # Optional inputs
   anthropic-api-key:
     description: Anthropic API key for Claude PR description generation
     required: false
@@ -74,6 +94,20 @@ outputs:
     description: Whether packages are ready for NPM publish
   github_packages_ready:
     description: Whether packages are ready for GitHub Packages
+
+  # Multi-registry publish outputs
+  released_packages:
+    description: JSON array of released packages with name, version, and targets
+  release_type:
+    description: Type of release (major, minor, or patch)
+  release_tags:
+    description: JSON array of created git tags
+  package_count:
+    description: Number of packages released
+  publish_results:
+    description: JSON array of publish results per package and target
+  success:
+    description: Whether the release was fully successful
 
 runs:
   using: node24

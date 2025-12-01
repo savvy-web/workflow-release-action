@@ -16,8 +16,7 @@ import { summaryWriter } from "./utils/summary-writer.js";
 import { updateReleaseBranch } from "./utils/update-release-branch.js";
 import { updateStickyComment } from "./utils/update-sticky-comment.js";
 import { validateBuilds } from "./utils/validate-builds.js";
-import { validatePublishGitHubPackages } from "./utils/validate-publish-github-packages.js";
-import { validateNPMPublish } from "./utils/validate-publish-npm.js";
+import { validatePublish } from "./utils/validate-publish.js";
 
 interface Inputs {
 	token: string;
@@ -44,11 +43,10 @@ interface Inputs {
  * - Link issues from commits
  * - Generate PR description with Claude
  * - Validate builds
- * - Validate NPM publish readiness
- * - Validate GitHub Packages publish readiness
+ * - Validate publishing (multi-registry: NPM, GitHub Packages, JSR, custom)
+ * - Generate release notes preview
  * - Create unified validation check
  * - Update sticky comment on PR
- * - Generate release notes preview
  *
  * **Phase 3: Release Publishing** (on merge to main)
  * - Detect release merge
@@ -282,8 +280,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		"Link Issues from Commits",
 		"Generate PR Description",
 		"Build Validation",
-		"Publish Validation (NPM)",
-		"Publish Validation (GitHub Packages)",
+		"Publish Validation",
 		"Release Notes Preview",
 	];
 
@@ -447,14 +444,29 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		logger.endStep();
 
-		// Initialize result variables
-		let npmResult: { success: boolean; results: Array<{ canPublish: boolean }> } = { success: false, results: [] };
-		let ghResult: { success: boolean; packages: Array<{ canPublish: boolean }> } = { success: false, packages: [] };
+		// Initialize publish validation result
+		let publishResult: {
+			success: boolean;
+			npmReady: boolean;
+			githubPackagesReady: boolean;
+			totalTargets: number;
+			readyTargets: number;
+			summary: string;
+			validations: unknown[];
+		} = {
+			success: false,
+			npmReady: false,
+			githubPackagesReady: false,
+			totalTargets: 0,
+			readyTargets: 0,
+			summary: "",
+			validations: [],
+		};
 
 		// Only continue with publish validation if builds passed
 		if (buildResult.success) {
-			// Step 4: Validate NPM publish
-			logger.step(4, "Validate NPM Publish");
+			// Step 4: Validate publishing (multi-registry)
+			logger.step(4, "Validate Publishing");
 
 			await octokit.rest.checks.update({
 				owner: context.repo.owner,
@@ -463,51 +475,32 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				status: "in_progress",
 			});
 
-			npmResult = await validateNPMPublish(inputs.packageManager, inputs.targetBranch, inputs.dryRun);
+			publishResult = await validatePublish(inputs.packageManager, inputs.targetBranch, inputs.dryRun);
 
-			core.setOutput("npm_publish_ready", npmResult.success);
-			core.setOutput("npm_results", JSON.stringify(npmResult.results));
+			// Set outputs for backwards compatibility
+			core.setOutput("npm_publish_ready", publishResult.npmReady);
+			core.setOutput("github_packages_ready", publishResult.githubPackagesReady);
+			core.setOutput("publish_results", JSON.stringify(publishResult.validations));
 
-			// Complete the placeholder check
+			// Determine check conclusion
+			const conclusion = publishResult.totalTargets === 0 ? "skipped" : publishResult.success ? "success" : "failure";
+			const title =
+				publishResult.totalTargets === 0
+					? "No packages to validate"
+					: publishResult.success
+						? `All ${publishResult.readyTargets} target(s) ready to publish`
+						: `${publishResult.readyTargets}/${publishResult.totalTargets} target(s) ready`;
+
+			// Complete the check
 			await octokit.rest.checks.update({
 				owner: context.repo.owner,
 				repo: context.repo.repo,
 				check_run_id: checkIds[3],
 				status: "completed",
-				conclusion: npmResult.success ? "success" : "failure",
+				conclusion,
 				output: {
-					title: npmResult.success ? "NPM Publish Ready" : "NPM Publish Validation Failed",
-					summary: `${npmResult.results.filter((r) => r.canPublish).length}/${npmResult.results.length} package(s) ready`,
-				},
-			});
-
-			logger.endStep();
-
-			// Step 5: Validate GitHub Packages publish
-			logger.step(5, "Validate GitHub Packages Publish");
-
-			await octokit.rest.checks.update({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				check_run_id: checkIds[4],
-				status: "in_progress",
-			});
-
-			ghResult = await validatePublishGitHubPackages(inputs.packageManager, inputs.targetBranch, inputs.dryRun);
-
-			core.setOutput("github_packages_ready", ghResult.success);
-			core.setOutput("github_packages_results", JSON.stringify([]));
-
-			// Complete the placeholder check
-			await octokit.rest.checks.update({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				check_run_id: checkIds[4],
-				status: "completed",
-				conclusion: ghResult.success ? "success" : "failure",
-				output: {
-					title: ghResult.success ? "GitHub Packages Ready" : "GitHub Packages Validation Failed",
-					summary: `${ghResult.packages.filter((r) => r.canPublish).length}/${ghResult.packages.length} package(s) ready`,
+					title,
+					summary: publishResult.summary,
 				},
 			});
 
@@ -516,28 +509,26 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			// Skip publish validation if builds failed
 			logger.warn("Builds failed, skipping publish validation");
 
-			for (let i = 3; i <= 4; i++) {
-				await octokit.rest.checks.update({
-					owner: context.repo.owner,
-					repo: context.repo.repo,
-					check_run_id: checkIds[i],
-					status: "completed",
-					conclusion: "skipped",
-					output: {
-						title: "Skipped",
-						summary: "Build validation failed",
-					},
-				});
-			}
+			await octokit.rest.checks.update({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				check_run_id: checkIds[3],
+				status: "completed",
+				conclusion: "skipped",
+				output: {
+					title: "Skipped",
+					summary: "Build validation failed",
+				},
+			});
 		}
 
-		// Step 6: Generate release notes preview
-		logger.step(6, "Generate Release Notes Preview");
+		// Step 5: Generate release notes preview
+		logger.step(5, "Generate Release Notes Preview");
 
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
-			check_run_id: checkIds[5],
+			check_run_id: checkIds[4],
 			status: "in_progress",
 		});
 
@@ -547,7 +538,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
-			check_run_id: checkIds[5],
+			check_run_id: checkIds[4],
 			status: "completed",
 			conclusion: "success",
 			output: {
@@ -558,8 +549,8 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		logger.endStep();
 
-		// Step 7: Create unified validation check
-		logger.step(7, "Create Unified Validation Check");
+		// Step 6: Create unified validation check
+		logger.step(6, "Create Unified Validation Check");
 
 		const validationResults = [
 			{ name: checkNames[0], success: true, checkId: checkIds[0] },
@@ -567,23 +558,18 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			{ name: checkNames[2], success: buildResult.success, checkId: checkIds[2] },
 			{
 				name: checkNames[3],
-				success: buildResult.success && npmResult.success,
+				success: buildResult.success && publishResult.success,
 				checkId: checkIds[3],
 			},
-			{
-				name: checkNames[4],
-				success: buildResult.success && ghResult.success,
-				checkId: checkIds[4],
-			},
-			{ name: checkNames[5], success: true, checkId: checkIds[5] },
+			{ name: checkNames[4], success: true, checkId: checkIds[4] },
 		];
 
 		await createValidationCheck(validationResults, inputs.dryRun);
 
 		logger.endStep();
 
-		// Step 8: Update sticky comment on PR
-		logger.step(8, "Update Sticky Comment");
+		// Step 7: Update sticky comment on PR
+		logger.step(7, "Update Sticky Comment");
 
 		try {
 			// Find the PR for the release branch

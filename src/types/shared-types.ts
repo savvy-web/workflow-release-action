@@ -38,8 +38,8 @@ export interface ValidationResult {
  * Package publish validation result
  *
  * @remarks
- * Used by both `validate-publish-npm.ts` and `validate-publish-github-packages.ts`
- * to track validation status for individual packages.
+ * Used by `validate-publish.ts` to track validation status for individual packages
+ * across all configured registries (NPM, GitHub Packages, JSR, custom).
  *
  * @example
  * ```typescript
