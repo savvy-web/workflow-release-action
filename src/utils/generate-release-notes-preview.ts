@@ -3,8 +3,85 @@ import * as path from "node:path";
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import { findPackagePath } from "./find-package-path.js";
+import type { ChangesetStatusResult } from "./get-changeset-status.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
 import { summaryWriter } from "./summary-writer.js";
+
+/**
+ * Changeset configuration
+ */
+interface ChangesetConfig {
+	fixed?: string[][];
+	linked?: string[][];
+}
+
+/**
+ * Read the changeset configuration file
+ *
+ * @returns Changeset config or null if not found/readable
+ */
+function readChangesetConfig(): ChangesetConfig | null {
+	const configPath = path.join(process.cwd(), ".changeset", "config.json");
+
+	try {
+		if (fs.existsSync(configPath)) {
+			const content = fs.readFileSync(configPath, "utf8");
+			return JSON.parse(content) as ChangesetConfig;
+		}
+	} catch (error) {
+		core.debug(`Failed to read changeset config: ${error instanceof Error ? error.message : String(error)}`);
+	}
+
+	return null;
+}
+
+/**
+ * Find which fixed group a package belongs to
+ *
+ * @param packageName - Package name to look up
+ * @param config - Changeset configuration
+ * @returns Array of sibling package names in the same fixed group, or null if not in a fixed group
+ */
+function findFixedGroupSiblings(packageName: string, config: ChangesetConfig | null): string[] | null {
+	if (!config?.fixed) return null;
+
+	for (const group of config.fixed) {
+		if (group.includes(packageName)) {
+			// Return other packages in the group (excluding the package itself)
+			return group.filter((name) => name !== packageName);
+		}
+	}
+
+	return null;
+}
+
+/**
+ * Generate explanatory release notes for a fixed package with no direct changes
+ *
+ * @param packageName - Package name
+ * @param siblings - Sibling packages in the fixed group
+ * @param releases - All releases from changeset status
+ * @returns Explanatory release notes markdown
+ */
+function generateFixedPackageNotes(
+	packageName: string,
+	siblings: string[],
+	releases: ChangesetStatusResult["releases"],
+): string {
+	// Find which siblings are actually being released
+	const releasedSiblings = siblings.filter((sibling) => releases.some((r) => r.name === sibling));
+
+	if (releasedSiblings.length === 0) {
+		return "_This package has no direct changes but is being released due to fixed versioning._";
+	}
+
+	const siblingList = releasedSiblings.map((s) => `\`${s}\``).join(", ");
+	const plural = releasedSiblings.length > 1 ? "packages" : "package";
+
+	return `_This package has no direct changes but is being released because it shares fixed versioning with ${siblingList} which ${releasedSiblings.length > 1 ? "have" : "has"} changes._
+
+This release maintains version alignment across the following ${plural}: ${[`\`${packageName}\``, ...releasedSiblings.map((s) => `\`${s}\``)].join(", ")}.`;
+}
 
 /**
  * Package release notes
@@ -107,6 +184,12 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 	const github = getOctokit(token);
 	core.startGroup("Generating release notes preview");
 
+	// Read changeset config to detect fixed groups
+	const changesetConfig = readChangesetConfig();
+	if (changesetConfig?.fixed && changesetConfig.fixed.length > 0) {
+		core.debug(`Found ${changesetConfig.fixed.length} fixed group(s) in changeset config`);
+	}
+
 	// Get packages from changeset status (handles consumed changesets)
 	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
 	core.info(`Found ${changesetStatus.releases.length} package(s) to release`);
@@ -151,9 +234,30 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 		// Read and extract version section
 		try {
 			const changelogContent = fs.readFileSync(changelogPath, "utf8");
-			const notes = extractVersionSection(changelogContent, release.newVersion);
+			let notes = extractVersionSection(changelogContent, release.newVersion);
+			let extractionError: string | undefined;
 
 			if (notes.startsWith("Could not find")) {
+				extractionError = notes;
+				notes = "";
+			}
+
+			// Check if notes are empty and package might be in a fixed group
+			const hasNoNotes = !notes.trim();
+			const fixedSiblings = hasNoNotes ? findFixedGroupSiblings(release.name, changesetConfig) : null;
+
+			if (hasNoNotes && fixedSiblings && fixedSiblings.length > 0) {
+				// This is a fixed package with no direct changes
+				const fixedNotes = generateFixedPackageNotes(release.name, fixedSiblings, changesetStatus.releases);
+				core.info(`✓ Generated fixed-version notes for ${release.name}@${release.newVersion}`);
+				packageNotes.push({
+					name: release.name,
+					version: release.newVersion,
+					path: packagePath,
+					hasChangelog: true,
+					notes: fixedNotes,
+				});
+			} else if (extractionError) {
 				core.warning(`Could not extract version ${release.newVersion} from ${release.name} CHANGELOG`);
 				packageNotes.push({
 					name: release.name,
@@ -161,7 +265,7 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 					path: packagePath,
 					hasChangelog: true,
 					notes: "",
-					error: notes,
+					error: extractionError,
 				});
 			} else {
 				core.info(`✓ Extracted release notes for ${release.name}@${release.newVersion}`);

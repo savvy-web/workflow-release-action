@@ -412,4 +412,221 @@ Previous notes`;
 		expect(result.packages).toEqual([]);
 		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("changeset config issue"));
 	});
+
+	describe("fixed package handling", () => {
+		it("should generate explanatory notes for fixed packages with no direct changes", async () => {
+			// Mock workspace-tools to return both packages
+			vi.mocked(getWorkspaces).mockReturnValue([
+				createWorkspace("@test/pkg-a", "/test/pkg-a"),
+				createWorkspace("@test/pkg-b", "/test/pkg-b"),
+			]);
+
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				// Changeset status temp file and config exist
+				if (pathStr.includes(".changeset-status")) return true;
+				if (pathStr.includes(".changeset/config.json")) return true;
+				// Both packages have CHANGELOG.md
+				if (pathStr.includes("CHANGELOG.md")) return true;
+				return false;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [
+							{ name: "@test/pkg-a", newVersion: "1.0.0", type: "minor" },
+							{ name: "@test/pkg-b", newVersion: "1.0.0", type: "none" },
+						],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes(".changeset/config.json")) {
+					return JSON.stringify({
+						fixed: [["@test/pkg-a", "@test/pkg-b"]],
+					});
+				}
+				if (pathStr.includes("pkg-a") && pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 1.0.0\n\n### Features\n\n- New feature`;
+				}
+				if (pathStr.includes("pkg-b") && pathStr.includes("CHANGELOG.md")) {
+					// pkg-b has a CHANGELOG but version section not found (no direct changes)
+					return `# Changelog\n\n## 0.9.0\n\n- Old stuff`;
+				}
+				return "";
+			});
+
+			const result = await generateReleaseNotesPreview();
+
+			expect(result.packages).toHaveLength(2);
+
+			// pkg-a has normal notes
+			expect(result.packages[0].name).toBe("@test/pkg-a");
+			expect(result.packages[0].notes).toContain("New feature");
+
+			// pkg-b has fixed package notes
+			expect(result.packages[1].name).toBe("@test/pkg-b");
+			expect(result.packages[1].notes).toContain("no direct changes");
+			expect(result.packages[1].notes).toContain("fixed versioning");
+			expect(result.packages[1].notes).toContain("@test/pkg-a");
+		});
+
+		it("should not generate fixed notes when package is not in a fixed group", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) return true;
+				if (pathStr.includes(".changeset/config.json")) return true;
+				if (pathStr.includes("CHANGELOG.md")) return true;
+				return false;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes(".changeset/config.json")) {
+					return JSON.stringify({
+						fixed: [], // No fixed groups
+					});
+				}
+				if (pathStr.includes("CHANGELOG.md")) {
+					// Version section not found
+					return `# Changelog\n\n## 0.9.0\n\n- Old stuff`;
+				}
+				return "";
+			});
+
+			const result = await generateReleaseNotesPreview();
+
+			expect(result.packages).toHaveLength(1);
+			expect(result.packages[0].error).toContain("Could not find version section");
+		});
+
+		it("should handle missing changeset config gracefully", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) return true;
+				// Config file doesn't exist
+				if (pathStr.includes(".changeset/config.json")) return false;
+				if (pathStr.includes("CHANGELOG.md")) return true;
+				return false;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 1.0.0\n\n### Features\n\n- New feature`;
+				}
+				return "";
+			});
+
+			const result = await generateReleaseNotesPreview();
+
+			expect(result.packages).toHaveLength(1);
+			expect(result.packages[0].notes).toContain("New feature");
+		});
+
+		it("should handle empty notes for non-fixed packages", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) return true;
+				if (pathStr.includes(".changeset/config.json")) return true;
+				if (pathStr.includes("CHANGELOG.md")) return true;
+				return false;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes(".changeset/config.json")) {
+					return JSON.stringify({
+						fixed: [["@other/pkg-a", "@other/pkg-b"]], // Different fixed group
+					});
+				}
+				if (pathStr.includes("CHANGELOG.md")) {
+					// Version section exists but has no content
+					return `# Changelog\n\n## 1.0.0\n\n## 0.9.0\n\nOld notes`;
+				}
+				return "";
+			});
+
+			const result = await generateReleaseNotesPreview();
+
+			expect(result.packages).toHaveLength(1);
+			// Empty notes for non-fixed package should still be empty
+			expect(result.packages[0].notes).toBe("");
+		});
+
+		it("should handle fixed group with only one sibling being released", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([
+				createWorkspace("@test/pkg-a", "/test/pkg-a"),
+				createWorkspace("@test/pkg-b", "/test/pkg-b"),
+			]);
+
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) return true;
+				if (pathStr.includes(".changeset/config.json")) return true;
+				if (pathStr.includes("CHANGELOG.md")) return true;
+				return false;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [
+							{ name: "@test/pkg-a", newVersion: "1.0.0", type: "minor" },
+							{ name: "@test/pkg-b", newVersion: "1.0.0", type: "none" },
+						],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes(".changeset/config.json")) {
+					// Fixed group includes a third package not being released
+					return JSON.stringify({
+						fixed: [["@test/pkg-a", "@test/pkg-b", "@test/pkg-c"]],
+					});
+				}
+				if (pathStr.includes("pkg-a") && pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 1.0.0\n\n### Features\n\n- New feature`;
+				}
+				if (pathStr.includes("pkg-b") && pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 0.9.0\n\n- Old stuff`;
+				}
+				return "";
+			});
+
+			const result = await generateReleaseNotesPreview();
+
+			expect(result.packages).toHaveLength(2);
+			expect(result.packages[1].name).toBe("@test/pkg-b");
+			// Should mention only the sibling that is actually being released
+			expect(result.packages[1].notes).toContain("@test/pkg-a");
+			// Should list both packages that are maintaining version alignment
+			expect(result.packages[1].notes).toContain("@test/pkg-b");
+		});
+	});
 });

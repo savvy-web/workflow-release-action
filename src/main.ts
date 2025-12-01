@@ -4,7 +4,6 @@ import * as github from "@actions/github";
 import { context } from "@actions/github";
 import { checkReleaseBranch } from "./utils/check-release-branch.js";
 import { cleanupValidationChecks } from "./utils/cleanup-validation-checks.js";
-import { closeLinkedIssues } from "./utils/close-linked-issues.js";
 import { createReleaseBranch } from "./utils/create-release-branch.js";
 import { createValidationCheck } from "./utils/create-validation-check.js";
 import { detectPublishableChanges } from "./utils/detect-publishable-changes.js";
@@ -12,6 +11,7 @@ import { generatePRDescriptionDirect } from "./utils/generate-pr-description.js"
 import { generateReleaseNotesPreview } from "./utils/generate-release-notes-preview.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
 import { PHASE, logger } from "./utils/logger.js";
+import { runCloseLinkedIssues } from "./utils/run-close-linked-issues.js";
 import { summaryWriter } from "./utils/summary-writer.js";
 import { updateReleaseBranch } from "./utils/update-release-branch.js";
 import { updateStickyComment } from "./utils/update-sticky-comment.js";
@@ -595,37 +595,50 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 					validationResults.map((r) => [r.name, r.success ? "✅ Passed" : "❌ Failed"]),
 				);
 
-				// Build failed checks section or success message
-				const statusSection =
-					failedChecks.length > 0
-						? summaryWriter.build([
-								{
-									heading: "❌ Failed Checks",
-									level: 3,
-									content: `${summaryWriter.list(failedChecks.map((c) => `**${c.name}**`))}\n\nPlease resolve the issues above before merging.`,
-								},
-							])
-						: summaryWriter.build([
-								{
-									heading: "✅ All Validations Passed",
-									level: 3,
-									content: "This PR is ready to merge!",
-								},
-							]);
+				// Build comment sections using summaryWriter
+				const commentSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
+					{
+						heading: `📦 Release Validation ${allSuccess ? "✅" : "❌"}`,
+						level: 2,
+						content: inputs.dryRun ? "> 🧪 **DRY RUN MODE** - No actual publishing will occur" : "",
+					},
+					{
+						heading: "Validation Results",
+						level: 3,
+						content: validationTable,
+					},
+				];
 
-				const commentBody = `<!-- sticky-comment-id: release-validation -->
-## 📦 Release Validation ${allSuccess ? "✅" : "❌"}
+				// Add status section (failed checks or success message)
+				if (failedChecks.length > 0) {
+					commentSections.push({
+						heading: "❌ Failed Checks",
+						level: 3,
+						content: `${summaryWriter.list(failedChecks.map((c) => `**${c.name}**`))}\n\nPlease resolve the issues above before merging.`,
+					});
+				} else {
+					commentSections.push({
+						heading: "✅ All Validations Passed",
+						level: 3,
+						content: "This PR is ready to merge!",
+					});
+				}
 
-${inputs.dryRun ? "> 🧪 **DRY RUN MODE** - No actual publishing will occur\n\n" : ""}
-### Validation Results
+				// Add publish validation section if available
+				if (buildResult.success && publishResult.totalTargets > 0) {
+					commentSections.push({
+						heading: "📤 Publish Targets",
+						level: 3,
+						content: publishResult.summary,
+					});
+				}
 
-${validationTable}
+				// Add footer
+				commentSections.push({
+					content: `---\n\n<sub>Updated at ${new Date().toISOString()}</sub>`,
+				});
 
-${statusSection}
----
-
-<sub>Updated at ${new Date().toISOString()}</sub>
-`;
+				const commentBody = `<!-- sticky-comment-id: release-validation -->\n${summaryWriter.build(commentSections)}`;
 
 				await updateStickyComment(pr.number, commentBody, "release-validation");
 				logger.success("Updated sticky comment on PR");
@@ -656,45 +669,6 @@ ${statusSection}
 		}
 
 		core.setFailed(`Phase 2 failed: ${error instanceof Error ? error.message : String(error)}`);
-		throw error;
-	}
-}
-
-/**
- * Close linked issues when release PR is merged
- *
- * @remarks
- * Runs on pull_request closed event when:
- * - The PR was merged (not just closed)
- * - The PR is from the release branch to the target branch
- *
- * Uses GitHub's GraphQL API to find issues linked to the PR via
- * "fixes #123" keywords and closes each one with a comment.
- */
-async function runCloseLinkedIssues(inputs: { token: string; dryRun: boolean }, prNumber: number): Promise<void> {
-	try {
-		logger.step(1, "Close Linked Issues");
-
-		const result = await closeLinkedIssues(inputs.token, prNumber, inputs.dryRun);
-
-		core.setOutput("closed_issues_count", result.closedCount);
-		core.setOutput("failed_issues_count", result.failedCount);
-		core.setOutput("closed_issues", JSON.stringify(result.issues));
-
-		if (result.closedCount > 0) {
-			logger.success(`Closed ${result.closedCount} linked issue(s)`);
-		} else {
-			logger.info("No linked issues to close");
-		}
-
-		if (result.failedCount > 0) {
-			logger.warn(`Failed to close ${result.failedCount} issue(s)`);
-		}
-
-		logger.endStep();
-		logger.phaseComplete(3);
-	} catch (error) {
-		core.setFailed(`Failed to close linked issues: ${error instanceof Error ? error.message : String(error)}`);
 		throw error;
 	}
 }
