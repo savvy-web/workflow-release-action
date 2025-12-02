@@ -87,26 +87,63 @@ async function run(): Promise<void> {
 
 		core.debug(`Inputs: ${JSON.stringify(inputs, null, 2)}`);
 
+		const octokit = github.getOctokit(inputs.token);
+
 		// Determine which phase to run based on context
 		const isReleaseBranch = context.ref === `refs/heads/${inputs.releaseBranch}`;
 		const isMainBranch = context.ref === `refs/heads/${inputs.targetBranch}`;
 		const commitMessage = context.payload.head_commit?.message || "";
-		const isReleaseCommit = commitMessage.includes("chore: version packages");
 
-		// Detect PR merge event
+		// Detect PR merge event (for pull_request trigger)
 		const isPullRequestEvent = context.eventName === "pull_request";
 		const pullRequest = context.payload.pull_request;
 		const isPRMerged = isPullRequestEvent && pullRequest?.merged === true;
 		const isReleasePRMerged =
 			isPRMerged && pullRequest?.head?.ref === inputs.releaseBranch && pullRequest?.base?.ref === inputs.targetBranch;
 
+		// Detect if this push is from a merged release PR (for push trigger)
+		// Query the API to find PRs associated with this commit
+		let isReleaseCommit = false;
+		let mergedReleasePR: { number: number; head: { ref: string }; base: { ref: string } } | undefined;
+
+		if (isMainBranch && context.eventName === "push") {
+			try {
+				const { data: associatedPRs } = await octokit.rest.repos.listPullRequestsAssociatedWithCommit({
+					owner: context.repo.owner,
+					repo: context.repo.repo,
+					commit_sha: context.sha,
+				});
+
+				// Find a merged PR from the release branch to main
+				mergedReleasePR = associatedPRs.find(
+					(pr) => pr.merged_at !== null && pr.head.ref === inputs.releaseBranch && pr.base.ref === inputs.targetBranch,
+				);
+
+				isReleaseCommit = mergedReleasePR !== undefined;
+
+				if (isReleaseCommit) {
+					core.info(`Detected merged release PR #${mergedReleasePR?.number} from ${inputs.releaseBranch}`);
+				}
+			} catch (error) {
+				core.warning(`Failed to check for associated PRs: ${error instanceof Error ? error.message : String(error)}`);
+				// Fall back to commit message detection
+				const isMergeFromReleaseBranch =
+					commitMessage.includes(`from ${context.repo.owner}/${inputs.releaseBranch}`) ||
+					commitMessage.includes(`Merge branch '${inputs.releaseBranch}'`);
+				const isVersionCommit =
+					commitMessage.includes("chore: version packages") || commitMessage.toLowerCase().includes("version packages");
+				isReleaseCommit = isMergeFromReleaseBranch || isVersionCommit;
+			}
+		}
+
 		// Log context info
 		logger.context({
 			branch: context.ref,
-			commitMessage,
+			commitMessage: commitMessage.substring(0, 100) + (commitMessage.length > 100 ? "..." : ""),
 			isReleaseBranch,
 			isMainBranch,
 			isReleaseCommit,
+			mergedReleasePR: mergedReleasePR ? `#${mergedReleasePR.number}` : undefined,
 			isPullRequestEvent,
 			isPRMerged,
 			isReleasePRMerged,

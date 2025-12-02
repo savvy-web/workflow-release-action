@@ -57,6 +57,7 @@ export const logger = {
 		isReleaseBranch: boolean;
 		isMainBranch: boolean;
 		isReleaseCommit: boolean;
+		mergedReleasePR?: string;
 		isPullRequestEvent?: boolean;
 		isPRMerged?: boolean;
 		isReleasePRMerged?: boolean;
@@ -81,7 +82,15 @@ export const logger = {
 		core.info("Branch detection:");
 		core.info(`  ${data.isReleaseBranch ? STATE.good : STATE.neutral} Release branch: ${data.isReleaseBranch}`);
 		core.info(`  ${data.isMainBranch ? STATE.good : STATE.neutral} Main branch: ${data.isMainBranch}`);
-		core.info(`  ${data.isReleaseCommit ? STATE.good : STATE.neutral} Release commit: ${data.isReleaseCommit}`);
+
+		core.info("");
+		core.info("Release commit detection:");
+		core.info(
+			`  ${data.isReleaseCommit ? STATE.good : STATE.neutral} Release commit (triggers Phase 3): ${data.isReleaseCommit}`,
+		);
+		if (data.mergedReleasePR) {
+			core.info(`  ${STATE.good} Merged release PR: ${data.mergedReleasePR}`);
+		}
 
 		if (data.isPullRequestEvent !== undefined) {
 			core.info("");
