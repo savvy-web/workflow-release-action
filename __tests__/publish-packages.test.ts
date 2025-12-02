@@ -136,11 +136,22 @@ describe("publish-packages", () => {
 			configuredRegistries: [],
 			missingTokens: [],
 		});
-		vi.mocked(exec.exec).mockResolvedValue(1); // Build fails
+		// Mock exec to call listeners and return non-zero exit code
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+			if (options?.listeners?.stdout) {
+				options.listeners.stdout(Buffer.from("Building...\n"));
+			}
+			if (options?.listeners?.stderr) {
+				options.listeners.stderr(Buffer.from("Error: TypeScript compilation failed\n"));
+			}
+			return 1; // Build fails
+		});
 
 		const result = await publishPackages("pnpm", "main", false);
 
 		expect(result.success).toBe(false);
+		expect(result.buildError).toContain("TypeScript compilation failed");
+		expect(result.buildOutput).toContain("Building...");
 		expect(core.error).toHaveBeenCalledWith("Build failed, aborting publish");
 	});
 

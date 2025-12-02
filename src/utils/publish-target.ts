@@ -109,6 +109,7 @@ async function publishToNpmCompatible(target: ResolvedTarget): Promise<PublishRe
 		success: exitCode === 0,
 		output,
 		error,
+		exitCode,
 		registryUrl,
 		attestationUrl,
 	};
@@ -155,6 +156,7 @@ async function publishToJsr(target: ResolvedTarget): Promise<PublishResult> {
 		success: exitCode === 0,
 		output,
 		error,
+		exitCode,
 		registryUrl,
 	};
 }
@@ -174,6 +176,7 @@ export async function publishToTarget(target: ResolvedTarget, dryRun: boolean): 
 			success: true,
 			output: "[DRY RUN] Skipped actual publish",
 			error: "",
+			exitCode: 0,
 		};
 	}
 

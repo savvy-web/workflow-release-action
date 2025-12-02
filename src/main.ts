@@ -12,7 +12,7 @@ import { detectPublishableChanges } from "./utils/detect-publishable-changes.js"
 import { detectReleasedPackagesFromCommit, detectReleasedPackagesFromPR } from "./utils/detect-released-packages.js";
 import { determineReleaseType, determineTagStrategy } from "./utils/determine-tag-strategy.js";
 import { generatePRDescriptionDirect } from "./utils/generate-pr-description.js";
-import { generatePublishResultsSummary } from "./utils/generate-publish-summary.js";
+import { generateBuildFailureSummary, generatePublishResultsSummary } from "./utils/generate-publish-summary.js";
 import { generateReleaseNotesPreview } from "./utils/generate-release-notes-preview.js";
 import { getChangesetStatus } from "./utils/get-changeset-status.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
@@ -840,8 +840,23 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 		core.setOutput("publish_results", JSON.stringify(publishResult.packages));
 		core.setOutput("success", publishResult.success);
 
-		// Generate publish summary
-		const publishSummary = generatePublishResultsSummary(publishResult.packages, inputs.dryRun);
+		// Check if this was a build failure (no packages published)
+		const isBuildFailure = publishResult.buildError !== undefined;
+
+		// Generate appropriate summary
+		const publishSummary = isBuildFailure
+			? generateBuildFailureSummary(publishResult, inputs.dryRun)
+			: generatePublishResultsSummary(publishResult.packages, inputs.dryRun);
+
+		// Determine check title based on failure type
+		let checkTitle: string;
+		if (publishResult.success) {
+			checkTitle = `Published ${publishResult.successfulPackages}/${publishResult.totalPackages} package(s)`;
+		} else if (isBuildFailure) {
+			checkTitle = "Build failed - publishing aborted";
+		} else {
+			checkTitle = `Publishing failed: ${publishResult.successfulPackages}/${publishResult.totalPackages} succeeded`;
+		}
 
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
@@ -850,9 +865,7 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 			status: "completed",
 			conclusion: publishResult.success ? "success" : "failure",
 			output: {
-				title: publishResult.success
-					? `Published ${publishResult.successfulPackages}/${publishResult.totalPackages} package(s)`
-					: `Publishing failed: ${publishResult.successfulPackages}/${publishResult.totalPackages} succeeded`,
+				title: checkTitle,
 				summary: publishSummary,
 			},
 		});
@@ -861,7 +874,8 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 
 		// If publishing failed, don't continue with tags/releases
 		if (!publishResult.success) {
-			logger.error("Publishing failed, skipping tag and release creation");
+			const failureReason = isBuildFailure ? "Build failed" : "Publishing failed";
+			logger.error(`${failureReason}, skipping tag and release creation`);
 
 			// Mark remaining checks as skipped
 			for (let i = 1; i < checkIds.length; i++) {
@@ -873,12 +887,19 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 					conclusion: "skipped",
 					output: {
 						title: "Skipped",
-						summary: "Publishing failed",
+						summary: failureReason,
 					},
 				});
 			}
 
-			core.setFailed("Publishing failed");
+			// Write detailed job summary with error information
+			await core.summary
+				.addHeading(`❌ Release ${failureReason}`, 1)
+				.addRaw(inputs.dryRun ? "> 🧪 **DRY RUN MODE**\n\n" : "")
+				.addRaw(publishSummary)
+				.write();
+
+			core.setFailed(failureReason);
 			return;
 		}
 

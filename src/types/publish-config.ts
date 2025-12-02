@@ -205,6 +205,7 @@ export interface PublishResult {
 	success: boolean;
 	output: string;
 	error: string;
+	exitCode?: number; // Exit code from publish command
 	registryUrl?: string; // URL to the published package
 	attestationUrl?: string; // URL to provenance/attestation
 }

@@ -1,5 +1,6 @@
 import { context } from "@actions/github";
 import type { PackagePublishValidation, PackageStats, ResolvedTarget } from "../types/publish-config.js";
+import type { PublishPackagesResult } from "./publish-packages.js";
 
 /**
  * Get a display name for a registry URL
@@ -287,6 +288,12 @@ export interface TargetPublishResult {
 	registryUrl?: string;
 	attestationUrl?: string;
 	error?: string;
+	/** Full stdout from publish command */
+	stdout?: string;
+	/** Full stderr from publish command */
+	stderr?: string;
+	/** Exit code from publish command */
+	exitCode?: number;
 }
 
 /**
@@ -299,6 +306,76 @@ export interface PackagePublishResult {
 }
 
 /**
+ * Categorize common publish errors for better diagnostics
+ */
+function categorizeError(error: string, stderr: string): { category: string; hint: string } {
+	const combined = `${error} ${stderr}`.toLowerCase();
+
+	if (combined.includes("401") || combined.includes("unauthorized") || combined.includes("authentication")) {
+		return {
+			category: "🔐 Authentication Error",
+			hint: "Check that the required token is provided and has correct permissions",
+		};
+	}
+
+	if (combined.includes("403") || combined.includes("forbidden") || combined.includes("not allowed")) {
+		return {
+			category: "🚫 Permission Error",
+			hint: "The token may lack required permissions (e.g., packages:write, id-token:write for provenance)",
+		};
+	}
+
+	if (combined.includes("404") || combined.includes("not found")) {
+		return {
+			category: "❓ Not Found Error",
+			hint: "The package, scope, or registry may not exist or be accessible",
+		};
+	}
+
+	if (combined.includes("conflict") || combined.includes("409") || combined.includes("already exists")) {
+		return {
+			category: "⚠️ Version Conflict",
+			hint: "This version may already be published. Check if the version needs to be bumped",
+		};
+	}
+
+	if (combined.includes("oidc") || combined.includes("id-token") || combined.includes("sigstore")) {
+		return {
+			category: "🔑 OIDC/Provenance Error",
+			hint: "Add `id-token: write` permission to the workflow for npm provenance attestations",
+		};
+	}
+
+	if (combined.includes("attestation") || combined.includes("intoto")) {
+		return {
+			category: "📜 Attestation Error",
+			hint: "Add `attestations: write` permission to the workflow for GitHub attestations",
+		};
+	}
+
+	if (combined.includes("npm err!") || combined.includes("enpm")) {
+		return {
+			category: "📦 NPM Error",
+			hint: "Check npm configuration and registry settings",
+		};
+	}
+
+	return {
+		category: "❌ Publish Error",
+		hint: "Review the error output below for details",
+	};
+}
+
+/**
+ * Truncate long output for display
+ */
+function truncateOutput(output: string, maxLines: number = 20): string {
+	const lines = output.trim().split("\n");
+	if (lines.length <= maxLines) return output.trim();
+	return [...lines.slice(0, maxLines), `... (${lines.length - maxLines} more lines)`].join("\n");
+}
+
+/**
  * Generate a markdown summary of actual publish results
  *
  * @param results - Array of package publish results
@@ -308,20 +385,55 @@ export interface PackagePublishResult {
 export function generatePublishResultsSummary(results: PackagePublishResult[], dryRun: boolean): string {
 	const sections: string[] = [];
 
-	// Header
-	sections.push(`## \u{1F680} Publish Results ${dryRun ? "\u{1F9EA} (Dry Run)" : ""}\n`);
+	// Calculate overall stats
+	const totalPackages = results.length;
+	const successPackages = results.filter((p) => p.targets.every((t) => t.success)).length;
+	const totalTargets = results.reduce((sum, p) => sum + p.targets.length, 0);
+	const successTargets = results.reduce((sum, p) => sum + p.targets.filter((t) => t.success).length, 0);
+	const allSuccess = successPackages === totalPackages;
+
+	// Header with overall status
+	const statusIcon = allSuccess ? "\u2705" : "\u274C";
+	sections.push(`## \u{1F680} Publish Results ${statusIcon} ${dryRun ? "\u{1F9EA} (Dry Run)" : ""}\n`);
+
+	// Overall summary
+	if (!allSuccess) {
+		sections.push(
+			`> **\u26A0\uFE0F Publishing failed:** ${successPackages}/${totalPackages} packages, ${successTargets}/${totalTargets} targets succeeded\n`,
+		);
+	}
+
+	// Summary table (status column leftmost with empty header)
+	sections.push("|   | Package | Version | Targets |");
+	sections.push("|---|---------|---------|---------|");
 
 	for (const pkg of results) {
-		const allSuccess = pkg.targets.every((t) => t.success);
-		const status = allSuccess ? "\u2705" : "\u274C";
-		sections.push(`### ${status} ${pkg.name}@${pkg.version}\n`);
+		const pkgSuccess = pkg.targets.every((t) => t.success);
+		const status = pkgSuccess ? "\u2705" : "\u274C";
+		const successCount = pkg.targets.filter((t) => t.success).length;
+		const targetSummary = pkgSuccess
+			? `\u2705 ${pkg.targets.length}/${pkg.targets.length}`
+			: `\u274C ${successCount}/${pkg.targets.length}`;
+		sections.push(`| ${status} | ${pkg.name} | ${pkg.version} | ${targetSummary} |`);
+	}
+	sections.push("");
 
-		sections.push("| Registry | Status | Package URL | Provenance |");
-		sections.push("|----------|--------|-------------|------------|");
+	// Detailed results per package
+	for (const pkg of results) {
+		const allPkgSuccess = pkg.targets.every((t) => t.success);
+		const status = allPkgSuccess ? "\u2705" : "\u274C";
+
+		// Only show expanded details if there are failures
+		const openAttr = allPkgSuccess ? "" : " open";
+		sections.push(`<details${openAttr}>`);
+		sections.push(`<summary><strong>${status} ${pkg.name}@${pkg.version}</strong></summary>\n`);
+
+		sections.push("|   | Registry | Package URL | Provenance |");
+		sections.push("|---|----------|-------------|------------|");
 
 		for (const result of pkg.targets) {
 			const registry = getRegistryDisplayName(result.target.registry);
-			const targetStatus = result.success ? "\u2705 Published" : `\u274C ${result.error}`;
+			const targetStatus = result.success ? "\u2705 Published" : "\u274C Failed";
 			const packageUrl = result.registryUrl ? `[View](${result.registryUrl})` : "\u{1F6AB}";
 			const provenance = result.attestationUrl
 				? `[View](${result.attestationUrl})`
@@ -329,11 +441,108 @@ export function generatePublishResultsSummary(results: PackagePublishResult[], d
 					? "\u2705"
 					: "\u{1F6AB}";
 
-			sections.push(`| ${registry} | ${targetStatus} | ${packageUrl} | ${provenance} |`);
+			sections.push(`| ${targetStatus} | ${registry} | ${packageUrl} | ${provenance} |`);
 		}
 
-		sections.push("");
+		// Show error details for failed targets
+		const failedTargets = pkg.targets.filter((t) => !t.success);
+		if (failedTargets.length > 0) {
+			sections.push("");
+			sections.push("#### \u{1F6A8} Error Details\n");
+
+			for (const result of failedTargets) {
+				const registry = getRegistryDisplayName(result.target.registry);
+				const { category, hint } = categorizeError(result.error || "", result.stderr || "");
+
+				sections.push(`**${registry}** - ${category}\n`);
+				sections.push(`> \u{1F4A1} ${hint}\n`);
+
+				// Show exit code if available
+				if (result.exitCode !== undefined && result.exitCode !== 0) {
+					sections.push(`**Exit Code:** ${result.exitCode}\n`);
+				}
+
+				// Show error message
+				if (result.error) {
+					sections.push(`**Error:** ${result.error}\n`);
+				}
+
+				// Show stderr output (most useful for debugging)
+				if (result.stderr?.trim()) {
+					sections.push("<details>");
+					sections.push("<summary>stderr output</summary>\n");
+					sections.push("```");
+					sections.push(truncateOutput(result.stderr));
+					sections.push("```");
+					sections.push("</details>\n");
+				}
+
+				// Show stdout output
+				if (result.stdout?.trim()) {
+					sections.push("<details>");
+					sections.push("<summary>stdout output</summary>\n");
+					sections.push("```");
+					sections.push(truncateOutput(result.stdout));
+					sections.push("```");
+					sections.push("</details>\n");
+				}
+			}
+		}
+
+		sections.push("</details>\n");
 	}
+
+	// Permission requirements reminder if any failures
+	if (!allSuccess) {
+		sections.push("---");
+		sections.push("### \u{1F510} Required Permissions\n");
+		sections.push("Ensure your workflow has these permissions:\n");
+		sections.push("```yaml");
+		sections.push("permissions:");
+		sections.push("  contents: write    # For git tags and releases");
+		sections.push("  packages: write    # For GitHub Packages");
+		sections.push("  id-token: write    # For npm provenance (Sigstore OIDC)");
+		sections.push("  attestations: write # For GitHub Attestations API");
+		sections.push("```\n");
+	}
+
+	return sections.join("\n");
+}
+
+/**
+ * Generate a markdown summary for build failures
+ *
+ * @param publishResult - The publish result containing build error info
+ * @param dryRun - Whether this is a dry-run
+ * @returns Markdown summary string
+ */
+export function generateBuildFailureSummary(publishResult: PublishPackagesResult, dryRun: boolean): string {
+	const sections: string[] = [];
+
+	sections.push(`## \u{1F6A8} Build Failed ${dryRun ? "\u{1F9EA} (Dry Run)" : ""}\n`);
+	sections.push("> Publishing was aborted because the build step failed.\n");
+
+	if (publishResult.buildError) {
+		sections.push("### Error\n");
+		sections.push("```");
+		sections.push(truncateOutput(publishResult.buildError, 30));
+		sections.push("```\n");
+	}
+
+	if (publishResult.buildOutput) {
+		sections.push("<details>");
+		sections.push("<summary>Build output</summary>\n");
+		sections.push("```");
+		sections.push(truncateOutput(publishResult.buildOutput, 50));
+		sections.push("```");
+		sections.push("</details>\n");
+	}
+
+	sections.push("### \u{1F4A1} Troubleshooting\n");
+	sections.push("1. Check that the `ci:build` script exists in your package.json");
+	sections.push("2. Run `pnpm ci:build` locally to reproduce the error");
+	sections.push("3. Ensure all dependencies are installed correctly");
+	sections.push("4. Check for TypeScript errors: `pnpm typecheck`\n");
 
 	return sections.join("\n");
 }

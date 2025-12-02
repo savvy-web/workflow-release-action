@@ -26,6 +26,10 @@ export interface PublishPackagesResult {
 	totalTargets: number;
 	/** Targets that succeeded */
 	successfulTargets: number;
+	/** Build error if build failed */
+	buildError?: string;
+	/** Build stdout output */
+	buildOutput?: string;
 }
 
 /**
@@ -158,12 +162,23 @@ export async function publishPackages(
 	const buildArgs = packageManager === "npm" ? ["run", "ci:build"] : ["ci:build"];
 
 	let buildExitCode = 0;
+	let buildStdout = "";
+	let buildStderr = "";
 	try {
 		buildExitCode = await exec.exec(buildCmd, buildArgs, {
 			ignoreReturnCode: true,
+			listeners: {
+				stdout: (data: Buffer) => {
+					buildStdout += data.toString();
+				},
+				stderr: (data: Buffer) => {
+					buildStderr += data.toString();
+				},
+			},
 		});
 	} catch (error) {
 		core.error(`Build failed: ${error instanceof Error ? error.message : String(error)}`);
+		buildStderr = error instanceof Error ? error.message : String(error);
 		buildExitCode = 1;
 	}
 
@@ -178,6 +193,8 @@ export async function publishPackages(
 			successfulPackages: 0,
 			totalTargets: allTargets.length,
 			successfulTargets: 0,
+			buildError: buildStderr || `Build exited with code ${buildExitCode}`,
+			buildOutput: buildStdout,
 		};
 	}
 
@@ -208,6 +225,9 @@ export async function publishPackages(
 					registryUrl: publishResult.registryUrl,
 					attestationUrl: publishResult.attestationUrl,
 					error: publishResult.success ? undefined : publishResult.error,
+					stdout: publishResult.output,
+					stderr: publishResult.error,
+					exitCode: publishResult.exitCode,
 				};
 
 				targetResults.push(result);
@@ -234,6 +254,7 @@ export async function publishPackages(
 					target,
 					success: false,
 					error: errorMessage,
+					exitCode: 1,
 				});
 			}
 		}

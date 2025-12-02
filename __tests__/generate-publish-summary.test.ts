@@ -2,7 +2,12 @@ import { context } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PackagePublishValidation, ResolvedTarget, TargetValidationResult } from "../src/types/publish-config.js";
 import type { PackagePublishResult } from "../src/utils/generate-publish-summary.js";
-import { generatePublishResultsSummary, generatePublishSummary } from "../src/utils/generate-publish-summary.js";
+import {
+	generateBuildFailureSummary,
+	generatePublishResultsSummary,
+	generatePublishSummary,
+} from "../src/utils/generate-publish-summary.js";
+import type { PublishPackagesResult } from "../src/utils/publish-packages.js";
 
 // Mock @actions/github for context.ref
 vi.mock("@actions/github", () => ({
@@ -906,8 +911,13 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishResultsSummary(results, false);
 
-			expect(summary).toContain("\u274C @test/package@1.0.0");
-			expect(summary).toContain("\u274C Authentication failed");
+			// Check for failure status in summary
+			expect(summary).toContain("\u274C");
+			expect(summary).toContain("@test/package");
+			expect(summary).toContain("1.0.0");
+			// Check for error details section
+			expect(summary).toContain("Error Details");
+			expect(summary).toContain("Authentication failed");
 		});
 
 		it("shows N/A icon for missing URLs", () => {
@@ -969,8 +979,310 @@ describe("generate-publish-summary", () => {
 			const summary = generatePublishResultsSummary(results, false);
 
 			// Should show checkmark for provenance without specific URL
-			const tableRowMatch = summary.match(/npm.*Published.*View.*\|(.*)\|/);
-			expect(tableRowMatch).toBeTruthy();
+			// Table format: | ✅ Published | npm | [View](url) | ✅ |
+			expect(summary).toContain("Published");
+			expect(summary).toContain("npm");
+			expect(summary).toContain("[View]");
+			// Provenance enabled but no URL should show checkmark
+			expect(summary).toContain("\u2705");
+		});
+
+		it("categorizes authentication errors", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: false,
+							error: "401 Unauthorized",
+							stderr: "npm ERR! code E401",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+			expect(summary).toContain("Authentication Error");
+			expect(summary).toContain("token");
+		});
+
+		it("categorizes permission errors", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://npm.pkg.github.com/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "GITHUB_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: false,
+							error: "403 Forbidden",
+							stderr: "npm ERR! code E403",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+			expect(summary).toContain("Permission Error");
+			expect(summary).toContain("packages:write");
+		});
+
+		it("categorizes OIDC/provenance errors", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: false,
+							error: "Failed to get OIDC token",
+							stderr: "Error: Unable to get OIDC token for Sigstore",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+			expect(summary).toContain("OIDC/Provenance Error");
+			expect(summary).toContain("id-token: write");
+		});
+
+		it("categorizes version conflict errors", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: false,
+							error: "Version 1.0.0 already exists",
+							stderr: "npm ERR! 409 Conflict",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+			expect(summary).toContain("Version Conflict");
+			expect(summary).toContain("version");
+		});
+
+		it("shows stderr output in collapsible section", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: false,
+							error: "Publish failed",
+							stderr: "npm ERR! code ENEEDAUTH\nnpm ERR! need auth",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+			expect(summary).toContain("<details>");
+			expect(summary).toContain("stderr output");
+			expect(summary).toContain("npm ERR!");
+		});
+
+		it("truncates long output", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			// Create output with more than 20 lines
+			const longOutput = Array.from({ length: 30 }, (_, i) => `Line ${i + 1}: Error message`).join("\n");
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: false,
+							error: "Publish failed",
+							stderr: longOutput,
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+			expect(summary).toContain("... (10 more lines)");
+		});
+
+		it("shows required permissions section on failure", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: false,
+							error: "Failed",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+			expect(summary).toContain("Required Permissions");
+			expect(summary).toContain("contents: write");
+			expect(summary).toContain("packages: write");
+			expect(summary).toContain("id-token: write");
+			expect(summary).toContain("attestations: write");
+		});
+	});
+
+	describe("generateBuildFailureSummary", () => {
+		it("generates build failure summary with error", () => {
+			const result: PublishPackagesResult = {
+				success: false,
+				packages: [],
+				totalPackages: 2,
+				successfulPackages: 0,
+				totalTargets: 4,
+				successfulTargets: 0,
+				buildError: "TypeScript compilation failed\nError: Cannot find module",
+				buildOutput: "Building packages...\nCompiling TypeScript...",
+			};
+
+			const summary = generateBuildFailureSummary(result, false);
+
+			expect(summary).toContain("Build Failed");
+			expect(summary).toContain("TypeScript compilation failed");
+			expect(summary).toContain("Build output");
+			expect(summary).toContain("Troubleshooting");
+			expect(summary).toContain("ci:build");
+		});
+
+		it("shows dry-run indicator in build failure summary", () => {
+			const result: PublishPackagesResult = {
+				success: false,
+				packages: [],
+				totalPackages: 1,
+				successfulPackages: 0,
+				totalTargets: 2,
+				successfulTargets: 0,
+				buildError: "Build failed",
+			};
+
+			const summary = generateBuildFailureSummary(result, true);
+
+			expect(summary).toContain("Dry Run");
+		});
+
+		it("handles missing build output gracefully", () => {
+			const result: PublishPackagesResult = {
+				success: false,
+				packages: [],
+				totalPackages: 1,
+				successfulPackages: 0,
+				totalTargets: 2,
+				successfulTargets: 0,
+				buildError: "Build failed",
+			};
+
+			const summary = generateBuildFailureSummary(result, false);
+
+			expect(summary).toContain("Build Failed");
+			expect(summary).toContain("Build failed");
+			// Should not contain build output section since it's undefined
+			expect(summary).not.toContain("Build output</summary>");
+		});
+
+		it("truncates long build error output", () => {
+			const longError = Array.from({ length: 50 }, (_, i) => `Error line ${i + 1}`).join("\n");
+
+			const result: PublishPackagesResult = {
+				success: false,
+				packages: [],
+				totalPackages: 1,
+				successfulPackages: 0,
+				totalTargets: 2,
+				successfulTargets: 0,
+				buildError: longError,
+			};
+
+			const summary = generateBuildFailureSummary(result, false);
+
+			expect(summary).toContain("... (20 more lines)");
 		});
 	});
 });
