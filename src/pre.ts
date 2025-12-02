@@ -2,7 +2,6 @@ import * as core from "@actions/core";
 
 import { checkTokenPermissions } from "./utils/check-token-permissions.js";
 import { createAppToken } from "./utils/create-app-token.js";
-import { detectRepoType } from "./utils/detect-repo-type.js";
 
 /**
  * Pre-action script
@@ -69,12 +68,6 @@ async function run(): Promise<void> {
 				core.saveState("appName", tokenInfo.appName);
 			}
 		}
-
-		// Auto-detect package manager from package.json
-		core.info("Detecting package manager...");
-		const repoType = await detectRepoType();
-		core.saveState("packageManager", repoType.packageManager);
-		core.info(`Detected package manager: ${repoType.packageManager}`);
 
 		core.debug(`Pre-action completed at ${startTime}`);
 	} catch (error) {

@@ -10,6 +10,7 @@ import { createReleaseBranch } from "./utils/create-release-branch.js";
 import { createValidationCheck } from "./utils/create-validation-check.js";
 import { detectPublishableChanges } from "./utils/detect-publishable-changes.js";
 import { detectReleasedPackagesFromCommit, detectReleasedPackagesFromPR } from "./utils/detect-released-packages.js";
+import { detectRepoType } from "./utils/detect-repo-type.js";
 import { determineReleaseType, determineTagStrategy } from "./utils/determine-tag-strategy.js";
 import { generatePRDescriptionDirect } from "./utils/generate-pr-description.js";
 import { generateBuildFailureSummary, generatePublishResultsSummary } from "./utils/generate-publish-summary.js";
@@ -73,6 +74,12 @@ async function run(): Promise<void> {
 			throw new Error("No token available. The pre-action should have generated a token from app-id/private-key.");
 		}
 
+		// Auto-detect package manager from package.json (repo is checked out by now)
+		core.info("Detecting package manager...");
+		const repoType = await detectRepoType();
+		core.saveState("packageManager", repoType.packageManager);
+		core.info(`Detected package manager: ${repoType.packageManager}`);
+
 		// Read inputs
 		const inputs = {
 			// GitHub App token (from pre.ts state)
@@ -82,8 +89,8 @@ async function run(): Promise<void> {
 			releaseBranch: core.getInput("release-branch") || "changeset-release/main",
 			targetBranch: core.getInput("target-branch") || "main",
 
-			// Package manager (auto-detected in pre.ts)
-			packageManager: core.getState("packageManager") || "pnpm",
+			// Package manager (auto-detected above)
+			packageManager: repoType.packageManager,
 
 			// Workflow mode
 			dryRun: core.getBooleanInput("dry-run") || false,
