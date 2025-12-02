@@ -120,7 +120,7 @@ jobs:
         run: |
           echo "Validating PR title: ${{ github.event.pull_request.title }}"
           set +e
-          pnpm exec commitlint --config commitlint.config.ts <<< "${{ github.event.pull_request.title }}"
+          pnpm exec commitlint --config ./lib/configs/commitlint.config.ts <<< "${{ github.event.pull_request.title }}"
           EXIT_CODE=$?
           set -e
           echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
