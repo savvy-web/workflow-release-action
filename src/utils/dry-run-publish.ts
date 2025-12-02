@@ -105,8 +105,8 @@ async function dryRunNpmCompatible(target: ResolvedTarget): Promise<DryRunResult
 	// Check provenance readiness
 	const provenanceReady = target.provenance ? !error.includes("provenance") || output.includes("provenance") : true;
 
-	// Parse package stats from output
-	const stats = parseNpmDryRunStats(output);
+	// Parse package stats from combined output (npm notice goes to stderr)
+	const stats = parseNpmDryRunStats(output + error);
 
 	return {
 		success: exitCode === 0 && !versionConflict,

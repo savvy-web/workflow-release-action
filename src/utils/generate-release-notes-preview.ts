@@ -156,7 +156,7 @@ function generateRegistryTable(validation: PackagePublishValidation): string {
 		const unpacked = target.stats?.unpackedSize || "—";
 		const files = target.stats?.totalFiles?.toString() || "—";
 		const access = target.target.access || "—";
-		const provenance = target.target.provenance ? (target.provenanceReady ? "✅" : "⚠️") : "—";
+		const provenance = target.target.provenance ? (target.provenanceReady ? "✅" : "⚠️") : "🚫";
 
 		return [registry, `\`${dirName}\``, packed, unpacked, files, access, provenance];
 	});
@@ -380,7 +380,7 @@ export async function generateReleaseNotesPreview(
 	if (notReleasingPackages.length > 0) {
 		const notReleasingRows = notReleasingPackages.map((pkg) => {
 			const skipReason = getSkipReason(pkg, false);
-			return [pkg.name, pkg.version, skipReason ? formatSkipReason(skipReason) : "—"];
+			return [pkg.name, pkg.version, skipReason ? formatSkipReason(skipReason) : "🚫"];
 		});
 
 		const notReleasingTable = summaryWriter.table(["Package", "Version", "Reason"], notReleasingRows);
@@ -425,7 +425,7 @@ export async function generateReleaseNotesPreview(
 	// Add legend
 	jobSections.push({
 		content:
-			"**Legend:** 🔴 major | 🟡 minor | 🟢 patch | 🔒 fixed | 🔗 linked | · standalone | 🆕 first release | ✅ ready | ⚠️ warning | — N/A",
+			"**Legend:** 🔴 major | 🟡 minor | 🟢 patch | 🔒 fixed | 🔗 linked | 📦 standalone | 🆕 first release | ✅ ready | ⚠️ warning | 🚫 N/A",
 	});
 
 	const summaryContent = summaryWriter.build(jobSections);
