@@ -6,26 +6,17 @@ branding:
   color: blue
 
 inputs:
-  # GitHub App authentication (preferred method)
-  # Provide app-id and private-key to generate tokens automatically
+  # GitHub App authentication (required)
   app-id:
     description: GitHub App ID for authentication
-    required: false
+    required: true
   private-key:
     description: GitHub App private key (PEM format)
-    required: false
+    required: true
   skip-token-revoke:
     description: Skip token revocation in post-action (tokens expire after 1 hour anyway)
     required: false
     default: "false"
-
-  # Legacy token input (for backwards compatibility)
-  # If provided, app-id and private-key are ignored
-  token:
-    description: |
-      Pre-generated GitHub token (legacy, for backwards compatibility).
-      Prefer using app-id and private-key instead for automatic token management.
-    required: false
 
   release-branch:
     description: Release branch name
@@ -38,7 +29,7 @@ inputs:
   package-manager:
     description: Package manager to use (npm, pnpm, yarn, bun)
     required: false
-    default: pnpm
+    default: npm
   version-command:
     description: Custom version command (defaults to package-manager ci:version)
     required: false
@@ -52,19 +43,24 @@ inputs:
     required: false
     default: "false"
 
-  # Authentication inputs for multi-registry publishing
-  # NOTE: npm and JSR use OIDC - no tokens needed for these registries
-  # GitHub Packages uses the GitHub App token passed via 'token' input
-  registry-tokens:
+  # Custom registry authentication
+  # NOTE: npm and JSR use OIDC trusted publishing - no tokens needed
+  # NOTE: GitHub Packages uses the GitHub App token automatically
+  custom-registries:
     description: |
-      Custom registry tokens in format: registry=token (one per line)
-      Only needed for private/custom registries that don't support OIDC.
+      Custom registries to authenticate with the GitHub App token (one per line).
+      These registries will use the same token as GitHub Packages.
+
+      Format:
+        https://registry.example.com/           # Uses GitHub App token
+        https://registry.example.com/=TOKEN     # Uses explicit token (optional)
 
       Example:
-        https://registry.example.com/=<YOUR_TOKEN>
+        custom-registries: |
+          https://npm.mycompany.com/
 
-      Note: npm uses OIDC trusted publishing (no token needed)
-      Note: GitHub Packages uses the GitHub App token automatically
+      Note: npm/JSR use OIDC trusted publishing (no configuration needed)
+      Note: GitHub Packages authenticates automatically with the GitHub App token
     required: false
     default: ""
 

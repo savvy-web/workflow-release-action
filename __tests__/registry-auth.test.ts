@@ -326,20 +326,31 @@ describe("registry-auth", () => {
 	});
 
 	describe("setupRegistryAuth", () => {
-		it("sets GITHUB_TOKEN from input", () => {
-			vi.mocked(core.getInput).mockImplementation((name: string) => {
-				if (name === "token") return "github-app-token";
+		it("gets token from state", () => {
+			vi.mocked(core.getState).mockImplementation((name: string) => {
+				if (name === "token") return "state-token";
 				return "";
 			});
 
 			const targets: ResolvedTarget[] = [];
 			setupRegistryAuth(targets);
 
-			expect(process.env.GITHUB_TOKEN).toBe("github-app-token");
+			expect(process.env.GITHUB_TOKEN).toBe("state-token");
+		});
+
+		it("warns when no token in state", () => {
+			vi.mocked(core.getState).mockReturnValue("");
+
+			const targets: ResolvedTarget[] = [];
+			setupRegistryAuth(targets);
+
+			expect(core.warning).toHaveBeenCalledWith(
+				"No GitHub token available - GitHub Packages and custom registries may fail to authenticate",
+			);
 		});
 
 		it("does not set NPM_TOKEN (npm uses OIDC)", () => {
-			vi.mocked(core.getInput).mockImplementation((name: string) => {
+			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "github-token";
 				return "";
 			});
@@ -355,7 +366,7 @@ describe("registry-auth", () => {
 		});
 
 		it("does not set JSR_TOKEN (JSR uses OIDC)", () => {
-			vi.mocked(core.getInput).mockImplementation((name: string) => {
+			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "github-token";
 				return "";
 			});
@@ -370,10 +381,13 @@ describe("registry-auth", () => {
 			expect(process.env.JSR_TOKEN).toBeUndefined();
 		});
 
-		it("parses registry-tokens input", () => {
-			vi.mocked(core.getInput).mockImplementation((name: string) => {
+		it("parses custom-registries input", () => {
+			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "github-token";
-				if (name === "registry-tokens") return "https://custom.registry.com/=custom-token";
+				return "";
+			});
+			vi.mocked(core.getInput).mockImplementation((name: string) => {
+				if (name === "custom-registries") return "https://custom.registry.com/=custom-token";
 				return "";
 			});
 
@@ -383,9 +397,83 @@ describe("registry-auth", () => {
 			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("custom-token");
 		});
 
+		it("uses GitHub App token for custom-registries without explicit token", () => {
+			vi.mocked(core.getState).mockImplementation((name: string) => {
+				if (name === "token") return "github-app-token";
+				return "";
+			});
+			vi.mocked(core.getInput).mockImplementation((name: string) => {
+				if (name === "custom-registries") return "https://npm.savvyweb.dev/";
+				return "";
+			});
+
+			const targets: ResolvedTarget[] = [];
+			setupRegistryAuth(targets);
+
+			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
+			expect(core.info).toHaveBeenCalledWith(
+				"Set NPM_SAVVYWEB_DEV_TOKEN for custom registry: https://npm.savvyweb.dev/ (using GitHub App token)",
+			);
+		});
+
+		it("uses GitHub App token for custom-registries with trailing = but no token", () => {
+			vi.mocked(core.getState).mockImplementation((name: string) => {
+				if (name === "token") return "github-app-token";
+				return "";
+			});
+			vi.mocked(core.getInput).mockImplementation((name: string) => {
+				if (name === "custom-registries") return "https://npm.savvyweb.dev/=";
+				return "";
+			});
+
+			const targets: ResolvedTarget[] = [];
+			setupRegistryAuth(targets);
+
+			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
+			expect(core.info).toHaveBeenCalledWith(
+				"Set NPM_SAVVYWEB_DEV_TOKEN for custom registry: https://npm.savvyweb.dev/ (using GitHub App token)",
+			);
+		});
+
+		it("handles multiple custom-registries with mixed formats", () => {
+			vi.mocked(core.getState).mockImplementation((name: string) => {
+				if (name === "token") return "github-app-token";
+				return "";
+			});
+			vi.mocked(core.getInput).mockImplementation((name: string) => {
+				if (name === "custom-registries") {
+					return "https://npm.savvyweb.dev/\nhttps://custom.registry.com/=explicit-token";
+				}
+				return "";
+			});
+
+			const targets: ResolvedTarget[] = [];
+			setupRegistryAuth(targets);
+
+			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
+			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("explicit-token");
+		});
+
+		it("warns when no GitHub token and custom-registries without explicit value", () => {
+			vi.mocked(core.getState).mockReturnValue("");
+			vi.mocked(core.getInput).mockImplementation((name: string) => {
+				if (name === "custom-registries") return "https://npm.savvyweb.dev/";
+				return "";
+			});
+
+			const targets: ResolvedTarget[] = [];
+			setupRegistryAuth(targets);
+
+			expect(core.warning).toHaveBeenCalledWith(
+				"No GitHub token available - GitHub Packages and custom registries may fail to authenticate",
+			);
+			// Should NOT set the token since no GitHub token available
+			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBeUndefined();
+		});
+
 		it("returns configured registries", () => {
 			process.env.NPM_TOKEN = "npm-token";
-			vi.mocked(core.getInput).mockImplementation((name: string) => {
+			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "github-token";
 				return "";
 			});

@@ -66,16 +66,16 @@ async function run(): Promise<void> {
 	try {
 		logger.start();
 
-		// Get token from state (set by pre.ts) or fall back to input for backwards compatibility
-		const token = core.getState("token") || core.getInput("token");
+		// Get token from state (set by pre.ts)
+		const token = core.getState("token");
 
 		if (!token) {
-			throw new Error("No token available. Provide app-id/private-key or token input.");
+			throw new Error("No token available. The pre-action should have generated a token from app-id/private-key.");
 		}
 
 		// Read inputs
 		const inputs = {
-			// GitHub App token (from pre.ts state or legacy input)
+			// GitHub App token (from pre.ts state)
 			token,
 
 			// Repository configuration

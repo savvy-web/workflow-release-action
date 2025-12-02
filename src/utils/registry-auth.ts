@@ -148,38 +148,65 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
  * @remarks
  * Authentication strategy:
  * - **npm public registry**: Uses OIDC trusted publishing (no token needed)
- * - **GitHub Packages**: Uses GitHub App token (passed as `token` input)
+ * - **GitHub Packages**: Uses GitHub App token (from state or input)
  * - **JSR**: Uses OIDC (no token needed)
- * - **Custom registries**: Uses tokens from `registry-tokens` input
+ * - **Custom registries**: Uses tokens from `registry-tokens` input, or GitHub App token if not specified
  *
  * The GitHub App token is set to GITHUB_TOKEN for GitHub Packages auth.
  * No .npmrc entry is needed for npm/JSR since they use OIDC.
+ *
+ * Custom registries format (one per line):
+ * - `https://registry.example.com/` - Use GitHub App token
+ * - `https://registry.example.com/=TOKEN` - Use explicit token (optional)
  *
  * @param targets - Array of resolved targets to setup auth for
  * @returns Authentication setup result
  */
 export function setupRegistryAuth(targets: ResolvedTarget[]): AuthSetupResult {
-	// Set GITHUB_TOKEN from input for GitHub Packages
-	// This is the GitHub App token, not the default GITHUB_TOKEN
-	const githubToken = core.getInput("token", { required: true });
-	process.env.GITHUB_TOKEN = githubToken;
-	core.info("Using GitHub App token for GitHub Packages authentication");
+	// Get GitHub App token from state (set by pre.ts)
+	const githubToken = core.getState("token");
 
-	// Parse additional registry tokens for custom registries
-	const registryTokensInput = core.getInput("registry-tokens");
-	if (registryTokensInput) {
-		const inputLines = registryTokensInput.split("\n").filter((line) => line.trim());
+	if (!githubToken) {
+		core.warning("No GitHub token available - GitHub Packages and custom registries may fail to authenticate");
+	} else {
+		// Set GITHUB_TOKEN for GitHub Packages and as default for custom registries
+		process.env.GITHUB_TOKEN = githubToken;
+		core.info("Using GitHub App token for GitHub Packages authentication");
+	}
+
+	// Parse custom registries input
+	// Format: "https://registry.example.com/" (uses GitHub App token) or "https://registry.example.com/=TOKEN"
+	const customRegistriesInput = core.getInput("custom-registries");
+	if (customRegistriesInput) {
+		const inputLines = customRegistriesInput.split("\n").filter((line) => line.trim());
 		for (const line of inputLines) {
 			const equalIndex = line.indexOf("=");
-			if (equalIndex === -1) continue;
 
-			const registry = line.slice(0, equalIndex).trim();
-			const token = line.slice(equalIndex + 1).trim();
+			if (equalIndex === -1) {
+				// No "=" found - registry URL only, use GitHub App token
+				const registry = line.trim();
+				if (registry && githubToken) {
+					const envVarName = registryToEnvName(registry);
+					process.env[envVarName] = githubToken;
+					core.info(`Set ${envVarName} for custom registry: ${registry} (using GitHub App token)`);
+				}
+			} else {
+				// Has "=" - could be explicit token or trailing "=" with no token
+				const registry = line.slice(0, equalIndex).trim();
+				const token = line.slice(equalIndex + 1).trim();
 
-			if (registry && token) {
-				const envVarName = registryToEnvName(registry);
-				process.env[envVarName] = token;
-				core.info(`Set ${envVarName} for custom registry: ${registry}`);
+				if (registry) {
+					const envVarName = registryToEnvName(registry);
+					if (token) {
+						// Explicit token provided
+						process.env[envVarName] = token;
+						core.info(`Set ${envVarName} for custom registry: ${registry}`);
+					} else if (githubToken) {
+						// No token after "=" - use GitHub App token
+						process.env[envVarName] = githubToken;
+						core.info(`Set ${envVarName} for custom registry: ${registry} (using GitHub App token)`);
+					}
+				}
 			}
 		}
 	}
