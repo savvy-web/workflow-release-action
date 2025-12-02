@@ -4,13 +4,18 @@ import * as github from "@actions/github";
 import { context } from "@actions/github";
 import { checkReleaseBranch } from "./utils/check-release-branch.js";
 import { cleanupValidationChecks } from "./utils/cleanup-validation-checks.js";
+import { createGitHubReleases } from "./utils/create-github-releases.js";
 import { createReleaseBranch } from "./utils/create-release-branch.js";
 import { createValidationCheck } from "./utils/create-validation-check.js";
 import { detectPublishableChanges } from "./utils/detect-publishable-changes.js";
+import { determineReleaseType, determineTagStrategy } from "./utils/determine-tag-strategy.js";
 import { generatePRDescriptionDirect } from "./utils/generate-pr-description.js";
+import { generatePublishResultsSummary } from "./utils/generate-publish-summary.js";
 import { generateReleaseNotesPreview } from "./utils/generate-release-notes-preview.js";
+import { getChangesetStatus } from "./utils/get-changeset-status.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
 import { PHASE, logger } from "./utils/logger.js";
+import { publishPackages } from "./utils/publish-packages.js";
 import { runCloseLinkedIssues } from "./utils/run-close-linked-issues.js";
 import { summaryWriter } from "./utils/summary-writer.js";
 import { updateReleaseBranch } from "./utils/update-release-branch.js";
@@ -118,7 +123,7 @@ async function run(): Promise<void> {
 		// Phase 3: Release Publishing (on merge to main with version commit)
 		if (isMainBranch && isReleaseCommit) {
 			logger.phase(3, PHASE.publish, "Release Publishing");
-			//await runPhase3Publishing(inputs);
+			await runPhase3Publishing(inputs);
 			return;
 		}
 
@@ -696,6 +701,211 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		}
 
 		core.setFailed(`Phase 2 failed: ${error instanceof Error ? error.message : String(error)}`);
+		throw error;
+	}
+}
+
+/**
+ * Phase 3: Release Publishing
+ *
+ * @remarks
+ * Runs on merge to main with version commit:
+ * 1. Publish packages to configured registries (NPM, GitHub Packages, JSR, custom)
+ * 2. Determine tag strategy (single vs multiple)
+ * 3. Create git tags
+ * 4. Create GitHub releases with artifacts
+ * 5. Set comprehensive workflow outputs
+ */
+async function runPhase3Publishing(inputs: Inputs): Promise<void> {
+	const octokit = github.getOctokit(inputs.token);
+
+	// Create publishing checks upfront
+	const checkNames = ["Publish Packages", "Create Tags", "Create GitHub Releases"];
+	const checkIds: number[] = [];
+
+	try {
+		logger.step(0, "Creating Publishing Checks");
+
+		const checkRuns = await Promise.all(
+			checkNames.map((name) =>
+				octokit.rest.checks.create({
+					owner: context.repo.owner,
+					repo: context.repo.repo,
+					name: inputs.dryRun ? `🧪 ${name} (Dry Run)` : name,
+					head_sha: context.sha,
+					status: "queued",
+				}),
+			),
+		);
+
+		checkIds.push(...checkRuns.map((r) => r.data.id));
+		logger.success(`Created ${checkIds.length} publishing checks`);
+		logger.endStep();
+
+		// Step 1: Publish packages
+		logger.step(1, "Publish Packages");
+
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[0],
+			status: "in_progress",
+		});
+
+		const publishResult = await publishPackages(inputs.packageManager, inputs.targetBranch, inputs.dryRun);
+
+		// Set outputs
+		core.setOutput("released_packages", JSON.stringify(publishResult.packages));
+		core.setOutput("package_count", publishResult.totalPackages);
+		core.setOutput("publish_results", JSON.stringify(publishResult.packages));
+		core.setOutput("success", publishResult.success);
+
+		// Generate publish summary
+		const publishSummary = generatePublishResultsSummary(publishResult.packages, inputs.dryRun);
+
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[0],
+			status: "completed",
+			conclusion: publishResult.success ? "success" : "failure",
+			output: {
+				title: publishResult.success
+					? `Published ${publishResult.successfulPackages}/${publishResult.totalPackages} package(s)`
+					: `Publishing failed: ${publishResult.successfulPackages}/${publishResult.totalPackages} succeeded`,
+				summary: publishSummary,
+			},
+		});
+
+		logger.endStep();
+
+		// If publishing failed, don't continue with tags/releases
+		if (!publishResult.success) {
+			logger.error("Publishing failed, skipping tag and release creation");
+
+			// Mark remaining checks as skipped
+			for (let i = 1; i < checkIds.length; i++) {
+				await octokit.rest.checks.update({
+					owner: context.repo.owner,
+					repo: context.repo.repo,
+					check_run_id: checkIds[i],
+					status: "completed",
+					conclusion: "skipped",
+					output: {
+						title: "Skipped",
+						summary: "Publishing failed",
+					},
+				});
+			}
+
+			core.setFailed("Publishing failed");
+			return;
+		}
+
+		// Step 2: Determine tag strategy and create tags
+		logger.step(2, "Determine Tag Strategy");
+
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[1],
+			status: "in_progress",
+		});
+
+		const tagStrategy = determineTagStrategy(publishResult.packages);
+
+		// Get bump types for release type determination
+		const changesetStatus = await getChangesetStatus(inputs.packageManager, inputs.targetBranch);
+		const bumpTypes = new Map<string, string>();
+		for (const release of changesetStatus.releases) {
+			bumpTypes.set(release.name, release.type);
+		}
+
+		const releaseType = determineReleaseType(publishResult.packages, bumpTypes);
+
+		core.setOutput("release_type", releaseType);
+		core.setOutput("release_tags", JSON.stringify(tagStrategy.tags.map((t) => t.name)));
+
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[1],
+			status: "completed",
+			conclusion: "success",
+			output: {
+				title: `${tagStrategy.strategy === "single" ? "Single tag" : `${tagStrategy.tags.length} tags`}: ${tagStrategy.tags.map((t) => t.name).join(", ")}`,
+				summary: `**Strategy:** ${tagStrategy.strategy}\n**Release Type:** ${releaseType}\n\n**Tags:**\n${tagStrategy.tags.map((t) => `- \`${t.name}\` (${t.packageName}@${t.version})`).join("\n")}`,
+			},
+		});
+
+		logger.endStep();
+
+		// Step 3: Create GitHub releases
+		logger.step(3, "Create GitHub Releases");
+
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[2],
+			status: "in_progress",
+		});
+
+		const releasesResult = await createGitHubReleases(tagStrategy.tags, publishResult.packages, inputs.dryRun);
+
+		core.setOutput("release_urls", JSON.stringify(releasesResult.releases.map((r) => r.url)));
+
+		// Build releases summary
+		const releasesSummary = releasesResult.releases
+			.map((r) => {
+				const assetList =
+					r.assets.length > 0 ? `\n  - Assets: ${r.assets.map((a) => `[${a.name}](${a.downloadUrl})`).join(", ")}` : "";
+				return `- [${r.tag}](${r.url})${assetList}`;
+			})
+			.join("\n");
+
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[2],
+			status: "completed",
+			conclusion: releasesResult.success ? "success" : "failure",
+			output: {
+				title: releasesResult.success
+					? `Created ${releasesResult.releases.length} release(s)`
+					: `Release creation had errors`,
+				summary: `**Created Releases:**\n${releasesSummary}${releasesResult.errors.length > 0 ? `\n\n**Errors:**\n${releasesResult.errors.map((e) => `- ${e}`).join("\n")}` : ""}`,
+			},
+		});
+
+		logger.endStep();
+
+		// Write job summary
+		await core.summary
+			.addHeading("🚀 Release Published", 1)
+			.addRaw(inputs.dryRun ? "> 🧪 **DRY RUN MODE** - No actual changes were made\n\n" : "")
+			.addHeading("📦 Published Packages", 2)
+			.addRaw(publishSummary)
+			.addHeading("🏷️ Tags Created", 2)
+			.addList(tagStrategy.tags.map((t) => `\`${t.name}\``))
+			.addHeading("📝 GitHub Releases", 2)
+			.addList(releasesResult.releases.map((r) => `[${r.tag}](${r.url})`))
+			.write();
+
+		logger.phaseComplete(3);
+	} catch (error) {
+		logger.error(`Phase 3 failed: ${error instanceof Error ? error.message : String(error)}`);
+
+		// Cleanup incomplete checks
+		if (checkIds.length > 0) {
+			logger.info("Cleaning up incomplete publishing checks...");
+			await cleanupValidationChecks(
+				checkIds,
+				error instanceof Error ? error.message : "Workflow failed",
+				inputs.dryRun,
+			);
+		}
+
+		core.setFailed(`Phase 3 failed: ${error instanceof Error ? error.message : String(error)}`);
 		throw error;
 	}
 }
