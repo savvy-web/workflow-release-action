@@ -82,8 +82,8 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			// New table format with enhanced columns
-			expect(summary).toContain("| Package | Version | Bump | Size | Status |");
+			// New table format with enhanced columns including Changesets
+			expect(summary).toContain("| Package | Version | Bump | Size | Changesets | Status |");
 			expect(summary).toContain("@test/package");
 			expect(summary).toContain("1.0.0");
 			expect(summary).toContain("1/1 targets ready");
@@ -229,12 +229,12 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			// Check table headers
-			expect(summary).toContain("| Protocol | Registry | Directory | Status | Provenance |");
+			// Check table headers (Provenance has lock icon)
+			expect(summary).toContain("| Protocol | Registry | Directory | Status | \u{1F50F} Provenance |");
 
 			// Check npm target row
 			expect(summary).toContain("\u{1F4E6} npm");
-			expect(summary).toContain("`npm`"); // directory name
+			expect(summary).toContain("`dist/npm`"); // directory name shows last 2 path segments
 
 			// Check jsr target row
 			expect(summary).toContain("\u{1F995} jsr");
@@ -258,8 +258,8 @@ describe("generate-publish-summary", () => {
 			// Package appears in summary table even without targets
 			expect(summary).toContain("@test/private-package");
 			expect(summary).toContain("1.0.0");
-			// No details section for packages without targets
-			expect(summary).not.toContain("Target Details");
+			// No details section for packages without targets (no <details> tag at all)
+			expect(summary).not.toContain("<details>");
 		});
 
 		it("includes legend at the end", () => {
@@ -316,7 +316,7 @@ describe("generate-publish-summary", () => {
 			expect(summary).toContain("\u{1F7E2} patch"); // 🟢
 		});
 
-		it("shows changeset counts in version column", () => {
+		it("shows changeset counts in notes column", () => {
 			const validations: PackagePublishValidation[] = [
 				{
 					name: "@test/package",
@@ -332,7 +332,8 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false, { changesetCounts });
 
-			expect(summary).toContain("1.1.0 (3)");
+			// Changeset count now appears in Notes column
+			expect(summary).toContain("3 changesets");
 		});
 
 		it("shows package sizes from stats", () => {
@@ -451,7 +452,7 @@ describe("generate-publish-summary", () => {
 			expect(summary).toContain("10 files"); // 3 + 7 = 10
 		});
 
-		it("shows collapsible details for packages with targets", () => {
+		it("shows individual collapsible details for each package with targets", () => {
 			const target: ResolvedTarget = {
 				protocol: "npm",
 				registry: "https://registry.npmjs.org/",
@@ -488,11 +489,54 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			// Collapsible section
+			// Per-package collapsible section (collapsed by default when valid)
 			expect(summary).toContain("<details>");
-			expect(summary).toContain("<summary>");
-			expect(summary).toContain("Target Details");
+			expect(summary).toContain("<summary><strong>\u2705 @test/package@1.0.0</strong></summary>");
 			expect(summary).toContain("</details>");
+			// Should NOT have 'open' attribute when all targets are valid
+			expect(summary).not.toContain("<details open>");
+		});
+
+		it("expands details by default when package has errors", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const targetResult: TargetValidationResult = {
+				target,
+				canPublish: false,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: false,
+				dryRunOutput: "",
+				dryRunError: "Version conflict",
+				versionConflict: true,
+				provenanceReady: false,
+				message: "Version conflict",
+			};
+
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					path: "/test",
+					targets: [targetResult],
+					allTargetsValid: false,
+					hasPublishableTargets: false,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// Per-package collapsible section (expanded by default when error)
+			expect(summary).toContain("<details open>");
+			expect(summary).toContain("<summary><strong>\u274C @test/package@1.0.0</strong></summary>");
 		});
 
 		it("links package names to GitHub when path available", () => {
@@ -718,7 +762,7 @@ describe("generate-publish-summary", () => {
 			expect(summary).toContain("5 files");
 		});
 
-		it("shows discovery errors in details section", () => {
+		it("shows discovery errors in details section (expanded by default)", () => {
 			const validations: PackagePublishValidation[] = [
 				{
 					name: "@test/broken-pkg",
@@ -733,8 +777,8 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			// Discovery error appears in details
-			expect(summary).toContain("<details>");
+			// Discovery error appears in details (expanded because of error)
+			expect(summary).toContain("<details open>");
 			expect(summary).toContain("Could not find package.json");
 			expect(summary).toContain("\u274C Error:");
 		});

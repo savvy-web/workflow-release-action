@@ -589,10 +589,17 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				const allSuccess = validationResults.every((r) => r.success);
 				const failedChecks = validationResults.filter((r) => !r.success);
 
-				// Build validation results table
+				// Build check run URL helper
+				const getCheckUrl = (checkId: number): string =>
+					`https://github.com/${context.repo.owner}/${context.repo.repo}/runs/${checkId}`;
+
+				// Build validation results table with linked check names
 				const validationTable = summaryWriter.table(
 					["Check", "Status"],
-					validationResults.map((r) => [r.name, r.success ? "✅ Passed" : "❌ Failed"]),
+					validationResults.map((r) => [
+						`[${r.name}](${getCheckUrl(r.checkId)})`,
+						r.success ? "✅ Passed" : "❌ Failed",
+					]),
 				);
 
 				// Build comment sections using summaryWriter
@@ -603,32 +610,22 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 						content: inputs.dryRun ? "> 🧪 **DRY RUN MODE** - No actual publishing will occur" : "",
 					},
 					{
-						heading: "Validation Results",
-						level: 3,
 						content: validationTable,
 					},
 				];
 
-				// Add status section (failed checks or success message)
+				// Add status section only if there are failed checks
 				if (failedChecks.length > 0) {
 					commentSections.push({
 						heading: "❌ Failed Checks",
 						level: 3,
 						content: `${summaryWriter.list(failedChecks.map((c) => `**${c.name}**`))}\n\nPlease resolve the issues above before merging.`,
 					});
-				} else {
-					commentSections.push({
-						heading: "✅ All Validations Passed",
-						level: 3,
-						content: "This PR is ready to merge!",
-					});
 				}
 
-				// Add publish validation section if available
+				// Add publish validation section if available (no header, summary already has header)
 				if (buildResult.success && publishResult.totalTargets > 0) {
 					commentSections.push({
-						heading: "📤 Publish Targets",
-						level: 3,
 						content: publishResult.summary,
 					});
 				}

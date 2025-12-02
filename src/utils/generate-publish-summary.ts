@@ -145,8 +145,8 @@ export function generatePublishSummary(
 	const readyTargets = validations.reduce((sum, v) => sum + v.targets.filter((t) => t.canPublish).length, 0);
 
 	// Package summary table with enhanced columns
-	sections.push("| Package | Version | Bump | Size | Status |");
-	sections.push("|---------|---------|------|------|--------|");
+	sections.push("| Package | Version | Bump | Size | Changesets | Status |");
+	sections.push("|---------|---------|------|------|------------|--------|");
 
 	// Aggregate stats
 	let totalPackedBytes = 0;
@@ -164,9 +164,10 @@ export function generatePublishSummary(
 		const bumpIcon = bumpType ? getBumpTypeIcon(bumpType) : "";
 		const bumpDisplay = bumpType ? `${bumpIcon} ${bumpType}` : "\u{1F6AB}";
 
-		// Changeset count
+		// Changeset count for notes column
 		const changesetCount = changesetCounts?.get(pkg.name) || 0;
-		const changesetDisplay = changesetCount > 0 ? ` (${changesetCount})` : "";
+		const notesDisplay =
+			changesetCount > 0 ? `${changesetCount} changeset${changesetCount > 1 ? "s" : ""}` : "\u{1F6AB}";
 
 		// Package size from stats
 		const stats = getPackageStats(pkg);
@@ -183,7 +184,7 @@ export function generatePublishSummary(
 		}
 
 		sections.push(
-			`| ${packageLink} | ${pkg.version}${changesetDisplay} | ${bumpDisplay} | ${sizeDisplay} | ${status} |`,
+			`| ${packageLink} | ${pkg.version} | ${bumpDisplay} | ${sizeDisplay} | ${notesDisplay} | ${status} |`,
 		);
 	}
 
@@ -212,19 +213,21 @@ export function generatePublishSummary(
 		);
 	}
 
-	// Per-package details in collapsible sections
+	// Per-package details in individual collapsible sections
+	// Expanded by default if there are errors, collapsed if all targets are valid
 	const packagesWithTargets = validations.filter((v) => v.targets.length > 0 || v.discoveryError);
 	if (packagesWithTargets.length > 0) {
-		sections.push("<details>");
-		sections.push("<summary><strong>\u{1F4CB} Target Details</strong></summary>\n");
-
 		for (const pkg of packagesWithTargets) {
 			const status = pkg.allTargetsValid ? "\u2705" : "\u274C";
-			sections.push(`#### ${status} ${pkg.name}@${pkg.version}\n`);
+			// Open if there are errors (not all targets valid)
+			const openAttr = pkg.allTargetsValid ? "" : " open";
+			sections.push(`<details${openAttr}>`);
+			sections.push(`<summary><strong>${status} ${pkg.name}@${pkg.version}</strong></summary>\n`);
 
 			// Handle discovery errors (package path or package.json not found)
 			if (pkg.discoveryError) {
 				sections.push(`**\u274C Error:** ${pkg.discoveryError}\n`);
+				sections.push("</details>\n");
 				continue;
 			}
 
@@ -243,14 +246,16 @@ export function generatePublishSummary(
 			}
 
 			// Target table
-			sections.push("| Protocol | Registry | Directory | Status | Provenance |");
-			sections.push("|----------|----------|-----------|--------|------------|");
+			sections.push("| Protocol | Registry | Directory | Status | \u{1F50F} Provenance |");
+			sections.push("|----------|----------|-----------|--------|---------------|");
 
 			for (const result of pkg.targets) {
 				const { target } = result;
 				const icon = getProtocolIcon(target.protocol);
 				const registry = getRegistryDisplayName(target.registry);
-				const dirName = target.directory.split("/").pop() || ".";
+				// Show last 2 path segments for better context (e.g., "dist/npm" instead of just "npm")
+				const pathParts = target.directory.split("/").filter(Boolean);
+				const dirName = pathParts.length > 1 ? pathParts.slice(-2).join("/") : pathParts.pop() || ".";
 				const targetStatus = result.canPublish ? "\u2705 Ready" : `\u274C ${result.message}`;
 				const provenance = target.provenance ? (result.provenanceReady ? "\u2705" : "\u26A0\uFE0F") : "\u{1F6AB}";
 
@@ -260,9 +265,8 @@ export function generatePublishSummary(
 			}
 
 			sections.push("");
+			sections.push("</details>\n");
 		}
-
-		sections.push("</details>\n");
 	}
 
 	// Legend
