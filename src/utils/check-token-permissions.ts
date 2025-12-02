@@ -96,7 +96,15 @@ export async function checkTokenPermissions(token: string): Promise<TokenInfo> {
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		core.warning(`Failed to check token permissions: ${errorMessage}`);
 
-		core.endGroup();
+		// Only end group if it was started
+		// Since startGroup is inside try block, endGroup should also be
+		// But we handle it gracefully by checking if we're in a group
+		try {
+			core.endGroup();
+		} catch {
+			// Ignore if no group was started
+		}
+
 		return {
 			valid: false,
 			error: errorMessage,

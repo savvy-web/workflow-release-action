@@ -20,24 +20,20 @@ async function run(): Promise<void> {
 		core.saveState("startTime", startTime);
 
 		// Check and log token permissions
-		const token = core.getInput("token", { required: false });
-		if (token) {
-			core.info("Checking GitHub token permissions...");
-			const tokenInfo = await checkTokenPermissions(token);
+		const token = core.getInput("token", { required: true });
+		core.info("Checking GitHub token permissions...");
+		const tokenInfo = await checkTokenPermissions(token);
 
-			// Store token info for potential use in main/post actions
-			if (tokenInfo.valid) {
-				core.saveState("tokenType", tokenInfo.type || "");
-				core.saveState("tokenLogin", tokenInfo.login || "");
-				if (tokenInfo.appName) {
-					core.saveState("appName", tokenInfo.appName);
-				}
-				if (tokenInfo.installationId) {
-					core.saveState("installationId", tokenInfo.installationId.toString());
-				}
+		// Store token info for potential use in main/post actions
+		if (tokenInfo.valid) {
+			core.saveState("tokenType", tokenInfo.type || "");
+			core.saveState("tokenLogin", tokenInfo.login || "");
+			if (tokenInfo.appName) {
+				core.saveState("appName", tokenInfo.appName);
 			}
-		} else {
-			core.debug("No token provided in inputs, skipping token permission check");
+			if (tokenInfo.installationId) {
+				core.saveState("installationId", tokenInfo.installationId.toString());
+			}
 		}
 
 		core.debug(`Pre-action completed at ${startTime}`);
