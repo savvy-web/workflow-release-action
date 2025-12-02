@@ -120,7 +120,7 @@ jobs:
         run: |
           echo "Validating PR title: ${{ github.event.pull_request.title }}"
           set +e
-          pnpm exec commitlint --config commitlint.config.ts <<< "${{ github.event.pull_request.title }}"
+          pnpm exec commitlint --config ./lib/configs/commitlint.config.ts <<< "${{ github.event.pull_request.title }}"
           EXIT_CODE=$?
           set -e
           echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
@@ -177,7 +177,7 @@ jobs:
           echo "Validating commit messages between origin/${{ github.base_ref }} and HEAD using @savvy-web/commitlint-config"
 
           set +e
-          pnpm exec commitlint --from=origin/${{ github.base_ref }} --to=HEAD --config commitlint.config.ts --verbose > commitlint-results.txt 2>&1
+          pnpm exec commitlint --from=origin/${{ github.base_ref }} --to=HEAD --config ./lib/configs/commitlint.config.ts --verbose > commitlint-results.txt 2>&1
           COMMITLINT_EXIT_CODE=$?
           set -e
 
@@ -396,9 +396,10 @@ jobs:
     name: Claude Code Review
     needs: [validate]
     runs-on: ubuntu-latest
-    # Only run for human users or the bot (skip other bots like dependabot, renovate, etc.)
+    # Only run for human users, the bot, or copilot (skip other bots like dependabot, renovate, etc.)
     if: |
       github.event.pull_request.user.login == '${{ vars.APP_BOT_NAME }}' ||
+      github.event.pull_request.user.login == 'copilot[bot]' ||
       github.event.pull_request.user.type == 'User'
     env:
       CHECK_RUN_ID: ""
