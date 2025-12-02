@@ -27,15 +27,175 @@ The `setup-flow` action is being refactored from `actions/github-script@v8` inli
 
 **Current status:** Core utility modules implemented with 85%+ test coverage. See issue #9 for detailed progress.
 
+## Workflow Release Action
+
+The main product of this repository is the `workflow-release-action` - a comprehensive TypeScript-based GitHub Action for automated release management with changesets.
+
+### How It Works
+
+The action implements a **three-phase release workflow** that triggers based on the current branch and commit context:
+
+#### Phase 1: Release Branch Management
+
+**Triggers:** Push to `main` (non-release commits)
+
+1. **Detect Publishable Changes** - Scans for changeset files and identifies packages with pending releases
+2. **Check Release Branch** - Determines if `changeset-release/main` branch exists and has an open PR
+3. **Create or Update Branch**:
+   - If branch doesn't exist: Creates new branch and opens a release PR
+   - If branch exists: Rebases with `main` to incorporate new changes
+
+#### Phase 2: Release Validation
+
+**Triggers:** Push to `changeset-release/main` branch
+
+1. **Link Issues from Commits** - Extracts issue references from commit messages for release notes
+2. **Generate PR Description** - Uses Claude (optional) to generate a human-readable release summary
+3. **Validate Builds** - Runs `pnpm build` to ensure all packages compile successfully
+4. **Validate Publishing** - Performs dry-run publish to each configured registry (NPM, JSR, GitHub Packages, custom)
+5. **Generate Release Notes Preview** - Creates preview of CHANGELOG entries that will be created
+6. **Create Validation Check** - Unified check run showing all validation results
+7. **Update Sticky Comment** - Posts/updates a summary comment on the release PR
+
+#### Phase 3: Release Publishing
+
+**Triggers:** Merge of release PR to `main` (detected by associated PR lookup)
+
+1. **Detect Released Packages** - Identifies which packages had version bumps from the PR diff
+2. **Publish Packages** - Publishes to all configured registries using OIDC authentication (npm, JSR) or tokens (GitHub Packages, custom)
+3. **Determine Tag Strategy** - Creates single tag for single-package repos, or per-package tags for monorepos
+4. **Create GitHub Releases** - Creates GitHub releases with auto-generated release notes from CHANGELOGs
+
+### Usage Example
+
+```yaml
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - changeset-release/main
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run in dry-run mode (preview only)
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  id-token: write      # Required for OIDC publishing to npm/JSR
+  attestations: write  # Optional: for npm provenance
+  packages: write      # Required for GitHub Packages
+  issues: write        # Required for closing linked issues
+
+jobs:
+  release:
+    name: ${{ (inputs.dry_run != false) && 'Release --dry-run' || 'Release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-contents: write
+          permission-pull-requests: write
+          permission-checks: write
+          permission-members: read
+          permission-packages: write
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true
+
+      - name: Setup workflow runtime environment
+        id: workflow-runtime
+        uses: savvy-web/workflow-runtime-action@main
+
+      - name: Run release action
+        uses: savvy-web/workflow-release-action@main
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude-review-pat: ${{ secrets.CLAUDE_REVIEW_PAT }}
+          dry-run: ${{ inputs.dry_run || 'false' }}
+          registry-tokens: |
+            https://npm.savvyweb.dev/=${{ steps.app-token.outputs.token }}
+```
+
+### Action Inputs
+
+| Input | Required | Default | Description |
+| ----- | -------- | ------- | ----------- |
+| `token` | Yes | - | GitHub App token for authentication |
+| `release-branch` | No | `changeset-release/main` | Name of the release branch |
+| `target-branch` | No | `main` | Target branch for the release PR |
+| `package-manager` | No | `pnpm` | Package manager to use (`npm`, `pnpm`, `yarn`, `bun`) |
+| `version-command` | No | `{pm} ci:version` | Custom version command |
+| `pr-title-prefix` | No | `chore: release` | Prefix for release PR titles |
+| `dry-run` | No | `false` | Run in dry-run mode (preview only) |
+| `registry-tokens` | No | - | Custom registry tokens (one per line: `registry=token`) |
+| `anthropic-api-key` | No | - | Anthropic API key for Claude PR description generation |
+| `claude-review-pat` | No | - | GitHub PAT for operations requiring user context |
+
+### Authentication Model
+
+The action uses a tiered authentication approach for multi-registry publishing:
+
+| Registry | Authentication Method | Notes |
+| -------- | -------------------- | ----- |
+| **npm** | OIDC (id-token) | Trusted publishing - no token needed |
+| **JSR** | OIDC (id-token) | Trusted publishing - no token needed |
+| **GitHub Packages** | GitHub App token | Uses the `token` input automatically |
+| **Custom registries** | `registry-tokens` input | Format: `https://registry.example.com/=<TOKEN>` |
+
+### Key Outputs
+
+The action provides comprehensive outputs for each phase:
+
+**Phase 1 Outputs:**
+
+- `has_changes` - Whether publishable changes were detected
+- `publishable_packages` - JSON array of packages with changes
+- `release_branch_exists` / `release_branch_created` / `release_branch_updated`
+- `release_pr_number` - PR number if one exists
+
+**Phase 2 Outputs:**
+
+- `linked_issues` - JSON array of issues linked from commits
+- `builds_passed` - Whether all builds passed
+- `npm_publish_ready` / `github_packages_ready` - Registry readiness
+
+**Phase 3 Outputs:**
+
+- `released_packages` - JSON array of released packages with names, versions, and targets
+- `release_type` - Type of release (major, minor, patch)
+- `release_tags` - JSON array of created git tags
+- `publish_results` - Detailed publish results per package and target
+- `success` - Whether the release was fully successful
+
 ### Integration Testing
 
 The `savvy-web/workflow-integration` repository is set up to test the release action from feature branches.
 
 **Key points:**
 
-* The integration repo references `savvy-web/workflow-release-action@feature/setup-flow` directly
-* Changes pushed to `feature/setup-flow` are immediately testable (no need to merge to main)
-* The integration repo has a changeset file and packages configured with `publishConfig.access: public`
+- The integration repo references `savvy-web/workflow-release-action@feature/setup-flow` directly
+- Changes pushed to `feature/setup-flow` are immediately testable (no need to merge to main)
+- The integration repo has a changeset file and packages configured with `publishConfig.access: public`
 
 **Iteration workflow:**
 
@@ -59,20 +219,20 @@ gh run view <run-id> --repo savvy-web/workflow-integration --log
 
 **Debugging tips:**
 
-* The action logs show package discovery, changeset status, and publish config detection
-* Look for "Running:" lines to see exact commands being executed
-* Check "Changeset status file contents" to verify changeset detection
-* The "📦 Discovered X package(s)" section shows what packages were found and their publish strategies
+- The action logs show package discovery, changeset status, and publish config detection
+- Look for "Running:" lines to see exact commands being executed
+- Check "Changeset status file contents" to verify changeset detection
+- The "📦 Discovered X package(s)" section shows what packages were found and their publish strategies
 
 **Technical stack:**
 
-* **Package manager:** pnpm 10.20.0 (enforced via `packageManager` field)
-* **Build system:** Turborepo with strict environment mode
-* **Node.js version:** 24.11.0 (specified in `.nvmrc`)
-* **Linting:** Biome 2.3.6 with strict rules
-* **Testing:** Vitest 4.0.8 with globals enabled
-* **Type checking:** TypeScript with native preview build (`@typescript/native-preview`)
-* **Workspace packages:** Located in `pkgs/*` for TypeScript/JavaScript utilities
+- **Package manager:** pnpm 10.20.0 (enforced via `packageManager` field)
+- **Build system:** Turborepo with strict environment mode
+- **Node.js version:** 24.11.0 (specified in `.nvmrc`)
+- **Linting:** Biome 2.3.6 with strict rules
+- **Testing:** Vitest 4.0.8 with globals enabled
+- **Type checking:** TypeScript with native preview build (`@typescript/native-preview`)
+- **Workspace packages:** Located in `pkgs/*` for TypeScript/JavaScript utilities
 
 ## Common Commands
 
@@ -126,20 +286,20 @@ pnpm ci:version
 The repository uses Husky with lint-staged for pre-commit validation. When you commit:
 
 1. **Staged files are automatically processed:**
-   * `package.json` files are sorted with `sort-package-json` and formatted with Biome
-   * TypeScript/JavaScript files are checked and fixed with Biome
-   * Markdown files are linted and fixed with `markdownlint-cli2`
-   * Shell scripts have executable bits removed (`chmod -x`)
-   * YAML files are formatted with Prettier and validated with `yaml-lint`
-   * TypeScript changes trigger a full typecheck with `tsgo --noEmit`
+   - `package.json` files are sorted with `sort-package-json` and formatted with Biome
+   - TypeScript/JavaScript files are checked and fixed with Biome
+   - Markdown files are linted and fixed with `markdownlint-cli2`
+   - Shell scripts have executable bits removed (`chmod -x`)
+   - YAML files are formatted with Prettier and validated with `yaml-lint`
+   - TypeScript changes trigger a full typecheck with `tsgo --noEmit`
 
 2. **Hooks are skipped in:**
-   * CI environments (`GITHUB_ACTIONS=1`)
-   * During rebase/squash operations (except final commit)
+   - CI environments (`GITHUB_ACTIONS=1`)
+   - During rebase/squash operations (except final commit)
 
 3. **Git client compatibility:**
-   * Pre-commit hook re-execs with zsh for GUI clients (GitKraken)
-   * Sources `.zshenv` and NVM to ensure pnpm is available
+   - Pre-commit hook re-execs with zsh for GUI clients (GitKraken)
+   - Sources `.zshenv` and NVM to ensure pnpm is available
 
 ## Code Quality Standards
 
@@ -147,47 +307,47 @@ The repository uses Husky with lint-staged for pre-commit validation. When you c
 
 The project enforces strict Biome rules (see `biome.jsonc`):
 
-* **Indentation:** Tabs, width 2
-* **Line width:** 120 characters
-* **Import organization:** Lexicographic order with `source.organizeImports`
-* **Import extensions:** Forced `.js` extensions (`useImportExtensions`)
-* **Import types:** Separated type imports (`useImportType` with `separatedType` style)
-* **Node.js imports:** Must use `node:` protocol (`useNodejsImportProtocol`)
-* **Type definitions:** Prefer `type` over `interface` (`useConsistentTypeDefinitions`)
-* **Explicit types:** Required for exports (`useExplicitType` - except in tests/scripts)
-* **No import cycles:** Enforced (`noImportCycles`)
-* **No unused variables:** Error level with `ignoreRestSiblings: true`
+- **Indentation:** Tabs, width 2
+- **Line width:** 120 characters
+- **Import organization:** Lexicographic order with `source.organizeImports`
+- **Import extensions:** Forced `.js` extensions (`useImportExtensions`)
+- **Import types:** Separated type imports (`useImportType` with `separatedType` style)
+- **Node.js imports:** Must use `node:` protocol (`useNodejsImportProtocol`)
+- **Type definitions:** Prefer `type` over `interface` (`useConsistentTypeDefinitions`)
+- **Explicit types:** Required for exports (`useExplicitType` - except in tests/scripts)
+- **No import cycles:** Enforced (`noImportCycles`)
+- **No unused variables:** Error level with `ignoreRestSiblings: true`
 
 ### TypeScript Configuration
 
 Base `tsconfig.json` settings:
 
-* **Module system:** ESNext with bundler resolution
-* **Target:** ES2022
-* **Strict mode:** Enabled
-* **Library:** ES2022
-* **JSON imports:** Enabled (`resolveJsonModule`)
-* **Global types:** Vitest globals available
+- **Module system:** ESNext with bundler resolution
+- **Target:** ES2022
+- **Strict mode:** Enabled
+- **Library:** ES2022
+- **JSON imports:** Enabled (`resolveJsonModule`)
+- **Global types:** Vitest globals available
 
 ### Markdown Linting
 
-* Uses `markdownlint-cli2` with `.markdownlint.json` config
-* Excludes `node_modules` and `dist` directories
+- Uses `markdownlint-cli2` with `.markdownlint.json` config
+- Excludes `node_modules` and `dist` directories
 
 ### Commit Message Standards
 
-* **Format:** Conventional Commits (enforced via commitlint)
-* **Config:** `@commitlint/config-conventional` with extended body length (300 chars)
-* **Validation:** Both PR titles and individual commit messages are validated in CI
+- **Format:** Conventional Commits (enforced via commitlint)
+- **Config:** `@commitlint/config-conventional` with extended body length (300 chars)
+- **Validation:** Both PR titles and individual commit messages are validated in CI
 
 ## File Naming Conventions
 
 Based on Biome configuration and common patterns:
 
-* **Lowercase filenames:** Preferred (inferred from strict linting)
-* **Extensions:** Always use explicit `.js` extensions in imports
-* **Config files:** `.jsonc` for JSON with comments (e.g., `biome.jsonc`)
-* **TypeScript:** `.ts` for source, `.test.ts` for tests
+- **Lowercase filenames:** Preferred (inferred from strict linting)
+- **Extensions:** Always use explicit `.js` extensions in imports
+- **Config files:** `.jsonc` for JSON with comments (e.g., `biome.jsonc`)
+- **TypeScript:** `.ts` for source, `.test.ts` for tests
 
 ## Shared GitHub Actions
 
@@ -221,9 +381,9 @@ This repository provides several reusable GitHub Actions. Each action has its ow
 
 **Required repository properties:**
 
-* `project-tracking` (boolean) - Enable auto-routing
-* `project-number` (string) - Organization project number (default: 1)
-* `client-id` (string, optional) - For client-specific routing
+- `project-tracking` (boolean) - Enable auto-routing
+- `project-number` (string) - Organization project number (default: 1)
+- `client-id` (string, optional) - For client-specific routing
 
 **Usage:** Place in `workflow-release-action` repository for organization-wide activation
 
@@ -235,10 +395,10 @@ This repository provides several reusable GitHub Actions. Each action has its ow
 
 **Similar to org-issue-router but:**
 
-* Hardcoded for `savvy-web` organization
-* Designed to be called from other workflows
-* More verbose error messages for troubleshooting
-* Checks if project is closed before adding items
+- Hardcoded for `savvy-web` organization
+- Designed to be called from other workflows
+- More verbose error messages for troubleshooting
+- Checks if project is closed before adding items
 
 **Usage:**
 
@@ -255,17 +415,17 @@ jobs:
 
 **Triggers:**
 
-* Issue comments with `@claude`
-* PR review comments with `@claude`
-* PR reviews with `@claude`
-* Issues opened/assigned with `@claude` in title/body
+- Issue comments with `@claude`
+- PR review comments with `@claude`
+- PR reviews with `@claude`
+- Issues opened/assigned with `@claude` in title/body
 
 **Features:**
 
-* Uses `anthropics/claude-code-action@v1`
-* Sticky comments (updates in place)
-* Progress tracking
-* Read-only permissions (contents, PRs, issues) + actions:read for CI results
+- Uses `anthropics/claude-code-action@v1`
+- Sticky comments (updates in place)
+- Progress tracking
+- Read-only permissions (contents, PRs, issues) + actions:read for CI results
 
 **Usage:** Add to repositories where Claude assistance is desired
 
@@ -283,26 +443,26 @@ jobs:
 
 **Workflow architecture:**
 
-* Creates all check runs upfront for immediate PR feedback
-* Uses GitHub App token (not PAT) for better rate limits
-* Retry logic for transient API errors (500-series, exponential backoff)
-* Concurrency control (cancels old runs when new commits pushed)
-* Cleanup job resolves orphaned checks when cancelled
+- Creates all check runs upfront for immediate PR feedback
+- Uses GitHub App token (not PAT) for better rate limits
+- Retry logic for transient API errors (500-series, exponential backoff)
+- Concurrency control (cancels old runs when new commits pushed)
+- Cleanup job resolves orphaned checks when cancelled
 
 **Claude review features:**
 
-* Skips version-only PRs (CHANGELOG.md, package.json versions, deleted changesets)
-* Sticky comments (updates in place, no spam)
-* Force-push detection (provides fresh review after rebase)
-* Thread management (resolves fixed issues, tracks pending)
-* Validation awareness (considers check results in review)
-* Helper scripts in `.github/scripts/` for thread resolution/minimization
+- Skips version-only PRs (CHANGELOG.md, package.json versions, deleted changesets)
+- Sticky comments (updates in place, no spam)
+- Force-push detection (provides fresh review after rebase)
+- Thread management (resolves fixed issues, tracks pending)
+- Validation awareness (considers check results in review)
+- Helper scripts in `.github/scripts/` for thread resolution/minimization
 
 **Permissions strategy:**
 
-* Minimal default permissions (contents:read)
-* Jobs override with specific needs
-* GitHub App provides elevated permissions where needed
+- Minimal default permissions (contents:read)
+- Jobs override with specific needs
+- GitHub App provides elevated permissions where needed
 
 ### Release Workflows
 
@@ -314,10 +474,10 @@ This repository provides two reusable release workflows built on modular shared 
 
 **Use when:**
 
-* Publishing packages to NPM
-* Managing monorepos with multiple packages
-* Need NPM provenance support
-* Want per-package GitHub releases
+- Publishing packages to NPM
+- Managing monorepos with multiple packages
+- Need NPM provenance support
+- Want per-package GitHub releases
 
 **Usage in your repository:**
 
@@ -342,13 +502,13 @@ jobs:
 
 **Features:**
 
-* **Safe by default** - Runs in dry-run mode (`dry-run: true`) to prevent accidental publishing
-* NPM publishing with provenance support (id-token:write)
-* Per-package GitHub releases (for monorepos)
-* Configurable version and publish commands
-* Automatic version detection in PR titles
-* Skips workflow when no changesets exist
-* Clear warnings when running in dry-run vs production mode
+- **Safe by default** - Runs in dry-run mode (`dry-run: true`) to prevent accidental publishing
+- NPM publishing with provenance support (id-token:write)
+- Per-package GitHub releases (for monorepos)
+- Configurable version and publish commands
+- Automatic version detection in PR titles
+- Skips workflow when no changesets exist
+- Clear warnings when running in dry-run vs production mode
 
 **Important:** The workflow defaults to `dry-run: true` for safety. To actually publish to NPM, explicitly set `dry-run: false` in the workflow call.
 
@@ -360,10 +520,10 @@ jobs:
 
 **Use when:**
 
-* Private repositories or GitHub Actions
-* Single-package repositories
-* Don't need NPM publishing
-* Want GitHub releases for version tracking
+- Private repositories or GitHub Actions
+- Single-package repositories
+- Don't need NPM publishing
+- Want GitHub releases for version tracking
 
 **Usage in your repository:**
 
@@ -385,11 +545,11 @@ jobs:
 
 **Features:**
 
-* GitHub releases only (no NPM publishing)
-* Automatic version detection in PR titles
-* Uses echo as no-op publish command
-* Skips workflow when no changesets exist
-* Perfect for private repos and non-NPM packages
+- GitHub releases only (no NPM publishing)
+- Automatic version detection in PR titles
+- Uses echo as no-op publish command
+- Skips workflow when no changesets exist
+- Perfect for private repos and non-NPM packages
 
 **Inputs:** See [.github/workflows/release-simple.yml](.github/workflows/release-simple.yml) for all available inputs.
 
@@ -416,14 +576,14 @@ Both workflows support custom version commands (defaults to `pnpm ci:version`):
 
 **Publish Commands:**
 
-* **Standard workflow:** Should build and publish packages (e.g., `pnpm ci:publish`)
-* **Simple workflow:** Uses echo as no-op since no NPM publishing needed
+- **Standard workflow:** Should build and publish packages (e.g., `pnpm ci:publish`)
+- **Simple workflow:** Uses echo as no-op since no NPM publishing needed
 
 **Required Secrets:**
 
-* `APP_ID` - GitHub App ID
-* `APP_PRIVATE_KEY` - GitHub App private key
-* `NPM_TOKEN` - Only for standard workflow with NPM publishing
+- `APP_ID` - GitHub App ID
+- `APP_PRIVATE_KEY` - GitHub App private key
+- `NPM_TOKEN` - Only for standard workflow with NPM publishing
 
 ### Workflow Standard Label Sync (`.github/workflows/workflow-standard-sync.yml`)
 
@@ -431,7 +591,7 @@ Both workflows support custom version commands (defaults to `pnpm ci:version`):
 
 **Triggers:**
 
-* Manual workflow dispatch (`workflow_dispatch`)
+- Manual workflow dispatch (`workflow_dispatch`)
 
 **How it works:**
 
@@ -439,32 +599,32 @@ Both workflows support custom version commands (defaults to `pnpm ci:version`):
 2. Loads standard label definitions from `.github/labels.json`
 3. Queries organization for all repositories with custom property `workflow: standard`
 4. For each repository:
-   * Fetches existing labels
-   * Creates missing default labels from labels file
-   * Updates existing default labels to match file definitions
-   * Preserves any custom labels (not in defaults)
+   - Fetches existing labels
+   - Creates missing default labels from labels file
+   - Updates existing default labels to match file definitions
+   - Preserves any custom labels (not in defaults)
 5. Reports custom labels in action output and console
 6. Generates summary with statistics
 
 **Features:**
 
-* **Dry-run mode** - Preview changes without applying them
-* **Non-destructive** - Preserves custom labels (unless removal is enabled)
-* **Custom label removal** - Optional removal of labels not in standard definitions
-* **Rate limiting** - Automatic rate limit monitoring and throttling
-* **Enhanced comparison** - Detects and reports label name casing differences
-* **Error tracking** - Tracks partial failures per repository
-* **Detailed reporting** - Per-repository statistics and summaries
-* **File-based configuration** - Labels defined in `.github/labels.json`
-* **GitHub App authentication** - Better rate limits and security
+- **Dry-run mode** - Preview changes without applying them
+- **Non-destructive** - Preserves custom labels (unless removal is enabled)
+- **Custom label removal** - Optional removal of labels not in standard definitions
+- **Rate limiting** - Automatic rate limit monitoring and throttling
+- **Enhanced comparison** - Detects and reports label name casing differences
+- **Error tracking** - Tracks partial failures per repository
+- **Detailed reporting** - Per-repository statistics and summaries
+- **File-based configuration** - Labels defined in `.github/labels.json`
+- **GitHub App authentication** - Better rate limits and security
 
 **Required repository setup:**
 
-* Repository must have custom property `workflow` set to `standard`
-* GitHub App needs:
-  * Repository `contents:read` permission (to checkout and read labels file)
-  * Repository `administration:write` permission for target repositories
-* This repository must contain `.github/labels.json` with standard label definitions
+- Repository must have custom property `workflow` set to `standard`
+- GitHub App needs:
+  - Repository `contents:read` permission (to checkout and read labels file)
+  - Repository `administration:write` permission for target repositories
+- This repository must contain `.github/labels.json` with standard label definitions
 
 **Usage:**
 
@@ -478,18 +638,18 @@ Both workflows support custom version commands (defaults to `pnpm ci:version`):
 
 **Dry-run mode:**
 
-* Enable to preview what changes would be made without applying them
-* Useful for testing and verification before actual sync
-* Shows all operations that would be performed (creates, updates, removals)
-* Displays detailed change information (name casing, colors, descriptions)
+- Enable to preview what changes would be made without applying them
+- Useful for testing and verification before actual sync
+- Shows all operations that would be performed (creates, updates, removals)
+- Displays detailed change information (name casing, colors, descriptions)
 
 **Remove custom labels:**
 
-* When enabled, deletes labels that are not in the standard label definitions
-* Respects dry-run mode (shows what would be deleted without actually removing)
-* Useful for enforcing strict label standardization across repositories
-* Reports removed labels in both console output and job summary
-* **Use with caution** - this permanently deletes custom labels not in `.github/labels.json`
+- When enabled, deletes labels that are not in the standard label definitions
+- Respects dry-run mode (shows what would be deleted without actually removing)
+- Useful for enforcing strict label standardization across repositories
+- Reports removed labels in both console output and job summary
+- **Use with caution** - this permanently deletes custom labels not in `.github/labels.json`
 
 **Customizing default labels:**
 
@@ -502,35 +662,35 @@ Labels are defined in [`.github/labels.json`](.github/labels.json). To customize
 
 **Standard labels included:**
 
-* `ai` - AI/ML related features (purple)
-* `automated` - Automated changes from bots/CI (blue)
-* `bug` - Something isn't working (red)
-* `breaking` - Breaking changes (dark red)
-* `ci` - CI/CD related (green)
-* `dependencies` - Dependency updates (blue)
-* `docs` - Documentation (blue)
-* `duplicate` - Duplicate issue/PR (gray)
-* `enhancement` - New features (light blue)
-* `good first issue` - Newcomer-friendly (purple)
-* `help wanted` - Needs attention (teal)
-* `invalid` - Invalid issue (yellow)
-* `performance` - Performance improvements (orange)
-* `question` - Questions/discussions (pink)
-* `refactor` - Code refactoring (blue)
-* `security` - Security-related (red)
-* `test` - Testing improvements (blue)
-* `wontfix` - Won't be addressed (white)
+- `ai` - AI/ML related features (purple)
+- `automated` - Automated changes from bots/CI (blue)
+- `bug` - Something isn't working (red)
+- `breaking` - Breaking changes (dark red)
+- `ci` - CI/CD related (green)
+- `dependencies` - Dependency updates (blue)
+- `docs` - Documentation (blue)
+- `duplicate` - Duplicate issue/PR (gray)
+- `enhancement` - New features (light blue)
+- `good first issue` - Newcomer-friendly (purple)
+- `help wanted` - Needs attention (teal)
+- `invalid` - Invalid issue (yellow)
+- `performance` - Performance improvements (orange)
+- `question` - Questions/discussions (pink)
+- `refactor` - Code refactoring (blue)
+- `security` - Security-related (red)
+- `test` - Testing improvements (blue)
+- `wontfix` - Won't be addressed (white)
 
 ## Turborepo Configuration
 
 From `turbo.json`:
 
-* **Daemon:** Enabled for faster builds
-* **Environment mode:** Strict (only declared env vars are available)
-* **Global passthrough env vars:** `GITHUB_ACTIONS`, `GITHUB_OUTPUT`
-* **Tasks:**
-  * `//#typecheck:all` - Root-level typecheck task (cached, errors-only logs)
-  * `typecheck` - Package-level task (depends on root typecheck, not cached)
+- **Daemon:** Enabled for faster builds
+- **Environment mode:** Strict (only declared env vars are available)
+- **Global passthrough env vars:** `GITHUB_ACTIONS`, `GITHUB_OUTPUT`
+- **Tasks:**
+  - `//#typecheck:all` - Root-level typecheck task (cached, errors-only logs)
+  - `typecheck` - Package-level task (depends on root typecheck, not cached)
 
 ## Project Structure
 
@@ -561,8 +721,8 @@ From `turbo.json`:
 ### Setting Up Organization-Wide Issue Routing
 
 1. **In your organization's `workflow-release-action` repository:**
-   * Copy `.github/workflows/org-issue-router.yml`
-   * Ensure GitHub App has `Organization permissions > Projects: Read & Write`
+   - Copy `.github/workflows/org-issue-router.yml`
+   - Ensure GitHub App has `Organization permissions > Projects: Read & Write`
 
 2. **On target repositories, set custom properties:**
 
@@ -587,7 +747,7 @@ cp path/to/this-repo/.github/workflows/claude.yml .github/workflows/
 
 Configure secrets:
 
-* `CLAUDE_CODE_OAUTH_TOKEN` - From Claude Code setup
+- `CLAUDE_CODE_OAUTH_TOKEN` - From Claude Code setup
 
 ### Adapting the PR Validation Workflow
 
@@ -598,9 +758,9 @@ The `validate.yml` workflow is a reference implementation. To adapt:
 3. **Update check names** if needed
 4. **Configure GitHub App** with appropriate permissions
 5. **Set required secrets:**
-   * `APP_ID` / `APP_PRIVATE_KEY` - GitHub App credentials
-   * `CLAUDE_CODE_OAUTH_TOKEN` - For Claude review
-   * `CLAUDE_REVIEW_PAT` - Personal access token for review operations
+   - `APP_ID` / `APP_PRIVATE_KEY` - GitHub App credentials
+   - `CLAUDE_CODE_OAUTH_TOKEN` - For Claude review
+   - `CLAUDE_REVIEW_PAT` - Personal access token for review operations
 
 ### Using the Release Workflows
 
@@ -608,8 +768,8 @@ See the [Release Workflows](#release-workflows) section for detailed documentati
 
 **IMPORTANT - Path Syntax:**
 
-* **Within this repository**: Use local path `./.github/workflows/...`
-* **From other repositories**: Use full GitHub URL `savvy-web/workflow-release-action/.github/workflows/...@main`
+- **Within this repository**: Use local path `./.github/workflows/...`
+- **From other repositories**: Use full GitHub URL `savvy-web/workflow-release-action/.github/workflows/...@main`
 
 See [release.yml](.github/workflows/release.yml) for a working example in this repository.
 
@@ -623,65 +783,65 @@ When adding new shared workflows or actions to this repository:
 
 **📖 For comprehensive documentation, see [TYPESCRIPT_ACTIONS.md](TYPESCRIPT_ACTIONS.md) which covers:**
 
-* Action structure and templates
-* Using shared types and test utilities
-* Core summary methods for rich outputs
-* Testing patterns and coverage requirements
-* Error handling and validation
-* Real-world examples and best practices
+- Action structure and templates
+- Using shared types and test utilities
+- Core summary methods for rich outputs
+- Testing patterns and coverage requirements
+- Error handling and validation
+- Real-world examples and best practices
 
 ### Traditional Composite Actions
 
 For actions that primarily orchestrate other actions or run shell commands:
 
 1. **For GitHub Actions (composite actions):**
-   * Create in `.github/actions/action-name/`
-   * Include `action.yml` with clear inputs/outputs documentation
-   * Use composite run steps (shell: bash)
-   * Make reusable and parameterized
-   * Consider TypeScript approach above for complex logic
+   - Create in `.github/actions/action-name/`
+   - Include `action.yml` with clear inputs/outputs documentation
+   - Use composite run steps (shell: bash)
+   - Make reusable and parameterized
+   - Consider TypeScript approach above for complex logic
 
 2. **For reusable workflows:**
-   * Create in `.github/workflows/`
-   * Use `workflow_call` trigger
-   * Document required secrets and inputs
-   * Consider organization-wide vs. repository-specific use cases
+   - Create in `.github/workflows/`
+   - Use `workflow_call` trigger
+   - Document required secrets and inputs
+   - Consider organization-wide vs. repository-specific use cases
 
 3. **Testing:**
-   * Test in this repository first
-   * Create a changeset for documentation updates
-   * Update CLAUDE.md with usage examples
-   * Add Vitest tests for TypeScript action logic
+   - Test in this repository first
+   - Create a changeset for documentation updates
+   - Update CLAUDE.md with usage examples
+   - Add Vitest tests for TypeScript action logic
 
 4. **Documentation:**
-   * Add to this CLAUDE.md file
-   * Include usage examples
-   * Document required secrets/permissions
-   * Note any GitHub App permission requirements
+   - Add to this CLAUDE.md file
+   - Include usage examples
+   - Document required secrets/permissions
+   - Note any GitHub App permission requirements
 
 ## Adding Utility Packages
 
 When creating TypeScript/JavaScript utilities in `pkgs/`:
 
 1. **Package structure:**
-   * Follow monorepo conventions
-   * Use scoped name: `@savvy-web/package-name`
-   * Include `package.json` with proper exports
+   - Follow monorepo conventions
+   - Use scoped name: `@savvy-web/package-name`
+   - Include `package.json` with proper exports
 
 2. **TypeScript setup:**
-   * Extend from root `tsconfig.json`
-   * Use `.js` extensions in imports
-   * Enable strict type checking
+   - Extend from root `tsconfig.json`
+   - Use `.js` extensions in imports
+   - Enable strict type checking
 
 3. **Scripts to add:**
-   * `typecheck` - For Turbo orchestration
-   * `test` - For testing (if applicable)
-   * `build` - For building (if applicable)
+   - `typecheck` - For Turbo orchestration
+   - `test` - For testing (if applicable)
+   - `build` - For building (if applicable)
 
 4. **Common use cases:**
-   * GitHub API helpers
-   * Project management utilities
-   * Shared workflow logic (if complex enough to warrant testing)
+   - GitHub API helpers
+   - Project management utilities
+   - Shared workflow logic (if complex enough to warrant testing)
 
 ## Running Single Tests
 
@@ -702,8 +862,8 @@ pnpm test --coverage
 
 Tests use type-safe mock factories from `__tests__/utils/`:
 
-* **`github-mocks.ts`** - Factory functions for creating properly typed mocks
-* **`test-types.ts`** - TypeScript interfaces for mock types
+- **`github-mocks.ts`** - Factory functions for creating properly typed mocks
+- **`test-types.ts`** - TypeScript interfaces for mock types
 
 ### Key Patterns
 
@@ -743,15 +903,15 @@ The repository uses strict environment mode in Turbo. When adding new environmen
 
 Available slash commands in `.claude/commands/`:
 
-* `/lint` - Fix linting errors
-* `/typecheck` - Fix TypeScript errors
-* `/tsdoc` - Add/update TSDoc documentation
-* `/fix-issue` - Find GitHub issue, create branch, fix, and test
-* `/pr-review` - Review automated bot comments on PR
-* `/build-fix` - Fix build errors
-* `/test-fix` - Fix failing tests
-* `/turbo-check` - Check Turbo configuration
-* `/package-setup` - Set up new package in workspace
+- `/lint` - Fix linting errors
+- `/typecheck` - Fix TypeScript errors
+- `/tsdoc` - Add/update TSDoc documentation
+- `/fix-issue` - Find GitHub issue, create branch, fix, and test
+- `/pr-review` - Review automated bot comments on PR
+- `/build-fix` - Fix build errors
+- `/test-fix` - Fix failing tests
+- `/turbo-check` - Check Turbo configuration
+- `/package-setup` - Set up new package in workspace
 
 ## GitHub App Configuration
 
@@ -759,32 +919,32 @@ The workflows in this repository rely on a GitHub App for authentication (prefer
 
 **Required App permissions:**
 
-* **Repository permissions:**
-  * Actions: Read (for Claude to access CI results)
-  * Checks: Read & Write (for creating/updating check runs)
-  * Contents: Read & Write (for checkout and release operations)
-  * Issues: Read & Write (for issue routing and comments)
-  * Pull Requests: Read & Write (for PR validation and comments)
-  * Statuses: Write (optional, for legacy status API)
+- **Repository permissions:**
+  - Actions: Read (for Claude to access CI results)
+  - Checks: Read & Write (for creating/updating check runs)
+  - Contents: Read & Write (for checkout and release operations)
+  - Issues: Read & Write (for issue routing and comments)
+  - Pull Requests: Read & Write (for PR validation and comments)
+  - Statuses: Write (optional, for legacy status API)
 
-* **Organization permissions:**
-  * Projects: Read & Write (for issue/PR routing to organization projects)
+- **Organization permissions:**
+  - Projects: Read & Write (for issue/PR routing to organization projects)
 
 **Required secrets:**
 
-* `APP_ID` - GitHub App ID
-* `APP_PRIVATE_KEY` - GitHub App private key (PEM format)
-* `CLAUDE_CODE_OAUTH_TOKEN` - OAuth token for Claude Code integration
-* `CLAUDE_REVIEW_PAT` - Personal Access Token for operations requiring user context (e.g., resolving threads)
-* `NPM_TOKEN` - For publishing packages (if using publish workflows)
+- `APP_ID` - GitHub App ID
+- `APP_PRIVATE_KEY` - GitHub App private key (PEM format)
+- `CLAUDE_CODE_OAUTH_TOKEN` - OAuth token for Claude Code integration
+- `CLAUDE_REVIEW_PAT` - Personal Access Token for operations requiring user context (e.g., resolving threads)
+- `NPM_TOKEN` - For publishing packages (if using publish workflows)
 
 **Why GitHub App over PAT:**
 
-* Better rate limits (5,000 requests/hour per repo vs. 5,000/hour total)
-* Granular permissions (no access to unnecessary scopes)
-* Automatic token expiration (1 hour) for security
-* Can act as the app identity rather than a specific user
-* Does not count against user's seat
+- Better rate limits (5,000 requests/hour per repo vs. 5,000/hour total)
+- Granular permissions (no access to unnecessary scopes)
+- Automatic token expiration (1 hour) for security
+- Can act as the app identity rather than a specific user
+- Does not count against user's seat
 
 ## Important Notes
 
