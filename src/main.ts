@@ -2,12 +2,14 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import * as github from "@actions/github";
 import { context } from "@actions/github";
+
 import { checkReleaseBranch } from "./utils/check-release-branch.js";
 import { cleanupValidationChecks } from "./utils/cleanup-validation-checks.js";
 import { createGitHubReleases } from "./utils/create-github-releases.js";
 import { createReleaseBranch } from "./utils/create-release-branch.js";
 import { createValidationCheck } from "./utils/create-validation-check.js";
 import { detectPublishableChanges } from "./utils/detect-publishable-changes.js";
+import { detectReleasedPackagesFromCommit, detectReleasedPackagesFromPR } from "./utils/detect-released-packages.js";
 import { determineReleaseType, determineTagStrategy } from "./utils/determine-tag-strategy.js";
 import { generatePRDescriptionDirect } from "./utils/generate-pr-description.js";
 import { generatePublishResultsSummary } from "./utils/generate-publish-summary.js";
@@ -15,6 +17,7 @@ import { generateReleaseNotesPreview } from "./utils/generate-release-notes-prev
 import { getChangesetStatus } from "./utils/get-changeset-status.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
 import { PHASE, logger } from "./utils/logger.js";
+import type { PreDetectedRelease } from "./utils/publish-packages.js";
 import { publishPackages } from "./utils/publish-packages.js";
 import { runCloseLinkedIssues } from "./utils/run-close-linked-issues.js";
 import { summaryWriter } from "./utils/summary-writer.js";
@@ -160,7 +163,7 @@ async function run(): Promise<void> {
 		// Phase 3: Release Publishing (on merge to main with version commit)
 		if (isMainBranch && isReleaseCommit) {
 			logger.phase(3, PHASE.publish, "Release Publishing");
-			await runPhase3Publishing(inputs);
+			await runPhase3Publishing(inputs, mergedReleasePR?.number);
 			return;
 		}
 
@@ -747,13 +750,14 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
  *
  * @remarks
  * Runs on merge to main with version commit:
- * 1. Publish packages to configured registries (NPM, GitHub Packages, JSR, custom)
- * 2. Determine tag strategy (single vs multiple)
- * 3. Create git tags
- * 4. Create GitHub releases with artifacts
- * 5. Set comprehensive workflow outputs
+ * 1. Detect packages from merge commit (changesets are already consumed)
+ * 2. Publish packages to configured registries (NPM, GitHub Packages, JSR, custom)
+ * 3. Determine tag strategy (single vs multiple)
+ * 4. Create git tags
+ * 5. Create GitHub releases with artifacts
+ * 6. Set comprehensive workflow outputs
  */
-async function runPhase3Publishing(inputs: Inputs): Promise<void> {
+async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Promise<void> {
 	const octokit = github.getOctokit(inputs.token);
 
 	// Create publishing checks upfront
@@ -779,8 +783,8 @@ async function runPhase3Publishing(inputs: Inputs): Promise<void> {
 		logger.success(`Created ${checkIds.length} publishing checks`);
 		logger.endStep();
 
-		// Step 1: Publish packages
-		logger.step(1, "Publish Packages");
+		// Step 1: Detect and publish packages
+		logger.step(1, "Detect and Publish Packages");
 
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
@@ -789,7 +793,46 @@ async function runPhase3Publishing(inputs: Inputs): Promise<void> {
 			status: "in_progress",
 		});
 
-		const publishResult = await publishPackages(inputs.packageManager, inputs.targetBranch, inputs.dryRun);
+		// Detect packages that were released in the merge commit
+		// Since changesets are consumed after the release PR merge, we need to detect
+		// packages by looking at what package.json versions changed
+		let preDetectedReleases: PreDetectedRelease[] | undefined;
+
+		if (mergedPRNumber) {
+			logger.info(`Detecting released packages from PR #${mergedPRNumber}...`);
+			const detectionResult = await detectReleasedPackagesFromPR(inputs.token, mergedPRNumber);
+			if (detectionResult.success && detectionResult.packages.length > 0) {
+				preDetectedReleases = detectionResult.packages.map((p) => ({
+					name: p.name,
+					version: p.version,
+					path: p.path,
+				}));
+				logger.success(`Detected ${preDetectedReleases.length} package(s) from PR`);
+			} else {
+				logger.warn("Could not detect packages from PR, falling back to commit comparison");
+			}
+		}
+
+		// Fallback: detect from commit comparison
+		if (!preDetectedReleases || preDetectedReleases.length === 0) {
+			logger.info("Detecting released packages from commit comparison...");
+			const detectionResult = await detectReleasedPackagesFromCommit(inputs.token);
+			if (detectionResult.success && detectionResult.packages.length > 0) {
+				preDetectedReleases = detectionResult.packages.map((p) => ({
+					name: p.name,
+					version: p.version,
+					path: p.path,
+				}));
+				logger.success(`Detected ${preDetectedReleases.length} package(s) from commit`);
+			}
+		}
+
+		const publishResult = await publishPackages(
+			inputs.packageManager,
+			inputs.targetBranch,
+			inputs.dryRun,
+			preDetectedReleases,
+		);
 
 		// Set outputs
 		core.setOutput("released_packages", JSON.stringify(publishResult.packages));

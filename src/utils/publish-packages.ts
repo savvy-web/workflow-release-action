@@ -29,11 +29,23 @@ export interface PublishPackagesResult {
 }
 
 /**
+ * Pre-detected release information for publishing
+ */
+export interface PreDetectedRelease {
+	/** Package name */
+	name: string;
+	/** New version to publish */
+	version: string;
+	/** Path to the package directory */
+	path: string;
+}
+
+/**
  * Publish all packages to their configured targets
  *
  * @remarks
  * This function:
- * 1. Gets changeset status to find packages with version changes
+ * 1. Gets changeset status to find packages with version changes (or uses pre-detected releases)
  * 2. Resolves publish targets for each package
  * 3. Sets up registry authentication
  * 4. Runs build if configured
@@ -42,21 +54,37 @@ export interface PublishPackagesResult {
  * @param packageManager - Package manager to use
  * @param targetBranch - Target branch for merge base comparison
  * @param dryRun - Whether to skip actual publishing
+ * @param preDetectedReleases - Optional pre-detected releases (for Phase 3 when changesets are consumed)
  * @returns Promise resolving to publish result
  */
 export async function publishPackages(
 	packageManager: string,
 	targetBranch: string,
 	dryRun: boolean,
+	preDetectedReleases?: PreDetectedRelease[],
 ): Promise<PublishPackagesResult> {
 	core.startGroup("Publishing packages");
 
-	// Get changeset status to find packages with version changes
-	core.info("Getting changeset status...");
-	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
-	core.info(`Found ${changesetStatus.releases.length} package(s) with version changes`);
+	// Use pre-detected releases if provided, otherwise get from changeset status
+	let releases: Array<{ name: string; newVersion: string; type: string; path?: string }>;
 
-	if (changesetStatus.releases.length === 0) {
+	if (preDetectedReleases && preDetectedReleases.length > 0) {
+		core.info(`Using ${preDetectedReleases.length} pre-detected release(s)`);
+		releases = preDetectedReleases.map((r) => ({
+			name: r.name,
+			newVersion: r.version,
+			type: "patch", // Default, actual type determined by detection
+			path: r.path,
+		}));
+	} else {
+		// Get changeset status to find packages with version changes
+		core.info("Getting changeset status...");
+		const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
+		core.info(`Found ${changesetStatus.releases.length} package(s) with version changes`);
+		releases = changesetStatus.releases;
+	}
+
+	if (releases.length === 0) {
 		core.info("No packages to publish");
 		core.endGroup();
 
@@ -81,8 +109,9 @@ export async function publishPackages(
 		}
 	>();
 
-	for (const release of changesetStatus.releases) {
-		const workspacePath = findPackagePath(release.name);
+	for (const release of releases) {
+		// Use pre-detected path if available, otherwise find it
+		const workspacePath = release.path || findPackagePath(release.name);
 		if (!workspacePath) {
 			core.error(`Could not find workspace path for package ${release.name}`);
 			continue;

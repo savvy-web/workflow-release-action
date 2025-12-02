@@ -358,4 +358,129 @@ describe("publish-packages", () => {
 		expect(result.packages[0].targets[0].success).toBe(false);
 		expect(result.packages[0].targets[0].error).toBe("Network error");
 	});
+
+	describe("pre-detected releases", () => {
+		it("uses pre-detected releases instead of changeset status", async () => {
+			// Don't set up getChangesetStatus - it shouldn't be called
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "2.0.0",
+					publishConfig: { access: "public" },
+				}),
+			);
+			vi.mocked(setupRegistryAuth).mockReturnValue({
+				success: true,
+				configuredRegistries: [],
+				missingTokens: [],
+			});
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: true,
+				output: "Published successfully",
+				error: "",
+				registryUrl: "https://www.npmjs.com/package/@org/pkg-a",
+			});
+
+			const preDetectedReleases = [
+				{
+					name: "@org/pkg-a",
+					version: "2.0.0",
+					path: "/path/to/pkg-a",
+				},
+			];
+
+			const result = await publishPackages("pnpm", "main", false, preDetectedReleases);
+
+			expect(result.success).toBe(true);
+			expect(result.packages).toHaveLength(1);
+			expect(result.packages[0].name).toBe("@org/pkg-a");
+			expect(result.packages[0].version).toBe("2.0.0");
+			// getChangesetStatus should not have been called when pre-detected releases provided
+			expect(getChangesetStatus).not.toHaveBeenCalled();
+		});
+
+		it("falls back to changeset status when pre-detected releases is empty", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-b", newVersion: "1.0.0", type: "minor" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-b");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-b",
+					version: "1.0.0",
+					publishConfig: { access: "public" },
+				}),
+			);
+			vi.mocked(setupRegistryAuth).mockReturnValue({
+				success: true,
+				configuredRegistries: [],
+				missingTokens: [],
+			});
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: true,
+				output: "Published",
+				error: "",
+			});
+
+			const result = await publishPackages("pnpm", "main", false, []);
+
+			expect(result.success).toBe(true);
+			expect(getChangesetStatus).toHaveBeenCalled();
+		});
+
+		it("uses pre-detected path instead of findPackagePath", async () => {
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-c",
+					version: "3.0.0",
+					publishConfig: { access: "public" },
+				}),
+			);
+			vi.mocked(setupRegistryAuth).mockReturnValue({
+				success: true,
+				configuredRegistries: [],
+				missingTokens: [],
+			});
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: true,
+				output: "Published",
+				error: "",
+			});
+
+			const preDetectedReleases = [
+				{
+					name: "@org/pkg-c",
+					version: "3.0.0",
+					path: "/custom/path/to/pkg-c",
+				},
+			];
+
+			await publishPackages("pnpm", "main", false, preDetectedReleases);
+
+			// findPackagePath should not be called because path is pre-detected
+			expect(findPackagePath).not.toHaveBeenCalled();
+			// fs.existsSync should be called with the pre-detected path
+			expect(fs.existsSync).toHaveBeenCalledWith("/custom/path/to/pkg-c/package.json");
+		});
+
+		it("returns empty when pre-detected releases is undefined", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [],
+				changesets: [],
+			});
+
+			const result = await publishPackages("pnpm", "main", false, undefined);
+
+			expect(result.success).toBe(true);
+			expect(result.packages).toHaveLength(0);
+			expect(getChangesetStatus).toHaveBeenCalled();
+		});
+	});
 });
