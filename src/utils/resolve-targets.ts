@@ -3,13 +3,19 @@ import type { PackageJson, PublishTarget, ResolvedTarget, Target } from "../type
 
 /**
  * Known shorthands that expand to full targets
+ *
+ * @remarks
+ * Authentication strategy:
+ * - **npm**: Uses OIDC trusted publishing via Sigstore (no token needed)
+ * - **github**: Uses GitHub App token (GITHUB_TOKEN)
+ * - **jsr**: Uses OIDC natively in GitHub Actions (no token needed)
  */
 const KNOWN_SHORTHANDS: Record<string, PublishTarget> = {
 	npm: {
 		protocol: "npm",
 		registry: "https://registry.npmjs.org/",
 		provenance: true,
-		tokenEnv: "NPM_TOKEN",
+		// No tokenEnv - npm uses OIDC trusted publishing
 	},
 	github: {
 		protocol: "npm",
@@ -20,18 +26,25 @@ const KNOWN_SHORTHANDS: Record<string, PublishTarget> = {
 	jsr: {
 		protocol: "jsr",
 		provenance: false,
-		tokenEnv: "JSR_TOKEN",
+		// No tokenEnv - JSR uses OIDC
 	},
 };
 
 /**
  * Registry-specific defaults for provenance and access
+ *
+ * @remarks
+ * - npm public registry uses OIDC, so tokenEnv is null
+ * - GitHub Packages requires GITHUB_TOKEN (GitHub App token)
  */
-const REGISTRY_DEFAULTS: Record<string, { provenance: boolean; access: "public" | "restricted"; tokenEnv: string }> = {
+const REGISTRY_DEFAULTS: Record<
+	string,
+	{ provenance: boolean; access: "public" | "restricted"; tokenEnv: string | null }
+> = {
 	"https://registry.npmjs.org/": {
 		provenance: true,
 		access: "restricted",
-		tokenEnv: "NPM_TOKEN",
+		tokenEnv: null, // Uses OIDC trusted publishing
 	},
 	"https://npm.pkg.github.com/": {
 		provenance: true,
@@ -128,7 +141,7 @@ export function resolveTargets(packagePath: string, packageJson: PackageJson): R
 		if (isPrivate) {
 			return []; // Not publishable
 		}
-		// Default: publish from root to npm
+		// Default: publish from root to npm (uses OIDC, no token needed)
 		return [
 			{
 				protocol: "npm",
@@ -137,7 +150,7 @@ export function resolveTargets(packagePath: string, packageJson: PackageJson): R
 				access: "restricted",
 				provenance: true,
 				tag: "latest",
-				tokenEnv: "NPM_TOKEN",
+				tokenEnv: null, // npm uses OIDC trusted publishing
 			},
 		];
 	}

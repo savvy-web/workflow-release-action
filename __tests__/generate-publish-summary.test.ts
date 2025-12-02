@@ -639,7 +639,7 @@ describe("generate-publish-summary", () => {
 				tokenEnv: "NPM_TOKEN",
 			};
 
-			const targetResult: TargetValidationResult = {
+			const targetResult1: TargetValidationResult = {
 				target,
 				canPublish: true,
 				directoryExists: true,
@@ -657,12 +657,38 @@ describe("generate-publish-summary", () => {
 				},
 			};
 
+			const targetResult2: TargetValidationResult = {
+				target,
+				canPublish: true,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: true,
+				dryRunOutput: "",
+				dryRunError: "",
+				versionConflict: false,
+				provenanceReady: true,
+				message: "Ready",
+				stats: {
+					packageSize: "300 B",
+					unpackedSize: "600 B",
+					totalFiles: 1,
+				},
+			};
+
 			const validations: PackagePublishValidation[] = [
 				{
 					name: "@test/tiny-pkg",
 					version: "1.0.0",
 					path: "/test",
-					targets: [targetResult],
+					targets: [targetResult1],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+				{
+					name: "@test/another-tiny-pkg",
+					version: "1.0.0",
+					path: "/test2",
+					targets: [targetResult2],
 					allTargetsValid: true,
 					hasPublishableTargets: true,
 				},
@@ -671,6 +697,10 @@ describe("generate-publish-summary", () => {
 			const summary = generatePublishSummary(validations, false);
 
 			expect(summary).toContain("500 B");
+			expect(summary).toContain("300 B");
+			// Aggregate totals: 500 + 300 = 800 bytes
+			expect(summary).toContain("**Totals:**");
+			expect(summary).toContain("800 B packed");
 		});
 
 		it("handles GB-level sizes", () => {
@@ -920,6 +950,76 @@ describe("generate-publish-summary", () => {
 			expect(summary).toContain("Authentication failed");
 		});
 
+		it("shows exit code in error details", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: false,
+							error: "npm ERR! 403 Forbidden",
+							exitCode: 1,
+							stderr: "npm ERR! code E403",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+
+			expect(summary).toContain("Exit Code:");
+			expect(summary).toContain("1");
+			expect(summary).toContain("Error Details");
+		});
+
+		it("shows stdout output in error details", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: false,
+							error: "Publish failed",
+							exitCode: 1,
+							stdout: "npm notice package.json detected\nnpm notice Publishing to npm...",
+							stderr: "npm ERR! authentication required",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+
+			expect(summary).toContain("stdout output");
+			expect(summary).toContain("package.json detected");
+			expect(summary).toContain("stderr output");
+			expect(summary).toContain("authentication required");
+		});
+
 		it("shows N/A icon for missing URLs", () => {
 			const target: ResolvedTarget = {
 				protocol: "npm",
@@ -1018,7 +1118,7 @@ describe("generate-publish-summary", () => {
 			expect(summary).toContain("token");
 		});
 
-		it("categorizes permission errors", () => {
+		it("categorizes permission errors for GitHub Packages", () => {
 			const target: ResolvedTarget = {
 				protocol: "npm",
 				registry: "https://npm.pkg.github.com/",
@@ -1045,11 +1145,11 @@ describe("generate-publish-summary", () => {
 			];
 
 			const summary = generatePublishResultsSummary(results, false);
-			expect(summary).toContain("Permission Error");
+			expect(summary).toContain("GitHub Packages Permission");
 			expect(summary).toContain("packages:write");
 		});
 
-		it("categorizes OIDC/provenance errors", () => {
+		it("categorizes provenance errors", () => {
 			const target: ResolvedTarget = {
 				protocol: "npm",
 				registry: "https://registry.npmjs.org/",
@@ -1057,7 +1157,7 @@ describe("generate-publish-summary", () => {
 				access: "public",
 				provenance: true,
 				tag: "latest",
-				tokenEnv: "NPM_TOKEN",
+				tokenEnv: null, // npm uses OIDC
 			};
 
 			const results: PackagePublishResult[] = [
@@ -1068,15 +1168,15 @@ describe("generate-publish-summary", () => {
 						{
 							target,
 							success: false,
-							error: "Failed to get OIDC token",
-							stderr: "Error: Unable to get OIDC token for Sigstore",
+							error: "Failed to get id-token",
+							stderr: "Error: Unable to get token for Sigstore",
 						},
 					],
 				},
 			];
 
 			const summary = generatePublishResultsSummary(results, false);
-			expect(summary).toContain("OIDC/Provenance Error");
+			expect(summary).toContain("Provenance Error");
 			expect(summary).toContain("id-token: write");
 		});
 

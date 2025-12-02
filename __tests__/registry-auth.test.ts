@@ -27,20 +27,11 @@ describe("registry-auth", () => {
 	});
 
 	describe("validateTokensAvailable", () => {
-		it("returns valid when all npm tokens are present", () => {
-			process.env.NPM_TOKEN = "test-npm-token";
+		it("returns valid when all required tokens are present", () => {
 			process.env.GITHUB_TOKEN = "test-github-token";
+			process.env.CUSTOM_TOKEN = "test-custom-token";
 
 			const targets: ResolvedTarget[] = [
-				{
-					protocol: "npm",
-					registry: "https://registry.npmjs.org/",
-					directory: "/test",
-					access: "public",
-					provenance: true,
-					tag: "latest",
-					tokenEnv: "NPM_TOKEN",
-				},
 				{
 					protocol: "npm",
 					registry: "https://npm.pkg.github.com/",
@@ -50,6 +41,15 @@ describe("registry-auth", () => {
 					tag: "latest",
 					tokenEnv: "GITHUB_TOKEN",
 				},
+				{
+					protocol: "npm",
+					registry: "https://custom.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
 			];
 
 			const result = validateTokensAvailable(targets);
@@ -57,11 +57,8 @@ describe("registry-auth", () => {
 			expect(result.missing).toHaveLength(0);
 		});
 
-		it("returns missing tokens when npm tokens are absent", () => {
-			// Ensure tokens are not set
-			delete process.env.NPM_TOKEN;
-			delete process.env.CUSTOM_TOKEN;
-
+		it("skips npm public registry (uses OIDC)", () => {
+			// npm registry uses OIDC, so no token is required
 			const targets: ResolvedTarget[] = [
 				{
 					protocol: "npm",
@@ -70,16 +67,38 @@ describe("registry-auth", () => {
 					access: "public",
 					provenance: true,
 					tag: "latest",
-					tokenEnv: "NPM_TOKEN",
+					tokenEnv: null, // npm uses OIDC
 				},
+			];
+
+			const result = validateTokensAvailable(targets);
+			expect(result.valid).toBe(true);
+			expect(result.missing).toHaveLength(0);
+		});
+
+		it("returns missing tokens when custom registry tokens are absent", () => {
+			// Ensure tokens are not set
+			delete process.env.CUSTOM_TOKEN;
+			delete process.env.ANOTHER_TOKEN;
+
+			const targets: ResolvedTarget[] = [
 				{
 					protocol: "npm",
 					registry: "https://custom.registry.com/",
 					directory: "/test",
-					access: "restricted",
+					access: "public",
 					provenance: false,
 					tag: "latest",
 					tokenEnv: "CUSTOM_TOKEN",
+				},
+				{
+					protocol: "npm",
+					registry: "https://another.registry.com/",
+					directory: "/test",
+					access: "restricted",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "ANOTHER_TOKEN",
 				},
 			];
 
@@ -87,8 +106,8 @@ describe("registry-auth", () => {
 			expect(result.valid).toBe(false);
 			expect(result.missing).toHaveLength(2);
 			expect(result.missing[0]).toEqual({
-				registry: "https://registry.npmjs.org/",
-				tokenEnv: "NPM_TOKEN",
+				registry: "https://custom.registry.com/",
+				tokenEnv: "CUSTOM_TOKEN",
 			});
 		});
 
@@ -130,20 +149,11 @@ describe("registry-auth", () => {
 	});
 
 	describe("generateNpmrc", () => {
-		it("creates .npmrc with auth for npm registries", () => {
-			process.env.NPM_TOKEN = "test-npm-token";
+		it("creates .npmrc with auth for GitHub Packages and custom registries", () => {
 			process.env.GITHUB_TOKEN = "test-github-token";
+			process.env.CUSTOM_TOKEN = "test-custom-token";
 
 			const targets: ResolvedTarget[] = [
-				{
-					protocol: "npm",
-					registry: "https://registry.npmjs.org/",
-					directory: "/test",
-					access: "public",
-					provenance: true,
-					tag: "latest",
-					tokenEnv: "NPM_TOKEN",
-				},
 				{
 					protocol: "npm",
 					registry: "https://npm.pkg.github.com/",
@@ -152,6 +162,15 @@ describe("registry-auth", () => {
 					provenance: true,
 					tag: "latest",
 					tokenEnv: "GITHUB_TOKEN",
+				},
+				{
+					protocol: "npm",
+					registry: "https://custom.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
 				},
 			];
 
@@ -163,8 +182,8 @@ describe("registry-auth", () => {
 			const content = writeCall[1] as string;
 
 			expect(npmrcPath).toBe(path.join("/home/testuser", ".npmrc"));
-			expect(content).toContain("//registry.npmjs.org/:_authToken=test-npm-token");
 			expect(content).toContain("//npm.pkg.github.com/:_authToken=test-github-token");
+			expect(content).toContain("//custom.registry.com/:_authToken=test-custom-token");
 		});
 
 		it("skips JSR targets", () => {
@@ -187,26 +206,26 @@ describe("registry-auth", () => {
 		});
 
 		it("deduplicates registries", () => {
-			process.env.NPM_TOKEN = "test-npm-token";
+			process.env.GITHUB_TOKEN = "test-github-token";
 
 			const targets: ResolvedTarget[] = [
 				{
 					protocol: "npm",
-					registry: "https://registry.npmjs.org/",
+					registry: "https://npm.pkg.github.com/",
 					directory: "/test/pkg1",
 					access: "public",
 					provenance: true,
 					tag: "latest",
-					tokenEnv: "NPM_TOKEN",
+					tokenEnv: "GITHUB_TOKEN",
 				},
 				{
 					protocol: "npm",
-					registry: "https://registry.npmjs.org/",
+					registry: "https://npm.pkg.github.com/",
 					directory: "/test/pkg2",
 					access: "public",
 					provenance: true,
 					tag: "latest",
-					tokenEnv: "NPM_TOKEN",
+					tokenEnv: "GITHUB_TOKEN",
 				},
 			];
 
@@ -214,15 +233,37 @@ describe("registry-auth", () => {
 
 			expect(fs.writeFileSync).toHaveBeenCalledTimes(1);
 			const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-			// Should only have one entry for npmjs.org
-			const npmjsMatches = content.match(/registry\.npmjs\.org/g);
-			expect(npmjsMatches).toHaveLength(1);
+			// Should only have one entry for GitHub Packages
+			const githubMatches = content.match(/npm\.pkg\.github\.com/g);
+			expect(githubMatches).toHaveLength(1);
 		});
 
-		it("appends to existing .npmrc", () => {
+		it("appends to existing .npmrc for GitHub Packages", () => {
 			vi.mocked(fs.existsSync).mockReturnValue(true);
 			vi.mocked(fs.readFileSync).mockReturnValue("existing-content\n");
-			process.env.NPM_TOKEN = "test-npm-token";
+			process.env.GITHUB_TOKEN = "test-github-token";
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://npm.pkg.github.com/",
+					directory: "/test",
+					access: "public",
+					provenance: true,
+					tag: "latest",
+					tokenEnv: "GITHUB_TOKEN",
+				},
+			];
+
+			generateNpmrc(targets);
+
+			const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+			expect(content).toContain("existing-content");
+			expect(content).toContain("Added by workflow-release-action");
+		});
+
+		it("skips npm public registry (uses OIDC)", () => {
+			vi.mocked(fs.existsSync).mockReturnValue(false);
 
 			const targets: ResolvedTarget[] = [
 				{
@@ -232,15 +273,15 @@ describe("registry-auth", () => {
 					access: "public",
 					provenance: true,
 					tag: "latest",
-					tokenEnv: "NPM_TOKEN",
+					tokenEnv: null, // npm uses OIDC
 				},
 			];
 
 			generateNpmrc(targets);
 
-			const content = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-			expect(content).toContain("existing-content");
-			expect(content).toContain("Added by workflow-release-action");
+			// Should not write .npmrc for OIDC registry
+			expect(fs.writeFileSync).not.toHaveBeenCalled();
+			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("uses OIDC - skipping .npmrc auth"));
 		});
 
 		it("warns when token is not set", () => {
@@ -297,30 +338,36 @@ describe("registry-auth", () => {
 			expect(process.env.GITHUB_TOKEN).toBe("github-app-token");
 		});
 
-		it("sets NPM_TOKEN from input when provided", () => {
+		it("does not set NPM_TOKEN (npm uses OIDC)", () => {
 			vi.mocked(core.getInput).mockImplementation((name: string) => {
 				if (name === "token") return "github-token";
-				if (name === "npm-token") return "npm-token-value";
 				return "";
 			});
+
+			// Clear any existing NPM_TOKEN
+			delete process.env.NPM_TOKEN;
 
 			const targets: ResolvedTarget[] = [];
 			setupRegistryAuth(targets);
 
-			expect(process.env.NPM_TOKEN).toBe("npm-token-value");
+			// NPM_TOKEN should not be set - npm uses OIDC trusted publishing
+			expect(process.env.NPM_TOKEN).toBeUndefined();
 		});
 
-		it("sets JSR_TOKEN from input when provided", () => {
+		it("does not set JSR_TOKEN (JSR uses OIDC)", () => {
 			vi.mocked(core.getInput).mockImplementation((name: string) => {
 				if (name === "token") return "github-token";
-				if (name === "jsr-token") return "jsr-token-value";
 				return "";
 			});
+
+			// Clear any existing JSR_TOKEN
+			delete process.env.JSR_TOKEN;
 
 			const targets: ResolvedTarget[] = [];
 			setupRegistryAuth(targets);
 
-			expect(process.env.JSR_TOKEN).toBe("jsr-token-value");
+			// JSR_TOKEN should not be set - JSR uses OIDC
+			expect(process.env.JSR_TOKEN).toBeUndefined();
 		});
 
 		it("parses registry-tokens input", () => {

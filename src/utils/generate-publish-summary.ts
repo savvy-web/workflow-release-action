@@ -308,20 +308,53 @@ export interface PackagePublishResult {
 /**
  * Categorize common publish errors for better diagnostics
  */
-function categorizeError(error: string, stderr: string): { category: string; hint: string } {
+function categorizeError(error: string, stderr: string, registry?: string | null): { category: string; hint: string } {
 	const combined = `${error} ${stderr}`.toLowerCase();
+	const isGitHubPackages = registry?.includes("pkg.github.com");
+
+	// GitHub Packages specific errors
+	if (isGitHubPackages) {
+		if (combined.includes("organization") || combined.includes("org packages")) {
+			return {
+				category: "🏢 Organization Packages Permission",
+				hint: "The GitHub App needs 'Organization packages: Write' permission. Configure this in your GitHub App settings on github.com, then request the permission in create-github-app-token with `permission-organization_packages: write`",
+			};
+		}
+
+		if (combined.includes("403") || combined.includes("forbidden") || combined.includes("not allowed")) {
+			return {
+				category: "🔒 GitHub Packages Permission",
+				hint: "The GitHub App token needs 'packages:write' permission. Add `permission-packages: write` to your create-github-app-token step",
+			};
+		}
+
+		if (combined.includes("401") || combined.includes("unauthorized")) {
+			return {
+				category: "🔐 GitHub Packages Auth Error",
+				hint: "Ensure the GitHub App token is being passed to the action. The token should be set to GITHUB_TOKEN for npm publish",
+			};
+		}
+	}
+
+	// npm OIDC errors
+	if (combined.includes("trusted publishing") || combined.includes("oidc")) {
+		return {
+			category: "🔑 OIDC Trusted Publishing Error",
+			hint: "For npm OIDC publishing: 1) Add `id-token: write` permission, 2) Configure trusted publishing on npmjs.com for your package",
+		};
+	}
 
 	if (combined.includes("401") || combined.includes("unauthorized") || combined.includes("authentication")) {
 		return {
 			category: "🔐 Authentication Error",
-			hint: "Check that the required token is provided and has correct permissions",
+			hint: "Check that the required token is provided. For npm, ensure trusted publishing is configured on npmjs.com",
 		};
 	}
 
 	if (combined.includes("403") || combined.includes("forbidden") || combined.includes("not allowed")) {
 		return {
 			category: "🚫 Permission Error",
-			hint: "The token may lack required permissions (e.g., packages:write, id-token:write for provenance)",
+			hint: "The token may lack required permissions (e.g., packages:write for GitHub Packages, id-token:write for npm provenance)",
 		};
 	}
 
@@ -339,17 +372,17 @@ function categorizeError(error: string, stderr: string): { category: string; hin
 		};
 	}
 
-	if (combined.includes("oidc") || combined.includes("id-token") || combined.includes("sigstore")) {
+	if (combined.includes("id-token") || combined.includes("sigstore")) {
 		return {
-			category: "🔑 OIDC/Provenance Error",
-			hint: "Add `id-token: write` permission to the workflow for npm provenance attestations",
+			category: "🔑 Provenance Error",
+			hint: "Add `id-token: write` permission to the workflow for npm provenance attestations via Sigstore",
 		};
 	}
 
 	if (combined.includes("attestation") || combined.includes("intoto")) {
 		return {
 			category: "📜 Attestation Error",
-			hint: "Add `attestations: write` permission to the workflow for GitHub attestations",
+			hint: "Add `attestations: write` permission to the workflow for GitHub Attestations API",
 		};
 	}
 
@@ -452,7 +485,7 @@ export function generatePublishResultsSummary(results: PackagePublishResult[], d
 
 			for (const result of failedTargets) {
 				const registry = getRegistryDisplayName(result.target.registry);
-				const { category, hint } = categorizeError(result.error || "", result.stderr || "");
+				const { category, hint } = categorizeError(result.error || "", result.stderr || "", result.target.registry);
 
 				sections.push(`**${registry}** - ${category}\n`);
 				sections.push(`> \u{1F4A1} ${hint}\n`);
@@ -496,14 +529,26 @@ export function generatePublishResultsSummary(results: PackagePublishResult[], d
 	if (!allSuccess) {
 		sections.push("---");
 		sections.push("### \u{1F510} Required Permissions\n");
-		sections.push("Ensure your workflow has these permissions:\n");
+		sections.push("**Workflow permissions:**\n");
 		sections.push("```yaml");
 		sections.push("permissions:");
 		sections.push("  contents: write    # For git tags and releases");
 		sections.push("  packages: write    # For GitHub Packages");
-		sections.push("  id-token: write    # For npm provenance (Sigstore OIDC)");
+		sections.push("  id-token: write    # For npm OIDC and provenance (Sigstore)");
 		sections.push("  attestations: write # For GitHub Attestations API");
 		sections.push("```\n");
+		sections.push("**GitHub App token (create-github-app-token):**\n");
+		sections.push("```yaml");
+		sections.push("- uses: actions/create-github-app-token@v2");
+		sections.push("  with:");
+		// Use string concatenation to avoid template literal detection
+		sections.push("    app-id: $" + "{{ secrets.APP_ID }}");
+		sections.push("    private-key: $" + "{{ secrets.APP_PRIVATE_KEY }}");
+		sections.push("    permission-packages: write           # For GitHub Packages");
+		sections.push("    permission-organization_packages: write  # For org packages");
+		sections.push("```\n");
+		sections.push("> **Note:** npm uses OIDC trusted publishing - no NPM_TOKEN needed.\n");
+		sections.push("> Configure trusted publishing at https://www.npmjs.com/settings/packages\n");
 	}
 
 	return sections.join("\n");

@@ -54,11 +54,14 @@ export interface PublishTarget {
 	/**
 	 * Environment variable name containing the auth token
 	 *
-	 * Defaults:
-	 * - npm (registry.npmjs.org): NPM_TOKEN
-	 * - github (npm.pkg.github.com): GITHUB_TOKEN
-	 * - jsr: JSR_TOKEN (optional, OIDC preferred)
+	 * OIDC-first strategy:
+	 * - npm (registry.npmjs.org): null (uses OIDC trusted publishing)
+	 * - github (npm.pkg.github.com): GITHUB_TOKEN (GitHub App token)
+	 * - jsr: null (uses OIDC natively)
 	 * - custom registries: auto-generated from URL or must be specified
+	 *
+	 * OIDC registries don't need tokens - they use temporary credentials
+	 * from the GitHub Actions OIDC provider.
 	 */
 	tokenEnv?: string;
 }

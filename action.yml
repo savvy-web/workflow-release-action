@@ -35,20 +35,18 @@ inputs:
     default: "false"
 
   # Authentication inputs for multi-registry publishing
-  npm-token:
-    description: NPM registry auth token (for registry.npmjs.org)
-    required: false
-    default: ""
-  jsr-token:
-    description: JSR auth token (optional, OIDC preferred in GitHub Actions)
-    required: false
-    default: ""
+  # NOTE: npm and JSR use OIDC - no tokens needed for these registries
+  # GitHub Packages uses the GitHub App token passed via 'token' input
   registry-tokens:
     description: |
-      Additional registry tokens in format: registry=token (one per line)
+      Custom registry tokens in format: registry=token (one per line)
+      Only needed for private/custom registries that don't support OIDC.
+
       Example:
-        https://registry.example.com/=<YOUR_PUBLIC_TOKEN>
-        https://internal.registry.example.com/=<YOUR_INTERNAL_TOKEN>
+        https://registry.example.com/=<YOUR_TOKEN>
+
+      Note: npm uses OIDC trusted publishing (no token needed)
+      Note: GitHub Packages uses the GitHub App token automatically
     required: false
     default: ""
 

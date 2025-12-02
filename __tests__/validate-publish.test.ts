@@ -347,9 +347,8 @@ describe("validate-publish", () => {
 			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("package.json not found"));
 		});
 
-		it("reports missing auth tokens", async () => {
-			// Remove tokens
-			delete process.env.NPM_TOKEN;
+		it("reports missing auth tokens for GitHub Packages", async () => {
+			// Remove GITHUB_TOKEN - GitHub Packages requires it
 			delete process.env.GITHUB_TOKEN;
 
 			const changesetStatus: ChangesetStatus = {
@@ -361,7 +360,7 @@ describe("validate-publish", () => {
 				name: "@test/package",
 				version: "1.0.1",
 				publishConfig: {
-					targets: ["npm"],
+					targets: ["github"], // GitHub Packages requires a token
 					directory: "dist",
 				},
 			};
@@ -395,6 +394,56 @@ describe("validate-publish", () => {
 
 			expect(result).toBeDefined();
 			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Some registry tokens are missing"));
+		});
+
+		it("does not warn about missing tokens for OIDC registries (npm)", async () => {
+			// npm uses OIDC - no token needed
+			delete process.env.NPM_TOKEN;
+
+			const changesetStatus: ChangesetStatus = {
+				changesets: [{ id: "test", summary: "Test", releases: [] }],
+				releases: [{ name: "@test/package", type: "patch", oldVersion: "1.0.0", newVersion: "1.0.1" }],
+			};
+
+			const workspacePackageJson: PackageJson = {
+				name: "@test/package",
+				version: "1.0.1",
+				publishConfig: {
+					targets: ["npm"], // npm uses OIDC trusted publishing
+					directory: "dist",
+				},
+			};
+
+			const distPackageJson: PackageJson = {
+				name: "@test/package",
+				version: "1.0.1",
+			};
+
+			vi.mocked(fs.existsSync).mockImplementation((filePath) => {
+				const p = String(filePath);
+				if (p.includes(".npmrc")) return false;
+				return true;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((filePath) => {
+				const p = String(filePath);
+				if (p.includes("changeset-status")) return JSON.stringify(changesetStatus);
+				if (p.includes("test-package") && p.endsWith("package.json") && !p.includes("dist")) {
+					return JSON.stringify(workspacePackageJson);
+				}
+				if (p.includes("dist") && p.endsWith("package.json")) {
+					return JSON.stringify(distPackageJson);
+				}
+				return JSON.stringify({});
+			});
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			const result = await validatePublish("pnpm", "main", false);
+
+			expect(result).toBeDefined();
+			// Should not warn about missing tokens for OIDC registries
+			expect(core.warning).not.toHaveBeenCalledWith(expect.stringContaining("Some registry tokens are missing"));
 		});
 
 		it("calculates npmReady based on npm targets", async () => {

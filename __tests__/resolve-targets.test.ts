@@ -58,7 +58,7 @@ describe("resolve-targets", () => {
 				expect(targets).toEqual([]);
 			});
 
-			it("returns default npm target for public package", () => {
+			it("returns default npm target for public package (uses OIDC)", () => {
 				const packageJson: PackageJson = { private: false };
 				const targets = resolveTargets(testPackagePath, packageJson);
 
@@ -70,7 +70,7 @@ describe("resolve-targets", () => {
 					access: "restricted",
 					provenance: true,
 					tag: "latest",
-					tokenEnv: "NPM_TOKEN",
+					tokenEnv: null, // npm uses OIDC trusted publishing
 				});
 			});
 
@@ -136,7 +136,7 @@ describe("resolve-targets", () => {
 		});
 
 		describe("publishConfig with targets", () => {
-			it("expands 'npm' shorthand", () => {
+			it("expands 'npm' shorthand (uses OIDC)", () => {
 				const packageJson: PackageJson = {
 					publishConfig: {
 						targets: ["npm"],
@@ -149,7 +149,7 @@ describe("resolve-targets", () => {
 					protocol: "npm",
 					registry: "https://registry.npmjs.org/",
 					provenance: true,
-					tokenEnv: "NPM_TOKEN",
+					tokenEnv: null, // npm uses OIDC trusted publishing
 				});
 			});
 
@@ -170,7 +170,7 @@ describe("resolve-targets", () => {
 				});
 			});
 
-			it("expands 'jsr' shorthand", () => {
+			it("expands 'jsr' shorthand (uses OIDC)", () => {
 				const packageJson: PackageJson = {
 					publishConfig: {
 						targets: ["jsr"],
@@ -183,7 +183,7 @@ describe("resolve-targets", () => {
 					protocol: "jsr",
 					registry: null,
 					provenance: false,
-					tokenEnv: "JSR_TOKEN",
+					tokenEnv: null, // JSR uses OIDC
 				});
 			});
 

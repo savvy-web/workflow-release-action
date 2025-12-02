@@ -5,7 +5,30 @@ import type { AuthSetupResult, ResolvedTarget } from "../types/publish-config.js
 import { registryToEnvName } from "./resolve-targets.js";
 
 /**
+ * Check if a registry uses OIDC-based authentication
+ *
+ * @remarks
+ * OIDC (OpenID Connect) enables token-less publishing:
+ * - npm public registry: Uses trusted publishing via Sigstore OIDC
+ * - JSR: Uses OIDC natively in GitHub Actions
+ *
+ * @param registry - Registry URL to check
+ * @returns true if registry uses OIDC
+ */
+function isOidcRegistry(registry: string | null): boolean {
+	if (!registry) return false;
+	// npm public registry supports OIDC trusted publishing
+	if (registry.includes("registry.npmjs.org")) return true;
+	return false;
+}
+
+/**
  * Validate that required tokens are available in environment
+ *
+ * @remarks
+ * OIDC-based registries (npm, JSR) don't require tokens - they use
+ * temporary credentials from the GitHub Actions OIDC provider.
+ * Only GitHub Packages and custom registries require tokens.
  *
  * @param targets - Array of resolved targets to validate
  * @returns Validation result with missing tokens
@@ -19,12 +42,17 @@ export function validateTokensAvailable(targets: ResolvedTarget[]): {
 	for (const target of targets) {
 		// JSR uses OIDC in GitHub Actions, token is optional
 		if (target.protocol === "jsr") {
-			if (target.tokenEnv && !process.env[target.tokenEnv]) {
-				core.debug(`JSR token ${target.tokenEnv} not set, will use OIDC`);
-			}
+			core.debug("JSR uses OIDC - no token required");
 			continue;
 		}
 
+		// npm public registry uses OIDC trusted publishing
+		if (isOidcRegistry(target.registry)) {
+			core.debug("npm uses OIDC trusted publishing - no token required");
+			continue;
+		}
+
+		// GitHub Packages and custom registries need tokens
 		if (!target.tokenEnv) {
 			missing.push({
 				registry: target.registry || "unknown",
@@ -48,7 +76,14 @@ export function validateTokensAvailable(targets: ResolvedTarget[]): {
 }
 
 /**
- * Generate .npmrc with authentication for all npm-compatible registries
+ * Generate .npmrc with authentication for non-OIDC registries
+ *
+ * @remarks
+ * Only generates auth entries for:
+ * - GitHub Packages (uses GitHub App token)
+ * - Custom registries (uses provided tokens)
+ *
+ * OIDC registries (npm public, JSR) don't need .npmrc entries.
  *
  * @param targets - Array of resolved targets to configure auth for
  */
@@ -59,6 +94,13 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
 	for (const target of targets) {
 		if (target.protocol !== "npm" || !target.registry) continue;
 		if (processedRegistries.has(target.registry)) continue;
+
+		// Skip OIDC registries - they don't need .npmrc auth
+		if (isOidcRegistry(target.registry)) {
+			core.info(`${target.registry} uses OIDC - skipping .npmrc auth`);
+			processedRegistries.add(target.registry);
+			continue;
+		}
 
 		processedRegistries.add(target.registry);
 
@@ -74,7 +116,7 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
 		}
 
 		// Convert registry URL to npmrc format
-		// https://registry.npmjs.org/ -> //registry.npmjs.org/:_authToken=TOKEN
+		// https://npm.pkg.github.com/ -> //npm.pkg.github.com/:_authToken=TOKEN
 		const registryPath = target.registry.replace(/^https?:/, "");
 
 		lines.push(`${registryPath}:_authToken=${token}`);
@@ -102,29 +144,28 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
 
 /**
  * Setup authentication for all registries
- * Called once at the start of the action
+ *
+ * @remarks
+ * Authentication strategy:
+ * - **npm public registry**: Uses OIDC trusted publishing (no token needed)
+ * - **GitHub Packages**: Uses GitHub App token (passed as `token` input)
+ * - **JSR**: Uses OIDC (no token needed)
+ * - **Custom registries**: Uses tokens from `registry-tokens` input
+ *
+ * The GitHub App token is set to GITHUB_TOKEN for GitHub Packages auth.
+ * No .npmrc entry is needed for npm/JSR since they use OIDC.
  *
  * @param targets - Array of resolved targets to setup auth for
  * @returns Authentication setup result
  */
 export function setupRegistryAuth(targets: ResolvedTarget[]): AuthSetupResult {
 	// Set GITHUB_TOKEN from input for GitHub Packages
+	// This is the GitHub App token, not the default GITHUB_TOKEN
 	const githubToken = core.getInput("token", { required: true });
 	process.env.GITHUB_TOKEN = githubToken;
+	core.info("Using GitHub App token for GitHub Packages authentication");
 
-	// Set NPM_TOKEN if provided
-	const npmToken = core.getInput("npm-token");
-	if (npmToken) {
-		process.env.NPM_TOKEN = npmToken;
-	}
-
-	// Set JSR_TOKEN if provided
-	const jsrToken = core.getInput("jsr-token");
-	if (jsrToken) {
-		process.env.JSR_TOKEN = jsrToken;
-	}
-
-	// Parse additional registry tokens from input
+	// Parse additional registry tokens for custom registries
 	const registryTokensInput = core.getInput("registry-tokens");
 	if (registryTokensInput) {
 		const inputLines = registryTokensInput.split("\n").filter((line) => line.trim());
@@ -138,15 +179,15 @@ export function setupRegistryAuth(targets: ResolvedTarget[]): AuthSetupResult {
 			if (registry && token) {
 				const envVarName = registryToEnvName(registry);
 				process.env[envVarName] = token;
-				core.info(`Set ${envVarName} for ${registry}`);
+				core.info(`Set ${envVarName} for custom registry: ${registry}`);
 			}
 		}
 	}
 
-	// Validate all required tokens are present
+	// Validate tokens for non-OIDC registries
 	const validation = validateTokensAvailable(targets);
 
-	// Generate .npmrc for npm-compatible registries
+	// Generate .npmrc for GitHub Packages and custom registries
 	generateNpmrc(targets);
 
 	return {
