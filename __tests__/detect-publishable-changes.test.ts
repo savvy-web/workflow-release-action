@@ -3,7 +3,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getWorkspaceRoot, getWorkspaces } from "workspace-tools";
+import { findProjectRoot, getWorkspaces } from "workspace-tools";
 import { detectPublishableChanges } from "../src/utils/detect-publishable-changes.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { MockOctokit } from "./utils/test-types.js";
@@ -55,7 +55,7 @@ describe("detect-publishable-changes", () => {
 		Object.defineProperty(vi.mocked(context), "sha", { value: "abc123", writable: true });
 
 		// Mock workspace-tools - default to empty workspace
-		vi.mocked(getWorkspaceRoot).mockReturnValue("/test/workspace");
+		vi.mocked(findProjectRoot).mockReturnValue("/test/workspace");
 		vi.mocked(getWorkspaces).mockReturnValue([]);
 
 		// Mock readFile - handles both changeset status file and root package.json

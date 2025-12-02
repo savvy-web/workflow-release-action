@@ -4,7 +4,7 @@ import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfos } from "workspace-tools";
-import { getWorkspaces } from "workspace-tools";
+import { findProjectRoot, getWorkspaces } from "workspace-tools";
 import { clearWorkspaceCache } from "../src/utils/find-package-path.js";
 import { generateReleaseNotesPreview } from "../src/utils/generate-release-notes-preview.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
@@ -411,6 +411,365 @@ Previous notes`;
 
 		expect(result.packages).toEqual([]);
 		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("changeset config issue"));
+	});
+
+	describe("enhanced summary with publishValidations", () => {
+		it("should generate registry table when publishValidations provided", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg", newVersion: "1.0.0", oldVersion: "0.9.0", type: "minor" }],
+						changesets: [{ id: "change-1", summary: "Test change", releases: [{ name: "@test/pkg", type: "minor" }] }],
+					});
+				}
+				if (pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 1.0.0\n\n### Features\n\n- New feature`;
+				}
+				return "";
+			});
+
+			const publishValidations = [
+				{
+					name: "@test/pkg",
+					version: "1.0.0",
+					path: "/test/pkg",
+					targets: [
+						{
+							target: {
+								protocol: "npm" as const,
+								registry: "https://registry.npmjs.org/",
+								directory: "/test/pkg/dist/npm",
+								access: "public" as const,
+								provenance: true,
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							canPublish: true,
+							directoryExists: true,
+							packageJsonValid: true,
+							dryRunPassed: true,
+							dryRunOutput: "",
+							dryRunError: "",
+							versionConflict: false,
+							provenanceReady: true,
+							stats: { packageSize: "1.2 kB", unpackedSize: "3.5 kB", totalFiles: 5 },
+							message: "Ready to publish",
+						},
+					],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			const result = await generateReleaseNotesPreview(publishValidations);
+
+			expect(result.packages).toHaveLength(1);
+			// Should include registry table with stats
+			expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("npm"));
+			expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("1.2 kB"));
+		});
+
+		it("should show provenance warning when not ready", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg", newVersion: "1.0.0", oldVersion: "0.9.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 1.0.0\n\nNotes`;
+				}
+				return "";
+			});
+
+			const publishValidations = [
+				{
+					name: "@test/pkg",
+					version: "1.0.0",
+					path: "/test/pkg",
+					targets: [
+						{
+							target: {
+								protocol: "npm" as const,
+								registry: "https://registry.npmjs.org/",
+								directory: "/test/pkg/dist/npm",
+								access: "public" as const,
+								provenance: true,
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							canPublish: true,
+							directoryExists: true,
+							packageJsonValid: true,
+							dryRunPassed: true,
+							dryRunOutput: "",
+							dryRunError: "",
+							versionConflict: false,
+							provenanceReady: false, // Not ready
+							stats: {},
+							message: "Provenance not ready",
+						},
+					],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			await generateReleaseNotesPreview(publishValidations);
+
+			// Should show warning icon for provenance
+			expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("⚠️"));
+		});
+
+		it("should show dash when provenance is disabled", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg", newVersion: "1.0.0", oldVersion: "0.9.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 1.0.0\n\nNotes`;
+				}
+				return "";
+			});
+
+			const publishValidations = [
+				{
+					name: "@test/pkg",
+					version: "1.0.0",
+					path: "/test/pkg",
+					targets: [
+						{
+							target: {
+								protocol: "npm" as const,
+								registry: null,
+								directory: "/test/pkg/dist/npm",
+								access: "restricted" as const, // No explicit access
+								provenance: false, // Disabled
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							canPublish: true,
+							directoryExists: true,
+							packageJsonValid: true,
+							dryRunPassed: true,
+							dryRunOutput: "",
+							dryRunError: "",
+							versionConflict: false,
+							provenanceReady: false,
+							stats: {},
+							message: "Ready to publish",
+						},
+					],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			await generateReleaseNotesPreview(publishValidations);
+
+			// Summary should be generated
+			expect(core.summary.addRaw).toHaveBeenCalled();
+		});
+
+		it("should handle empty targets in publishValidations", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg", newVersion: "1.0.0", oldVersion: "0.9.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 1.0.0\n\nNotes`;
+				}
+				return "";
+			});
+
+			const publishValidations = [
+				{
+					name: "@test/pkg",
+					version: "1.0.0",
+					path: "/test/pkg",
+					targets: [], // Empty targets
+					allTargetsValid: true,
+					hasPublishableTargets: false,
+				},
+			];
+
+			const result = await generateReleaseNotesPreview(publishValidations);
+
+			expect(result.packages).toHaveLength(1);
+		});
+
+		it("should show first release indicator for 0.0.0 version", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg", newVersion: "0.1.0", oldVersion: "0.0.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 0.1.0\n\n### Features\n\n- Initial release`;
+				}
+				return "";
+			});
+
+			await generateReleaseNotesPreview();
+
+			// Should show first release indicator
+			expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("First Release"));
+		});
+
+		it("should generate Packages Not Releasing section", async () => {
+			// Mock findProjectRoot for getAllWorkspacePackages
+			vi.mocked(findProjectRoot).mockReturnValue("/test/workspace");
+
+			// Two packages in workspace, only one releasing
+			vi.mocked(getWorkspaces).mockReturnValue([
+				{
+					name: "@test/pkg-a",
+					path: "/test/pkg-a",
+					packageJson: {
+						packageJsonPath: "/test/pkg-a/package.json",
+						name: "@test/pkg-a",
+						version: "1.0.0",
+						publishConfig: { access: "public" },
+					},
+				},
+				{
+					name: "@test/pkg-b",
+					path: "/test/pkg-b",
+					packageJson: {
+						packageJsonPath: "/test/pkg-b/package.json",
+						name: "@test/pkg-b",
+						version: "2.0.0",
+						private: true, // Private package - won't release
+					},
+				},
+			]);
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg-a", newVersion: "1.1.0", oldVersion: "1.0.0", type: "minor" }],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 1.1.0\n\nNotes`;
+				}
+				return "";
+			});
+
+			await generateReleaseNotesPreview();
+
+			// Should show "Packages Not Releasing" section with pkg-b
+			expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("Packages Not Releasing"));
+			expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("@test/pkg-b"));
+			expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("Private"));
+		});
+
+		it("should count changesets per package in summary", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/test/pkg")]);
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [{ name: "@test/pkg", newVersion: "1.0.0", oldVersion: "0.9.0", type: "minor" }],
+						changesets: [
+							{ id: "change-1", summary: "First change", releases: [{ name: "@test/pkg", type: "minor" }] },
+							{ id: "change-2", summary: "Second change", releases: [{ name: "@test/pkg", type: "patch" }] },
+						],
+					});
+				}
+				if (pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 1.0.0\n\nNotes`;
+				}
+				return "";
+			});
+
+			await generateReleaseNotesPreview();
+
+			// Summary table should show changeset count (2)
+			expect(core.summary.addRaw).toHaveBeenCalled();
+		});
+	});
+
+	describe("linked package handling", () => {
+		it("should generate explanatory notes for linked packages with no direct changes", async () => {
+			vi.mocked(getWorkspaces).mockReturnValue([
+				createWorkspace("@test/pkg-a", "/test/pkg-a"),
+				createWorkspace("@test/pkg-b", "/test/pkg-b"),
+			]);
+
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) return true;
+				if (pathStr.includes(".changeset/config.json")) return true;
+				if (pathStr.includes("CHANGELOG.md")) return true;
+				return false;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".changeset-status")) {
+					return JSON.stringify({
+						releases: [
+							{ name: "@test/pkg-a", newVersion: "1.0.0", type: "minor" },
+							{ name: "@test/pkg-b", newVersion: "1.0.0", type: "none" },
+						],
+						changesets: [],
+					});
+				}
+				if (pathStr.includes(".changeset/config.json")) {
+					return JSON.stringify({
+						linked: [["@test/pkg-a", "@test/pkg-b"]], // Linked, not fixed
+					});
+				}
+				if (pathStr.includes("pkg-a") && pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 1.0.0\n\n### Features\n\n- New feature`;
+				}
+				if (pathStr.includes("pkg-b") && pathStr.includes("CHANGELOG.md")) {
+					return `# Changelog\n\n## 0.9.0\n\n- Old stuff`;
+				}
+				return "";
+			});
+
+			const result = await generateReleaseNotesPreview();
+
+			expect(result.packages).toHaveLength(2);
+			expect(result.packages[1].name).toBe("@test/pkg-b");
+			expect(result.packages[1].notes).toContain("linked versioning");
+		});
 	});
 
 	describe("fixed package handling", () => {

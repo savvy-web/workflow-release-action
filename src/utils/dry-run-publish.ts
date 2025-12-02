@@ -1,6 +1,6 @@
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
-import type { DryRunResult, ResolvedTarget } from "../types/publish-config.js";
+import type { DryRunResult, PackageStats, ResolvedTarget } from "../types/publish-config.js";
 
 /**
  * Get a display name for a registry URL
@@ -15,6 +15,28 @@ function getRegistryDisplayName(registry: string | null): string {
 	} catch {
 		return registry;
 	}
+}
+
+/**
+ * Parse package statistics from npm dry-run output
+ *
+ * Extracts package size, unpacked size, and total files from output like:
+ * ```
+ * npm notice package size: 1.2 kB
+ * npm notice unpacked size: 1.9 kB
+ * npm notice total files: 5
+ * ```
+ */
+function parseNpmDryRunStats(output: string): PackageStats {
+	const packageSizeMatch = output.match(/package size:\s*([^\n]+)/);
+	const unpackedSizeMatch = output.match(/unpacked size:\s*([^\n]+)/);
+	const totalFilesMatch = output.match(/total files:\s*(\d+)/);
+
+	return {
+		packageSize: packageSizeMatch?.[1]?.trim(),
+		unpackedSize: unpackedSizeMatch?.[1]?.trim(),
+		totalFiles: totalFilesMatch ? parseInt(totalFilesMatch[1], 10) : undefined,
+	};
 }
 
 /**
@@ -83,6 +105,9 @@ async function dryRunNpmCompatible(target: ResolvedTarget): Promise<DryRunResult
 	// Check provenance readiness
 	const provenanceReady = target.provenance ? !error.includes("provenance") || output.includes("provenance") : true;
 
+	// Parse package stats from output
+	const stats = parseNpmDryRunStats(output);
+
 	return {
 		success: exitCode === 0 && !versionConflict,
 		output,
@@ -90,6 +115,7 @@ async function dryRunNpmCompatible(target: ResolvedTarget): Promise<DryRunResult
 		versionConflict,
 		existingVersion,
 		provenanceReady,
+		stats,
 	};
 }
 

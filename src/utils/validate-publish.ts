@@ -201,6 +201,7 @@ export async function validatePublish(
 				versionConflict: dryRunResult.versionConflict,
 				existingVersion: dryRunResult.existingVersion,
 				provenanceReady: dryRunResult.provenanceReady,
+				stats: dryRunResult.stats,
 				message: dryRunResult.success
 					? "Ready to publish"
 					: dryRunResult.versionConflict

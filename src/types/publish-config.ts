@@ -124,6 +124,18 @@ export interface PreValidationResult {
 }
 
 /**
+ * Package statistics extracted from npm dry-run output
+ */
+export interface PackageStats {
+	/** Packed tarball size (e.g., "1.2 kB") */
+	packageSize?: string;
+	/** Unpacked size (e.g., "1.9 kB") */
+	unpackedSize?: string;
+	/** Total number of files in the package */
+	totalFiles?: number;
+}
+
+/**
  * Result of dry-run publishing a target
  */
 export interface DryRunResult {
@@ -133,6 +145,8 @@ export interface DryRunResult {
 	versionConflict: boolean;
 	existingVersion?: string;
 	provenanceReady: boolean;
+	/** Package statistics from dry-run output */
+	stats?: PackageStats;
 }
 
 /**
@@ -157,6 +171,9 @@ export interface TargetValidationResult {
 
 	// Provenance readiness
 	provenanceReady: boolean;
+
+	// Package statistics from dry-run
+	stats?: PackageStats;
 
 	message: string;
 }

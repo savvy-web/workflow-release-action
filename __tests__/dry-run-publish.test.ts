@@ -309,6 +309,80 @@ describe("dry-run-publish", () => {
 
 			expect(result.output).toContain("Publishing to npm...");
 		});
+
+		it("parses package stats from npm dry-run output", async () => {
+			const npmOutput = `npm notice
+npm notice 📦  @savvy-web/test-package@0.0.1
+npm notice Tarball Contents
+npm notice 1.1kB LICENSE
+npm notice 32B README.md
+npm notice 157B index.d.ts
+npm notice 277B index.js
+npm notice 396B package.json
+npm notice Tarball Details
+npm notice name: @savvy-web/test-package
+npm notice version: 0.0.1
+npm notice filename: savvy-web-test-package-0.0.1.tgz
+npm notice package size: 1.2 kB
+npm notice unpacked size: 1.9 kB
+npm notice shasum: c300d9924cf02d8555a17585aef9468114b795b3
+npm notice integrity: sha512-uSgNTSm/2yh9t[...]NamcuCBg2GzOg==
+npm notice total files: 5
+npm notice
+npm notice Publishing to https://registry.npmjs.org/ with tag latest and public access (dry-run)`;
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(npmOutput));
+				}
+				return 0;
+			});
+
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const result = await dryRunPublish(target, "pnpm");
+
+			expect(result.success).toBe(true);
+			expect(result.stats).toBeDefined();
+			expect(result.stats?.packageSize).toBe("1.2 kB");
+			expect(result.stats?.unpackedSize).toBe("1.9 kB");
+			expect(result.stats?.totalFiles).toBe(5);
+		});
+
+		it("handles missing stats in output", async () => {
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("npm notice Publishing..."));
+				}
+				return 0;
+			});
+
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const result = await dryRunPublish(target, "pnpm");
+
+			expect(result.success).toBe(true);
+			expect(result.stats).toBeDefined();
+			expect(result.stats?.packageSize).toBeUndefined();
+			expect(result.stats?.unpackedSize).toBeUndefined();
+			expect(result.stats?.totalFiles).toBeUndefined();
+		});
 	});
 
 	describe("dryRunPublish with jsr protocol", () => {

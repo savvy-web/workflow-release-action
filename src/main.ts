@@ -452,7 +452,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			totalTargets: number;
 			readyTargets: number;
 			summary: string;
-			validations: unknown[];
+			validations: import("./types/publish-config.js").PackagePublishValidation[];
 		} = {
 			success: false,
 			npmReady: false,
@@ -532,7 +532,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			status: "in_progress",
 		});
 
-		const releaseNotesResult = await generateReleaseNotesPreview();
+		const releaseNotesResult = await generateReleaseNotesPreview(publishResult.validations);
 
 		// Complete the placeholder check
 		await octokit.rest.checks.update({

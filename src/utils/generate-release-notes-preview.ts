@@ -2,86 +2,23 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
+import type { PackagePublishValidation } from "../types/publish-config.js";
 import { findPackagePath } from "./find-package-path.js";
 import type { ChangesetStatusResult } from "./get-changeset-status.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
+import {
+	countChangesetsPerPackage,
+	findPackageGroup,
+	formatSkipReason,
+	getAllWorkspacePackages,
+	getBumpTypeIcon,
+	getGroupIcon,
+	getSkipReason,
+	isFirstRelease,
+	readChangesetConfig,
+} from "./release-summary-helpers.js";
+import { getRegistryDisplayName } from "./resolve-targets.js";
 import { summaryWriter } from "./summary-writer.js";
-
-/**
- * Changeset configuration
- */
-interface ChangesetConfig {
-	fixed?: string[][];
-	linked?: string[][];
-}
-
-/**
- * Read the changeset configuration file
- *
- * @returns Changeset config or null if not found/readable
- */
-function readChangesetConfig(): ChangesetConfig | null {
-	const configPath = path.join(process.cwd(), ".changeset", "config.json");
-
-	try {
-		if (fs.existsSync(configPath)) {
-			const content = fs.readFileSync(configPath, "utf8");
-			return JSON.parse(content) as ChangesetConfig;
-		}
-	} catch (error) {
-		core.debug(`Failed to read changeset config: ${error instanceof Error ? error.message : String(error)}`);
-	}
-
-	return null;
-}
-
-/**
- * Find which fixed group a package belongs to
- *
- * @param packageName - Package name to look up
- * @param config - Changeset configuration
- * @returns Array of sibling package names in the same fixed group, or null if not in a fixed group
- */
-function findFixedGroupSiblings(packageName: string, config: ChangesetConfig | null): string[] | null {
-	if (!config?.fixed) return null;
-
-	for (const group of config.fixed) {
-		if (group.includes(packageName)) {
-			// Return other packages in the group (excluding the package itself)
-			return group.filter((name) => name !== packageName);
-		}
-	}
-
-	return null;
-}
-
-/**
- * Generate explanatory release notes for a fixed package with no direct changes
- *
- * @param packageName - Package name
- * @param siblings - Sibling packages in the fixed group
- * @param releases - All releases from changeset status
- * @returns Explanatory release notes markdown
- */
-function generateFixedPackageNotes(
-	packageName: string,
-	siblings: string[],
-	releases: ChangesetStatusResult["releases"],
-): string {
-	// Find which siblings are actually being released
-	const releasedSiblings = siblings.filter((sibling) => releases.some((r) => r.name === sibling));
-
-	if (releasedSiblings.length === 0) {
-		return "_This package has no direct changes but is being released due to fixed versioning._";
-	}
-
-	const siblingList = releasedSiblings.map((s) => `\`${s}\``).join(", ");
-	const plural = releasedSiblings.length > 1 ? "packages" : "package";
-
-	return `_This package has no direct changes but is being released because it shares fixed versioning with ${siblingList} which ${releasedSiblings.length > 1 ? "have" : "has"} changes._
-
-This release maintains version alignment across the following ${plural}: ${[`\`${packageName}\``, ...releasedSiblings.map((s) => `\`${s}\``)].join(", ")}.`;
-}
 
 /**
  * Package release notes
@@ -89,8 +26,12 @@ This release maintains version alignment across the following ${plural}: ${[`\`$
 interface PackageReleaseNotes {
 	/** Package name */
 	name: string;
-	/** Package version */
+	/** Old version */
+	oldVersion: string;
+	/** New version */
 	version: string;
+	/** Bump type */
+	type: string;
 	/** Package path */
 	path: string;
 	/** Whether CHANGELOG exists */
@@ -167,15 +108,75 @@ function extractVersionSection(changelogContent: string, version: string): strin
 }
 
 /**
+ * Generate explanatory release notes for a group package with no direct changes
+ *
+ * @param packageName - Package name
+ * @param groupType - Type of group (fixed or linked)
+ * @param siblings - Sibling packages in the group
+ * @param releases - All releases from changeset status
+ * @returns Explanatory release notes markdown
+ */
+function generateGroupPackageNotes(
+	packageName: string,
+	groupType: "fixed" | "linked",
+	siblings: string[],
+	releases: ChangesetStatusResult["releases"],
+): string {
+	// Find which siblings are actually being released
+	const releasedSiblings = siblings.filter((sibling) => releases.some((r) => r.name === sibling));
+
+	if (releasedSiblings.length === 0) {
+		return `_This package has no direct changes but is being released due to ${groupType} versioning._`;
+	}
+
+	const siblingList = releasedSiblings.map((s) => `\`${s}\``).join(", ");
+	const groupDescription = groupType === "fixed" ? "fixed versioning" : "linked versioning";
+	const allPackages = [`\`${packageName}\``, ...releasedSiblings.map((s) => `\`${s}\``)].join(", ");
+
+	return `_This package has no direct changes but is being released because it shares ${groupDescription} with ${siblingList} which ${releasedSiblings.length > 1 ? "have" : "has"} changes._
+
+This release maintains version alignment across the following packages: ${allPackages}.`;
+}
+
+/**
+ * Generate registry table for a package
+ *
+ * @param validation - Package publish validation result
+ * @returns Markdown table string
+ */
+function generateRegistryTable(validation: PackagePublishValidation): string {
+	if (validation.targets.length === 0) {
+		return "_No publish targets configured_";
+	}
+
+	const rows = validation.targets.map((target) => {
+		const registry = getRegistryDisplayName(target.target.registry);
+		const dirName = target.target.directory.split("/").pop() || ".";
+		const packed = target.stats?.packageSize || "—";
+		const unpacked = target.stats?.unpackedSize || "—";
+		const files = target.stats?.totalFiles?.toString() || "—";
+		const access = target.target.access || "—";
+		const provenance = target.target.provenance ? (target.provenanceReady ? "✅" : "⚠️") : "—";
+
+		return [registry, `\`${dirName}\``, packed, unpacked, files, access, provenance];
+	});
+
+	return summaryWriter.table(["Registry", "Directory", "Packed", "Unpacked", "Files", "Access", "Provenance"], rows);
+}
+
+/**
  * Generates release notes preview for all packages
  *
+ * @param publishValidations - Optional publish validation results from dry-run
  * @returns Release notes preview result
  *
  * @remarks
  * Uses workspace-tools to discover package paths from workspace configuration.
  * This handles cases where directory names don't match package names.
  */
-export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreviewResult> {
+export async function generateReleaseNotesPreview(
+	publishValidations?: PackagePublishValidation[],
+): Promise<ReleaseNotesPreviewResult> {
 	// Read all inputs
 	const packageManager = core.getInput("package-manager") || "pnpm";
 	const targetBranch = core.getInput("target-branch") || "main";
@@ -184,18 +185,43 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 	const github = getOctokit(token);
 	core.startGroup("Generating release notes preview");
 
-	// Read changeset config to detect fixed groups
+	// Read changeset config to detect fixed/linked groups
 	const changesetConfig = readChangesetConfig();
 	if (changesetConfig?.fixed && changesetConfig.fixed.length > 0) {
 		core.debug(`Found ${changesetConfig.fixed.length} fixed group(s) in changeset config`);
+	}
+	if (changesetConfig?.linked && changesetConfig.linked.length > 0) {
+		core.debug(`Found ${changesetConfig.linked.length} linked group(s) in changeset config`);
 	}
 
 	// Get packages from changeset status (handles consumed changesets)
 	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
 	core.info(`Found ${changesetStatus.releases.length} package(s) to release`);
 
+	// Get all workspace packages (including non-releasing)
+	const allWorkspacePackages = getAllWorkspacePackages();
+	core.info(`Found ${allWorkspacePackages.length} total package(s) in workspace`);
+
+	// Count changesets per package
+	const changesetCounts = countChangesetsPerPackage(changesetStatus.changesets);
+
+	// Build a map of package name -> validation result
+	const validationMap = new Map<string, PackagePublishValidation>();
+	if (publishValidations) {
+		for (const validation of publishValidations) {
+			validationMap.set(validation.name, validation);
+		}
+	}
+
+	// Build release info map
+	const releaseMap = new Map<string, (typeof changesetStatus.releases)[0]>();
+	for (const release of changesetStatus.releases) {
+		releaseMap.set(release.name, release);
+	}
+
 	const packageNotes: PackageReleaseNotes[] = [];
 
+	// Process each releasing package
 	for (const release of changesetStatus.releases) {
 		core.info(`Processing ${release.name}@${release.newVersion}`);
 
@@ -206,7 +232,9 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 			core.warning(`Could not find package directory for ${release.name}`);
 			packageNotes.push({
 				name: release.name,
+				oldVersion: release.oldVersion || "0.0.0",
 				version: release.newVersion,
+				type: release.type,
 				path: "",
 				hasChangelog: false,
 				notes: "",
@@ -222,7 +250,9 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 			core.warning(`No CHANGELOG.md found for ${release.name}`);
 			packageNotes.push({
 				name: release.name,
+				oldVersion: release.oldVersion || "0.0.0",
 				version: release.newVersion,
+				type: release.type,
 				path: packagePath,
 				hasChangelog: false,
 				notes: "",
@@ -242,26 +272,35 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 				notes = "";
 			}
 
-			// Check if notes are empty and package might be in a fixed group
+			// Check if notes are empty and package might be in a group
 			const hasNoNotes = !notes.trim();
-			const fixedSiblings = hasNoNotes ? findFixedGroupSiblings(release.name, changesetConfig) : null;
+			const group = findPackageGroup(release.name, changesetConfig);
 
-			if (hasNoNotes && fixedSiblings && fixedSiblings.length > 0) {
-				// This is a fixed package with no direct changes
-				const fixedNotes = generateFixedPackageNotes(release.name, fixedSiblings, changesetStatus.releases);
-				core.info(`✓ Generated fixed-version notes for ${release.name}@${release.newVersion}`);
+			if (hasNoNotes && group.type !== "none" && group.siblings.length > 0) {
+				// This is a group package with no direct changes
+				const groupNotes = generateGroupPackageNotes(
+					release.name,
+					group.type,
+					group.siblings,
+					changesetStatus.releases,
+				);
+				core.info(`✓ Generated ${group.type}-version notes for ${release.name}@${release.newVersion}`);
 				packageNotes.push({
 					name: release.name,
+					oldVersion: release.oldVersion || "0.0.0",
 					version: release.newVersion,
+					type: release.type,
 					path: packagePath,
 					hasChangelog: true,
-					notes: fixedNotes,
+					notes: groupNotes,
 				});
 			} else if (extractionError) {
 				core.warning(`Could not extract version ${release.newVersion} from ${release.name} CHANGELOG`);
 				packageNotes.push({
 					name: release.name,
+					oldVersion: release.oldVersion || "0.0.0",
 					version: release.newVersion,
+					type: release.type,
 					path: packagePath,
 					hasChangelog: true,
 					notes: "",
@@ -271,7 +310,9 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 				core.info(`✓ Extracted release notes for ${release.name}@${release.newVersion}`);
 				packageNotes.push({
 					name: release.name,
+					oldVersion: release.oldVersion || "0.0.0",
 					version: release.newVersion,
+					type: release.type,
 					path: packagePath,
 					hasChangelog: true,
 					notes,
@@ -283,7 +324,9 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 			core.warning(`Failed to read CHANGELOG for ${release.name}: ${errorMsg}`);
 			packageNotes.push({
 				name: release.name,
+				oldVersion: release.oldVersion || "0.0.0",
 				version: release.newVersion,
+				type: release.type,
 				path: packagePath,
 				hasChangelog: false,
 				notes: "",
@@ -294,35 +337,102 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 
 	core.endGroup();
 
-	// Create GitHub check run
-	const checkTitle = dryRun ? "🧪 Release Notes Preview (Dry Run)" : "Release Notes Preview";
-	const checkSummary =
-		packageNotes.length > 0
-			? `Preview of release notes for ${packageNotes.length} package(s)`
-			: "No packages to release";
+	// Build the enhanced summary
+	const checkTitle = dryRun ? "📋 Release Notes Preview (Dry Run)" : "📋 Release Notes Preview";
 
-	// Build check details using summaryWriter (markdown, not HTML)
-	const checkSections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
-		{ heading: "Release Notes Preview", content: "" },
+	// Build job summary sections
+	const jobSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
+		{ heading: checkTitle, content: "" },
 	];
 
+	// Generate "Packages Releasing" summary table
 	if (packageNotes.length > 0) {
-		for (const pkg of packageNotes) {
-			let content: string;
-			if (pkg.error) {
-				content = `⚠️ **Error**: ${pkg.error}`;
-			} else if (pkg.notes) {
-				content = pkg.notes;
-			} else {
-				content = "_No release notes available_";
-			}
-			checkSections.push({ heading: `${pkg.name} v${pkg.version}`, level: 3, content });
-		}
-	} else {
-		checkSections.push({ content: "_No packages to release_" });
+		const summaryRows = packageNotes.map((pkg) => {
+			const group = findPackageGroup(pkg.name, changesetConfig);
+			const validation = validationMap.get(pkg.name);
+			const changesetCount = changesetCounts.get(pkg.name) || 0;
+			const targetCount = validation?.targets.length || 0;
+			const notesStatus = pkg.error ? "⚠️" : pkg.notes ? "✅" : "⚠️";
+
+			return [
+				pkg.name,
+				pkg.oldVersion,
+				pkg.version,
+				`${getBumpTypeIcon(pkg.type)} ${pkg.type}`,
+				getGroupIcon(group.type),
+				targetCount.toString(),
+				changesetCount.toString(),
+				notesStatus,
+			];
+		});
+
+		const summaryTable = summaryWriter.table(
+			["Package", "Current", "Next", "Type", "Group", "Targets", "Changesets", "Notes"],
+			summaryRows,
+		);
+		jobSections.push({ heading: "Packages Releasing", level: 3, content: summaryTable });
 	}
 
-	const checkDetails = summaryWriter.build(checkSections);
+	// Generate "Packages Not Releasing" section
+	const releasingNames = new Set(packageNotes.map((p) => p.name));
+	const notReleasingPackages = allWorkspacePackages.filter((pkg) => !releasingNames.has(pkg.name));
+
+	if (notReleasingPackages.length > 0) {
+		const notReleasingRows = notReleasingPackages.map((pkg) => {
+			const skipReason = getSkipReason(pkg, false);
+			return [pkg.name, pkg.version, skipReason ? formatSkipReason(skipReason) : "—"];
+		});
+
+		const notReleasingTable = summaryWriter.table(["Package", "Version", "Reason"], notReleasingRows);
+		jobSections.push({ heading: "Packages Not Releasing", level: 3, content: notReleasingTable });
+	}
+
+	// Generate per-package sections with registry tables and release notes
+	if (packageNotes.length > 0) {
+		jobSections.push({ content: "---" });
+
+		for (const pkg of packageNotes) {
+			const validation = validationMap.get(pkg.name);
+			const firstRelease = isFirstRelease(pkg.oldVersion);
+
+			// Package header with version info
+			let versionInfo = `**${pkg.oldVersion} → ${pkg.version}** (${pkg.type})`;
+			if (firstRelease) {
+				versionInfo += " — 🆕 First Release";
+			}
+
+			jobSections.push({ heading: pkg.name, level: 3, content: versionInfo });
+
+			// Registry table (if validation data available)
+			if (validation && validation.targets.length > 0) {
+				const registryTable = generateRegistryTable(validation);
+				jobSections.push({ content: registryTable });
+			}
+
+			// Release notes
+			if (pkg.error) {
+				jobSections.push({ heading: "Release Notes", level: 4, content: `⚠️ **Error**: ${pkg.error}` });
+			} else if (pkg.notes) {
+				jobSections.push({ heading: "Release Notes", level: 4, content: pkg.notes });
+			} else {
+				jobSections.push({ heading: "Release Notes", level: 4, content: "_No release notes available_" });
+			}
+
+			jobSections.push({ content: "---" });
+		}
+	}
+
+	// Add legend
+	jobSections.push({
+		content:
+			"**Legend:** 🔴 major | 🟡 minor | 🟢 patch | 🔒 fixed | 🔗 linked | · standalone | 🆕 first release | ✅ ready | ⚠️ warning | — N/A",
+	});
+
+	const summaryContent = summaryWriter.build(jobSections);
+
+	// Create GitHub check run
+	const checkSummary =
+		packageNotes.length > 0 ? `${packageNotes.length} package(s) ready for release` : "No packages to release";
 
 	const { data: checkRun } = await github.rest.checks.create({
 		owner: context.repo.owner,
@@ -333,48 +443,14 @@ export async function generateReleaseNotesPreview(): Promise<ReleaseNotesPreview
 		conclusion: "success",
 		output: {
 			title: checkSummary,
-			summary: checkDetails,
+			summary: summaryContent,
 		},
 	});
 
 	core.info(`Created check run: ${checkRun.html_url}`);
 
-	// Write job summary using summaryWriter (markdown, not HTML)
-	const jobSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
-		{ heading: checkTitle, content: checkSummary },
-	];
-
-	if (packageNotes.length > 0) {
-		// Add summary table
-		const summaryTable = summaryWriter.table(
-			["Package", "Version", "Status"],
-			packageNotes.map((pkg) => [
-				pkg.name,
-				pkg.version,
-				pkg.error ? `⚠️ ${pkg.error}` : pkg.notes ? "✓ Notes available" : "⚠️ No notes",
-			]),
-		);
-		jobSections.push({ heading: "Summary", level: 3, content: summaryTable });
-
-		// Add full release notes
-		jobSections.push({ heading: "Release Notes", level: 3, content: "" });
-
-		for (const pkg of packageNotes) {
-			let content: string;
-			if (pkg.error) {
-				content = `⚠️ **Error**: ${pkg.error}`;
-			} else if (pkg.notes) {
-				content = pkg.notes;
-			} else {
-				content = "_No release notes available_";
-			}
-			jobSections.push({ heading: `${pkg.name} v${pkg.version}`, level: 4, content });
-		}
-	} else {
-		jobSections.push({ content: "_No packages to release_" });
-	}
-
-	await summaryWriter.write(summaryWriter.build(jobSections));
+	// Write job summary
+	await summaryWriter.write(summaryContent);
 
 	return {
 		packages: packageNotes,

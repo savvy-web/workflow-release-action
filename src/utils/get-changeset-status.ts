@@ -8,9 +8,16 @@ import * as exec from "@actions/exec";
  */
 export interface ChangesetStatusResult {
 	/** Packages with version changes */
-	releases: Array<{ name: string; newVersion: string; type: string }>;
-	/** Changeset summaries */
-	changesets: Array<{ summary: string }>;
+	releases: Array<{ name: string; oldVersion?: string; newVersion: string; type: string }>;
+	/** Changeset information */
+	changesets: Array<{
+		/** Changeset ID */
+		id: string;
+		/** Changeset summary */
+		summary: string;
+		/** Packages affected by this changeset */
+		releases: Array<{ name: string; type: string }>;
+	}>;
 }
 
 /**

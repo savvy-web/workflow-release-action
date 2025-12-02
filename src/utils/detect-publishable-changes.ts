@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
-import { getWorkspaceRoot, getWorkspaces } from "workspace-tools";
+import { findProjectRoot, getWorkspaces } from "workspace-tools";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
@@ -200,7 +200,7 @@ export async function detectPublishableChanges(
 
 	// Build a map of package name -> package info using workspace-tools
 	const cwd = process.cwd();
-	const workspaceRoot = getWorkspaceRoot(cwd);
+	const workspaceRoot = findProjectRoot(cwd);
 	const workspaces = workspaceRoot ? getWorkspaces(workspaceRoot) : [];
 
 	// Create lookup map: package name -> { path, packageJson }
