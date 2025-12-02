@@ -13,6 +13,7 @@ import { generatePublishSummary } from "./generate-publish-summary.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
 import { preValidateTarget } from "./pre-validate-target.js";
 import { setupRegistryAuth } from "./registry-auth.js";
+import { countChangesetsPerPackage } from "./release-summary-helpers.js";
 import { getRegistryDisplayName, resolveTargets } from "./resolve-targets.js";
 
 /**
@@ -244,8 +245,19 @@ export async function validatePublish(
 		v.targets.filter((t) => t.target.registry?.includes("pkg.github.com")).every((t) => t.canPublish),
 	);
 
-	// Generate summary markdown
-	const summary = generatePublishSummary(validations, dryRun);
+	// Build maps for enhanced summary
+	const bumpTypes = new Map<string, string>();
+	const changesetCounts = countChangesetsPerPackage(changesetStatus.changesets);
+
+	for (const release of changesetStatus.releases) {
+		bumpTypes.set(release.name, release.type);
+	}
+
+	// Generate summary markdown with enhanced options
+	const summary = generatePublishSummary(validations, dryRun, {
+		bumpTypes,
+		changesetCounts,
+	});
 
 	// Calculate totals
 	const totalTargets = validations.reduce((sum, v) => sum + v.targets.length, 0);

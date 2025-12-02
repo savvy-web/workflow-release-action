@@ -17,6 +17,17 @@ vi.mock("@actions/core");
 vi.mock("@actions/exec");
 vi.mock("node:fs");
 
+// Mock @actions/github for context.ref and context.repo
+vi.mock("@actions/github", () => ({
+	context: {
+		ref: "refs/heads/main",
+		repo: {
+			owner: "test-owner",
+			repo: "test-repo",
+		},
+	},
+}));
+
 // Mock findPackagePath to return expected paths
 vi.mock("../src/utils/find-package-path.js", () => ({
 	findPackagePath: vi.fn().mockImplementation((name: string) => {

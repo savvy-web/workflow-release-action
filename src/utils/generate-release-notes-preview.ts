@@ -21,6 +21,25 @@ import { getRegistryDisplayName } from "./resolve-targets.js";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
+ * Generate a GitHub link for a package path
+ *
+ * @param packagePath - Absolute path to the package
+ * @returns Markdown link to the package in GitHub
+ */
+function getPackageGitHubLink(packagePath: string, packageName: string): string {
+	if (!packagePath) return packageName;
+
+	const cwd = process.cwd();
+	const relativePath = packagePath.startsWith(cwd) ? packagePath.slice(cwd.length + 1) : packagePath;
+
+	// Use context.ref which could be refs/heads/branch-name or refs/pull/123/merge
+	const ref = context.ref.replace("refs/heads/", "").replace("refs/pull/", "pull/").replace("/merge", "");
+	const url = `https://github.com/${context.repo.owner}/${context.repo.repo}/tree/${ref}/${relativePath}`;
+
+	return `[${packageName}](${url})`;
+}
+
+/**
  * Package release notes
  */
 interface PackageReleaseNotes {
@@ -50,6 +69,8 @@ interface ReleaseNotesPreviewResult {
 	packages: PackageReleaseNotes[];
 	/** GitHub check run ID */
 	checkId: number;
+	/** GitHub check run URL */
+	checkUrl: string;
 }
 
 /**
@@ -355,7 +376,7 @@ export async function generateReleaseNotesPreview(
 			const notesStatus = pkg.error ? "⚠️" : pkg.notes ? "✅" : "⚠️";
 
 			return [
-				pkg.name,
+				getPackageGitHubLink(pkg.path, pkg.name),
 				pkg.oldVersion,
 				pkg.version,
 				`${getBumpTypeIcon(pkg.type)} ${pkg.type}`,
@@ -380,7 +401,7 @@ export async function generateReleaseNotesPreview(
 	if (notReleasingPackages.length > 0) {
 		const notReleasingRows = notReleasingPackages.map((pkg) => {
 			const skipReason = getSkipReason(pkg, false);
-			return [pkg.name, pkg.version, skipReason ? formatSkipReason(skipReason) : "🚫"];
+			return [getPackageGitHubLink(pkg.path, pkg.name), pkg.version, skipReason ? formatSkipReason(skipReason) : "🚫"];
 		});
 
 		const notReleasingTable = summaryWriter.table(["Package", "Version", "Reason"], notReleasingRows);
@@ -455,5 +476,6 @@ export async function generateReleaseNotesPreview(
 	return {
 		packages: packageNotes,
 		checkId: checkRun.id,
+		checkUrl: checkRun.html_url || "",
 	};
 }

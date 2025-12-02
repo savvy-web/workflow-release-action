@@ -58,6 +58,7 @@ describe("generate-release-notes-preview", () => {
 			writable: true,
 		});
 		Object.defineProperty(vi.mocked(context), "sha", { value: "abc123", writable: true });
+		Object.defineProperty(vi.mocked(context), "ref", { value: "refs/heads/main", writable: true });
 
 		// Default exec mock
 		vi.mocked(exec.exec).mockResolvedValue(0);

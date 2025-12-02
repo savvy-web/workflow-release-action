@@ -1,9 +1,33 @@
-import { describe, expect, it } from "vitest";
+import { context } from "@actions/github";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PackagePublishValidation, ResolvedTarget, TargetValidationResult } from "../src/types/publish-config.js";
 import type { PackagePublishResult } from "../src/utils/generate-publish-summary.js";
 import { generatePublishResultsSummary, generatePublishSummary } from "../src/utils/generate-publish-summary.js";
 
+// Mock @actions/github for context.ref
+vi.mock("@actions/github", () => ({
+	context: {
+		ref: "refs/heads/main",
+		repo: {
+			owner: "test-owner",
+			repo: "test-repo",
+		},
+	},
+}));
+
 describe("generate-publish-summary", () => {
+	beforeEach(() => {
+		// Reset context values
+		Object.defineProperty(vi.mocked(context), "ref", { value: "refs/heads/main", writable: true });
+		Object.defineProperty(vi.mocked(context), "repo", {
+			value: { owner: "test-owner", repo: "test-repo" },
+			writable: true,
+		});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
 	describe("generatePublishSummary", () => {
 		it("generates summary header with dry-run indicator", () => {
 			const validations: PackagePublishValidation[] = [];
@@ -21,7 +45,7 @@ describe("generate-publish-summary", () => {
 			expect(summary).not.toContain("(Dry Run)");
 		});
 
-		it("includes summary stats table", () => {
+		it("includes package summary table with columns", () => {
 			const target: ResolvedTarget = {
 				protocol: "npm",
 				registry: "https://registry.npmjs.org/",
@@ -58,9 +82,11 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			expect(summary).toContain("| Metric | Count |");
-			expect(summary).toContain("| Packages ready | 1/1 |");
-			expect(summary).toContain("| Targets ready | 1/1 |");
+			// New table format with enhanced columns
+			expect(summary).toContain("| Package | Version | Bump | Size | Status |");
+			expect(summary).toContain("@test/package");
+			expect(summary).toContain("1.0.0");
+			expect(summary).toContain("1/1 targets ready");
 		});
 
 		it("shows package status with checkmark for valid packages", () => {
@@ -215,7 +241,7 @@ describe("generate-publish-summary", () => {
 			expect(summary).toContain("jsr.io");
 		});
 
-		it("shows no targets message for packages without targets", () => {
+		it("shows packages without targets in summary table", () => {
 			const validations: PackagePublishValidation[] = [
 				{
 					name: "@test/private-package",
@@ -229,7 +255,11 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			expect(summary).toContain("_No publish targets configured_");
+			// Package appears in summary table even without targets
+			expect(summary).toContain("@test/private-package");
+			expect(summary).toContain("1.0.0");
+			// No details section for packages without targets
+			expect(summary).not.toContain("Target Details");
 		});
 
 		it("includes legend at the end", () => {
@@ -237,8 +267,528 @@ describe("generate-publish-summary", () => {
 			const summary = generatePublishSummary(validations, false);
 
 			expect(summary).toContain("**Legend:**");
-			expect(summary).toContain("\u{1F4E6} npm-compatible");
+			// Updated legend format
+			expect(summary).toContain("\u{1F534} major");
+			expect(summary).toContain("\u{1F7E1} minor");
+			expect(summary).toContain("\u{1F7E2} patch");
+			expect(summary).toContain("\u{1F4E6} npm");
 			expect(summary).toContain("\u{1F995} JSR");
+		});
+
+		it("shows bump type icons when options provided", () => {
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/major-pkg",
+					version: "2.0.0",
+					path: "/test/major",
+					targets: [],
+					allTargetsValid: true,
+					hasPublishableTargets: false,
+				},
+				{
+					name: "@test/minor-pkg",
+					version: "1.1.0",
+					path: "/test/minor",
+					targets: [],
+					allTargetsValid: true,
+					hasPublishableTargets: false,
+				},
+				{
+					name: "@test/patch-pkg",
+					version: "1.0.1",
+					path: "/test/patch",
+					targets: [],
+					allTargetsValid: true,
+					hasPublishableTargets: false,
+				},
+			];
+
+			const bumpTypes = new Map([
+				["@test/major-pkg", "major"],
+				["@test/minor-pkg", "minor"],
+				["@test/patch-pkg", "patch"],
+			]);
+
+			const summary = generatePublishSummary(validations, false, { bumpTypes });
+
+			expect(summary).toContain("\u{1F534} major"); // 🔴
+			expect(summary).toContain("\u{1F7E1} minor"); // 🟡
+			expect(summary).toContain("\u{1F7E2} patch"); // 🟢
+		});
+
+		it("shows changeset counts in version column", () => {
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/package",
+					version: "1.1.0",
+					path: "/test",
+					targets: [],
+					allTargetsValid: true,
+					hasPublishableTargets: false,
+				},
+			];
+
+			const changesetCounts = new Map([["@test/package", 3]]);
+
+			const summary = generatePublishSummary(validations, false, { changesetCounts });
+
+			expect(summary).toContain("1.1.0 (3)");
+		});
+
+		it("shows package sizes from stats", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const targetResult: TargetValidationResult = {
+				target,
+				canPublish: true,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: true,
+				dryRunOutput: "",
+				dryRunError: "",
+				versionConflict: false,
+				provenanceReady: true,
+				message: "Ready to publish",
+				stats: {
+					packageSize: "1.5 kB",
+					unpackedSize: "4.2 kB",
+					totalFiles: 5,
+				},
+			};
+
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					path: "/test",
+					targets: [targetResult],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// Size appears in summary table
+			expect(summary).toContain("1.5 kB");
+			// Details section shows all stats
+			expect(summary).toContain("Packed: 1.5 kB");
+			expect(summary).toContain("Unpacked: 4.2 kB");
+			expect(summary).toContain("Files: 5");
+		});
+
+		it("shows aggregate totals when stats available", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const targetResult1: TargetValidationResult = {
+				target,
+				canPublish: true,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: true,
+				dryRunOutput: "",
+				dryRunError: "",
+				versionConflict: false,
+				provenanceReady: true,
+				message: "Ready",
+				stats: { packageSize: "1.0 kB", unpackedSize: "2.0 kB", totalFiles: 3 },
+			};
+
+			const targetResult2: TargetValidationResult = {
+				target,
+				canPublish: true,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: true,
+				dryRunOutput: "",
+				dryRunError: "",
+				versionConflict: false,
+				provenanceReady: true,
+				message: "Ready",
+				stats: { packageSize: "2.0 kB", unpackedSize: "4.0 kB", totalFiles: 7 },
+			};
+
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/pkg1",
+					version: "1.0.0",
+					path: "/test/pkg1",
+					targets: [targetResult1],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+				{
+					name: "@test/pkg2",
+					version: "2.0.0",
+					path: "/test/pkg2",
+					targets: [targetResult2],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// Aggregate totals (1.0 + 2.0 = 3.0 kB packed)
+			expect(summary).toContain("**Totals:**");
+			expect(summary).toContain("3.0 kB packed"); // 1024 + 2048 = 3072 bytes = 3.0 kB
+			expect(summary).toContain("10 files"); // 3 + 7 = 10
+		});
+
+		it("shows collapsible details for packages with targets", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const targetResult: TargetValidationResult = {
+				target,
+				canPublish: true,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: true,
+				dryRunOutput: "",
+				dryRunError: "",
+				versionConflict: false,
+				provenanceReady: true,
+				message: "Ready",
+			};
+
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					path: "/test",
+					targets: [targetResult],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// Collapsible section
+			expect(summary).toContain("<details>");
+			expect(summary).toContain("<summary>");
+			expect(summary).toContain("Target Details");
+			expect(summary).toContain("</details>");
+		});
+
+		it("links package names to GitHub when path available", () => {
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					path: "/test/packages/my-pkg",
+					targets: [],
+					allTargetsValid: true,
+					hasPublishableTargets: false,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// Package name is linked to GitHub
+			expect(summary).toContain("[@test/package]");
+			expect(summary).toContain("github.com");
+			expect(summary).toContain("/tree/");
+		});
+
+		it("shows N/A for bump type when not provided", () => {
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					path: "/test",
+					targets: [],
+					allTargetsValid: true,
+					hasPublishableTargets: false,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// N/A icon for missing bump type
+			expect(summary).toContain("\u{1F6AB}"); // 🚫
+		});
+
+		it("formats large package sizes correctly (MB)", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const targetResult: TargetValidationResult = {
+				target,
+				canPublish: true,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: true,
+				dryRunOutput: "",
+				dryRunError: "",
+				versionConflict: false,
+				provenanceReady: true,
+				message: "Ready",
+				stats: {
+					packageSize: "2.5 MB",
+					unpackedSize: "10.0 MB",
+					totalFiles: 100,
+				},
+			};
+
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/large-pkg",
+					version: "1.0.0",
+					path: "/test",
+					targets: [targetResult],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			expect(summary).toContain("2.5 MB");
+			expect(summary).toContain("10.0 MB");
+		});
+
+		it("handles byte-level sizes", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const targetResult: TargetValidationResult = {
+				target,
+				canPublish: true,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: true,
+				dryRunOutput: "",
+				dryRunError: "",
+				versionConflict: false,
+				provenanceReady: true,
+				message: "Ready",
+				stats: {
+					packageSize: "500 B",
+					unpackedSize: "1000 B",
+					totalFiles: 2,
+				},
+			};
+
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/tiny-pkg",
+					version: "1.0.0",
+					path: "/test",
+					targets: [targetResult],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			expect(summary).toContain("500 B");
+		});
+
+		it("handles GB-level sizes", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const targetResult: TargetValidationResult = {
+				target,
+				canPublish: true,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: true,
+				dryRunOutput: "",
+				dryRunError: "",
+				versionConflict: false,
+				provenanceReady: true,
+				message: "Ready",
+				stats: {
+					packageSize: "1.5 GB",
+					unpackedSize: "3.0 GB",
+					totalFiles: 50000,
+				},
+			};
+
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/huge-pkg",
+					version: "1.0.0",
+					path: "/test",
+					targets: [targetResult],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			expect(summary).toContain("1.5 GB");
+			// Aggregate totals formatted as GB
+			expect(summary).toContain("GB packed");
+		});
+
+		it("handles unknown size formats gracefully", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const targetResult: TargetValidationResult = {
+				target,
+				canPublish: true,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: true,
+				dryRunOutput: "",
+				dryRunError: "",
+				versionConflict: false,
+				provenanceReady: true,
+				message: "Ready",
+				stats: {
+					packageSize: "unknown format",
+					totalFiles: 5,
+				},
+			};
+
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/weird-pkg",
+					version: "1.0.0",
+					path: "/test",
+					targets: [targetResult],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// Should not crash, just show the raw size
+			expect(summary).toContain("unknown format");
+			// Aggregate should only show file count since size parsing failed
+			expect(summary).toContain("5 files");
+		});
+
+		it("shows discovery errors in details section", () => {
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/broken-pkg",
+					version: "1.0.0",
+					path: "",
+					targets: [],
+					allTargetsValid: false,
+					hasPublishableTargets: false,
+					discoveryError: "Could not find package.json",
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// Discovery error appears in details
+			expect(summary).toContain("<details>");
+			expect(summary).toContain("Could not find package.json");
+			expect(summary).toContain("\u274C Error:");
+		});
+
+		it("shows no targets message in details for packages in details section", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const targetResult: TargetValidationResult = {
+				target,
+				canPublish: true,
+				directoryExists: true,
+				packageJsonValid: true,
+				dryRunPassed: true,
+				dryRunOutput: "",
+				dryRunError: "",
+				versionConflict: false,
+				provenanceReady: true,
+				message: "Ready",
+			};
+
+			// One package with targets, one with discoveryError (triggers details section)
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/with-targets",
+					version: "1.0.0",
+					path: "/test/pkg1",
+					targets: [targetResult],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+				{
+					name: "@test/with-error",
+					version: "1.0.0",
+					path: "",
+					targets: [],
+					allTargetsValid: false,
+					hasPublishableTargets: false,
+					discoveryError: "Package not found",
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// Both appear in details section
+			expect(summary).toContain("@test/with-targets");
+			expect(summary).toContain("Package not found");
 		});
 	});
 
@@ -316,7 +866,7 @@ describe("generate-publish-summary", () => {
 			expect(summary).toContain("\u274C Authentication failed");
 		});
 
-		it("shows dash for missing URLs", () => {
+		it("shows N/A icon for missing URLs", () => {
 			const target: ResolvedTarget = {
 				protocol: "npm",
 				registry: "https://custom.registry.com/",
@@ -342,8 +892,8 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishResultsSummary(results, false);
 
-			// Should show dashes for missing URLs
-			expect(summary).toContain("\u2014");
+			// Should show N/A icon for missing URLs
+			expect(summary).toContain("\u{1F6AB}");
 		});
 
 		it("shows checkmark for provenance without URL", () => {

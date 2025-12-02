@@ -633,6 +633,15 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 					});
 				}
 
+				// Add release notes preview link
+				if (releaseNotesResult.checkUrl) {
+					commentSections.push({
+						heading: "📋 Release Notes Preview",
+						level: 3,
+						content: `[View detailed release notes →](${releaseNotesResult.checkUrl})`,
+					});
+				}
+
 				// Add footer
 				commentSections.push({
 					content: `---\n\n<sub>Updated at ${new Date().toISOString()}</sub>`,
