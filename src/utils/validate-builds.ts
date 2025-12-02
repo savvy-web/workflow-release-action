@@ -44,7 +44,7 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
-	const packageManager = core.getInput("package-manager") || "pnpm";
+	const packageManager = core.getState("packageManager") || "pnpm";
 	const buildCommand = core.getInput("build-command") || "";
 	const dryRun = core.getBooleanInput("dry-run") || false;
 

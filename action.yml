@@ -33,12 +33,8 @@ inputs:
     description: Target branch for PR (usually main)
     required: false
     default: main
-  package-manager:
-    description: Package manager to use (npm, pnpm, yarn, bun)
-    required: false
-    default: npm
   version-command:
-    description: Custom version command (defaults to package-manager ci:version)
+    description: Custom version command (defaults to auto-detected package-manager ci:version)
     required: false
     default: ""
   pr-title-prefix:

@@ -30,9 +30,14 @@ describe("generate-release-notes-preview", () => {
 	beforeEach(() => {
 		setupTestEnvironment({ suppressOutput: true });
 
+		// Setup core.getState to return packageManager
+		vi.mocked(core.getState).mockImplementation((name: string) => {
+			if (name === "packageManager") return "pnpm";
+			return "";
+		});
+
 		vi.mocked(core.getInput).mockImplementation((name: string) => {
-			if (name === "token") return "test-token";
-			if (name === "package-manager") return "pnpm";
+			if (name === "target-branch") return "main";
 			return "";
 		});
 		vi.mocked(core.getBooleanInput).mockImplementation((name: string) => {
@@ -264,9 +269,8 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should use correct changeset command for yarn", async () => {
-		vi.mocked(core.getInput).mockImplementation((name: string) => {
-			if (name === "token") return "test-token";
-			if (name === "package-manager") return "yarn";
+		vi.mocked(core.getState).mockImplementation((name: string) => {
+			if (name === "packageManager") return "yarn";
 			return "";
 		});
 
@@ -283,9 +287,8 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should use correct changeset command for npm", async () => {
-		vi.mocked(core.getInput).mockImplementation((name: string) => {
-			if (name === "token") return "test-token";
-			if (name === "package-manager") return "npm";
+		vi.mocked(core.getState).mockImplementation((name: string) => {
+			if (name === "packageManager") return "npm";
 			return "";
 		});
 

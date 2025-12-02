@@ -344,7 +344,7 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	}
 	const releaseBranch = core.getInput("release-branch") || "changeset-release/main";
 	const targetBranch = core.getInput("target-branch") || "main";
-	const packageManager = core.getInput("package-manager") || "pnpm";
+	const packageManager = core.getState("packageManager") || "pnpm";
 	const versionCommand = core.getInput("version-command") || "";
 	const dryRun = core.getBooleanInput("dry-run") || false;
 

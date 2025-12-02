@@ -21,14 +21,16 @@ describe("update-release-branch", () => {
 	beforeEach(() => {
 		setupTestEnvironment({ suppressOutput: true });
 
-		// Setup core.getState to return token
-		vi.mocked(core.getState).mockReturnValue("test-token");
+		// Setup core.getState to return token and packageManager
+		vi.mocked(core.getState).mockImplementation((name: string) => {
+			if (name === "token") return "test-token";
+			if (name === "packageManager") return "pnpm";
+			return "";
+		});
 
 		vi.mocked(core.getInput).mockImplementation((name: string) => {
-			if (name === "token") return "test-token";
 			if (name === "release-branch") return "changeset-release/main";
 			if (name === "target-branch") return "main";
-			if (name === "package-manager") return "pnpm";
 			if (name === "version-command") return "";
 			return "";
 		});
@@ -209,9 +211,12 @@ describe("update-release-branch", () => {
 	});
 
 	it("should use npm command for npm package manager", async () => {
-		vi.mocked(core.getInput).mockImplementation((name: string) => {
+		vi.mocked(core.getState).mockImplementation((name: string) => {
 			if (name === "token") return "test-token";
-			if (name === "package-manager") return "npm";
+			if (name === "packageManager") return "npm";
+			return "";
+		});
+		vi.mocked(core.getInput).mockImplementation((name: string) => {
 			if (name === "version-command") return "";
 			return "";
 		});
@@ -231,9 +236,12 @@ describe("update-release-branch", () => {
 	});
 
 	it("should use yarn command for yarn package manager", async () => {
-		vi.mocked(core.getInput).mockImplementation((name: string) => {
+		vi.mocked(core.getState).mockImplementation((name: string) => {
 			if (name === "token") return "test-token";
-			if (name === "package-manager") return "yarn";
+			if (name === "packageManager") return "yarn";
+			return "";
+		});
+		vi.mocked(core.getInput).mockImplementation((name: string) => {
 			if (name === "version-command") return "";
 			return "";
 		});

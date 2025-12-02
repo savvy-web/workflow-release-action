@@ -199,7 +199,7 @@ export async function generateReleaseNotesPreview(
 	publishValidations?: PackagePublishValidation[],
 ): Promise<ReleaseNotesPreviewResult> {
 	// Read all inputs
-	const packageManager = core.getInput("package-manager") || "pnpm";
+	const packageManager = core.getState("packageManager") || "pnpm";
 	const targetBranch = core.getInput("target-branch") || "main";
 	const dryRun = core.getBooleanInput("dry-run") || false;
 	core.startGroup("Generating release notes preview");

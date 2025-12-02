@@ -17,12 +17,14 @@ describe("validate-builds", () => {
 	beforeEach(() => {
 		setupTestEnvironment({ suppressOutput: true });
 
-		// Setup core.getState to return token
-		vi.mocked(core.getState).mockReturnValue("test-token");
+		// Setup core.getState to return token and packageManager
+		vi.mocked(core.getState).mockImplementation((name: string) => {
+			if (name === "token") return "test-token";
+			if (name === "packageManager") return "pnpm";
+			return "";
+		});
 
 		vi.mocked(core.getInput).mockImplementation((name: string) => {
-			if (name === "token") return "test-token";
-			if (name === "package-manager") return "pnpm";
 			if (name === "build-command") return "";
 			return "";
 		});
@@ -81,8 +83,6 @@ describe("validate-builds", () => {
 
 	it("should use custom build command when provided", async () => {
 		vi.mocked(core.getInput).mockImplementation((name: string) => {
-			if (name === "token") return "test-token";
-			if (name === "package-manager") return "pnpm";
 			if (name === "build-command") return "turbo run build";
 			return "";
 		});
@@ -96,9 +96,9 @@ describe("validate-builds", () => {
 	it("should handle different package managers", async () => {
 		vi.mocked(exec.exec).mockResolvedValue(0);
 
-		vi.mocked(core.getInput).mockImplementation((name: string) => {
+		vi.mocked(core.getState).mockImplementation((name: string) => {
 			if (name === "token") return "test-token";
-			if (name === "package-manager") return "npm";
+			if (name === "packageManager") return "npm";
 			return "";
 		});
 		await validateBuilds();
@@ -136,9 +136,9 @@ describe("validate-builds", () => {
 	});
 
 	it("should use yarn command for yarn package manager", async () => {
-		vi.mocked(core.getInput).mockImplementation((name: string) => {
+		vi.mocked(core.getState).mockImplementation((name: string) => {
 			if (name === "token") return "test-token";
-			if (name === "package-manager") return "yarn";
+			if (name === "packageManager") return "yarn";
 			return "";
 		});
 		vi.mocked(exec.exec).mockResolvedValue(0);

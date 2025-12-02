@@ -82,8 +82,8 @@ async function run(): Promise<void> {
 			releaseBranch: core.getInput("release-branch") || "changeset-release/main",
 			targetBranch: core.getInput("target-branch") || "main",
 
-			// Package manager (detected by setup step)
-			packageManager: core.getInput("package-manager") || "pnpm",
+			// Package manager (auto-detected in pre.ts)
+			packageManager: core.getState("packageManager") || "pnpm",
 
 			// Workflow mode
 			dryRun: core.getBooleanInput("dry-run") || false,
