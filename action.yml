@@ -6,9 +6,27 @@ branding:
   color: blue
 
 inputs:
+  # GitHub App authentication (preferred method)
+  # Provide app-id and private-key to generate tokens automatically
+  app-id:
+    description: GitHub App ID for authentication
+    required: false
+  private-key:
+    description: GitHub App private key (PEM format)
+    required: false
+  skip-token-revoke:
+    description: Skip token revocation in post-action (tokens expire after 1 hour anyway)
+    required: false
+    default: "false"
+
+  # Legacy token input (for backwards compatibility)
+  # If provided, app-id and private-key are ignored
   token:
-    description: GitHub App token for authentication (from create-github-app-token action)
-    required: true
+    description: |
+      Pre-generated GitHub token (legacy, for backwards compatibility).
+      Prefer using app-id and private-key instead for automatic token management.
+    required: false
+
   release-branch:
     description: Release branch name
     required: false
@@ -61,6 +79,14 @@ inputs:
     default: ""
 
 outputs:
+  # Token outputs (when using app-id/private-key)
+  token:
+    description: Generated GitHub App installation token (for use in subsequent steps)
+  installation-id:
+    description: GitHub App installation ID
+  app-slug:
+    description: GitHub App slug (URL-friendly name)
+
   # Phase 1: Detection outputs
   has_changes:
     description: Whether publishable changes were detected
