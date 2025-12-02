@@ -534,7 +534,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		const releaseNotesResult = await generateReleaseNotesPreview(publishResult.validations);
 
-		// Complete the placeholder check
+		// Complete the placeholder check with full release notes content
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
@@ -542,8 +542,8 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			status: "completed",
 			conclusion: "success",
 			output: {
-				title: "Release Notes Preview Generated",
-				summary: `Generated release notes for ${releaseNotesResult.packages.length} package(s)`,
+				title: `${releaseNotesResult.packages.length} package(s) ready for release`,
+				summary: releaseNotesResult.summaryContent,
 			},
 		});
 
@@ -553,15 +553,39 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		logger.step(6, "Create Unified Validation Check");
 
 		const validationResults = [
-			{ name: checkNames[0], success: true, checkId: checkIds[0] },
-			{ name: checkNames[1], success: true, checkId: checkIds[1] },
-			{ name: checkNames[2], success: buildResult.success, checkId: checkIds[2] },
+			{
+				name: checkNames[0],
+				success: true,
+				checkId: checkIds[0],
+				outcome: `${issuesResult.linkedIssues.length} issue(s) linked`,
+			},
+			{
+				name: checkNames[1],
+				success: true,
+				checkId: checkIds[1],
+				outcome: inputs.anthropicApiKey ? "Description generated" : "Skipped",
+			},
+			{
+				name: checkNames[2],
+				success: buildResult.success,
+				checkId: checkIds[2],
+				outcome: buildResult.success ? "Build passed" : "Build failed",
+			},
 			{
 				name: checkNames[3],
 				success: buildResult.success && publishResult.success,
 				checkId: checkIds[3],
+				outcome:
+					publishResult.totalTargets === 0
+						? "No targets"
+						: `${publishResult.readyTargets}/${publishResult.totalTargets} target(s) ready`,
 			},
-			{ name: checkNames[4], success: true, checkId: checkIds[4] },
+			{
+				name: checkNames[4],
+				success: true,
+				checkId: checkIds[4],
+				outcome: `${releaseNotesResult.packages.length} package(s) ready`,
+			},
 		];
 
 		await createValidationCheck(validationResults, inputs.dryRun);
@@ -593,13 +617,10 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				const getCheckUrl = (checkId: number): string =>
 					`https://github.com/${context.repo.owner}/${context.repo.repo}/runs/${checkId}`;
 
-				// Build validation results table with linked check names
+				// Build validation results table with linked check names (status column leftmost with empty header)
 				const validationTable = summaryWriter.table(
-					["Check", "Status"],
-					validationResults.map((r) => [
-						`[${r.name}](${getCheckUrl(r.checkId)})`,
-						r.success ? "✅ Passed" : "❌ Failed",
-					]),
+					[" ", "Check", "Outcome"],
+					validationResults.map((r) => [r.success ? "✅" : "❌", `[${r.name}](${getCheckUrl(r.checkId)})`, r.outcome]),
 				);
 
 				// Build comment sections using summaryWriter
@@ -631,11 +652,11 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				}
 
 				// Add release notes preview link
-				if (releaseNotesResult.checkUrl) {
+				if (releaseNotesResult.packages.length > 0) {
 					commentSections.push({
 						heading: "📋 Release Notes Preview",
 						level: 3,
-						content: `[View detailed release notes →](${releaseNotesResult.checkUrl})`,
+						content: `[View detailed release notes →](${getCheckUrl(checkIds[4])})`,
 					});
 				}
 

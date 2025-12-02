@@ -82,8 +82,8 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			// New table format with enhanced columns including Changesets
-			expect(summary).toContain("| Package | Version | Bump | Size | Changesets | Status |");
+			// New table format with enhanced columns (status column leftmost with empty header)
+			expect(summary).toContain("|   | Package | Version | Bump | Size | Changesets |");
 			expect(summary).toContain("@test/package");
 			expect(summary).toContain("1.0.0");
 			expect(summary).toContain("1/1 targets ready");
@@ -229,8 +229,8 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			// Check table headers (Provenance has lock icon)
-			expect(summary).toContain("| Protocol | Registry | Directory | Status | \u{1F50F} Provenance |");
+			// Check table headers (status column leftmost with empty header, Provenance has lock icon)
+			expect(summary).toContain("|   | Protocol | Registry | Directory | \u{1F50F} Provenance |");
 
 			// Check npm target row
 			expect(summary).toContain("\u{1F4E6} npm");

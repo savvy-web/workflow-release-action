@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
-import { context, getOctokit } from "@actions/github";
+import { context } from "@actions/github";
 import type { PackagePublishValidation } from "../types/publish-config.js";
 import { findPackagePath } from "./find-package-path.js";
 import type { ChangesetStatusResult } from "./get-changeset-status.js";
@@ -64,13 +64,13 @@ interface PackageReleaseNotes {
 /**
  * Release notes preview result
  */
-interface ReleaseNotesPreviewResult {
+export interface ReleaseNotesPreviewResult {
 	/** Package release notes */
 	packages: PackageReleaseNotes[];
-	/** GitHub check run ID */
-	checkId: number;
-	/** GitHub check run URL */
-	checkUrl: string;
+	/** Summary markdown content for check run output */
+	summaryContent: string;
+	/** Check title for the output */
+	checkTitle: string;
 }
 
 /**
@@ -202,8 +202,6 @@ export async function generateReleaseNotesPreview(
 	const packageManager = core.getInput("package-manager") || "pnpm";
 	const targetBranch = core.getInput("target-branch") || "main";
 	const dryRun = core.getBooleanInput("dry-run") || false;
-	const token = core.getInput("token", { required: true });
-	const github = getOctokit(token);
 	core.startGroup("Generating release notes preview");
 
 	// Read changeset config to detect fixed/linked groups
@@ -451,31 +449,12 @@ export async function generateReleaseNotesPreview(
 
 	const summaryContent = summaryWriter.build(jobSections);
 
-	// Create GitHub check run
-	const checkSummary =
-		packageNotes.length > 0 ? `${packageNotes.length} package(s) ready for release` : "No packages to release";
-
-	const { data: checkRun } = await github.rest.checks.create({
-		owner: context.repo.owner,
-		repo: context.repo.repo,
-		name: checkTitle,
-		head_sha: context.sha,
-		status: "completed",
-		conclusion: "success",
-		output: {
-			title: checkSummary,
-			summary: summaryContent,
-		},
-	});
-
-	core.info(`Created check run: ${checkRun.html_url}`);
-
 	// Write job summary
 	await summaryWriter.write(summaryContent);
 
 	return {
 		packages: packageNotes,
-		checkId: checkRun.id,
-		checkUrl: checkRun.html_url || "",
+		summaryContent,
+		checkTitle,
 	};
 }

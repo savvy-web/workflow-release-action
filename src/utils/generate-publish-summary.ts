@@ -144,9 +144,9 @@ export function generatePublishSummary(
 	const totalTargets = validations.reduce((sum, v) => sum + v.targets.length, 0);
 	const readyTargets = validations.reduce((sum, v) => sum + v.targets.filter((t) => t.canPublish).length, 0);
 
-	// Package summary table with enhanced columns
-	sections.push("| Package | Version | Bump | Size | Changesets | Status |");
-	sections.push("|---------|---------|------|------|------------|--------|");
+	// Package summary table with enhanced columns (status column leftmost with empty header)
+	sections.push("|   | Package | Version | Bump | Size | Changesets |");
+	sections.push("|---|---------|---------|------|------|------------|");
 
 	// Aggregate stats
 	let totalPackedBytes = 0;
@@ -184,7 +184,7 @@ export function generatePublishSummary(
 		}
 
 		sections.push(
-			`| ${packageLink} | ${pkg.version} | ${bumpDisplay} | ${sizeDisplay} | ${notesDisplay} | ${status} |`,
+			`| ${status} | ${packageLink} | ${pkg.version} | ${bumpDisplay} | ${sizeDisplay} | ${notesDisplay} |`,
 		);
 	}
 
@@ -245,9 +245,9 @@ export function generatePublishSummary(
 				}
 			}
 
-			// Target table
-			sections.push("| Protocol | Registry | Directory | Status | \u{1F50F} Provenance |");
-			sections.push("|----------|----------|-----------|--------|---------------|");
+			// Target table (status column leftmost with empty header)
+			sections.push("|   | Protocol | Registry | Directory | \u{1F50F} Provenance |");
+			sections.push("|---|----------|----------|-----------|---------------|");
 
 			for (const result of pkg.targets) {
 				const { target } = result;
@@ -260,7 +260,7 @@ export function generatePublishSummary(
 				const provenance = target.provenance ? (result.provenanceReady ? "\u2705" : "\u26A0\uFE0F") : "\u{1F6AB}";
 
 				sections.push(
-					`| ${icon} ${target.protocol} | ${registry} | \`${dirName}\` | ${targetStatus} | ${provenance} |`,
+					`| ${targetStatus} | ${icon} ${target.protocol} | ${registry} | \`${dirName}\` | ${provenance} |`,
 				);
 			}
 

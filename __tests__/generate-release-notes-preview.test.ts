@@ -92,7 +92,8 @@ describe("generate-release-notes-preview", () => {
 		const result = await generateReleaseNotesPreview();
 
 		expect(result.packages).toEqual([]);
-		expect(result.checkId).toBe(12345);
+		expect(result.summaryContent).toBeDefined();
+		expect(result.checkTitle).toContain("Release Notes Preview");
 	});
 
 	it("should extract release notes from CHANGELOG", async () => {
@@ -196,13 +197,9 @@ describe("generate-release-notes-preview", () => {
 			return false;
 		});
 
-		await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview();
 
-		expect(mockOctokit.rest.checks.create).toHaveBeenCalledWith(
-			expect.objectContaining({
-				name: expect.stringContaining("Dry Run"),
-			}),
-		);
+		expect(result.checkTitle).toContain("Dry Run");
 	});
 
 	it("should handle version section not found in CHANGELOG", async () => {
