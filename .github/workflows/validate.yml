@@ -177,7 +177,7 @@ jobs:
           echo "Validating commit messages between origin/${{ github.base_ref }} and HEAD using @savvy-web/commitlint-config"
 
           set +e
-          pnpm exec commitlint --from=origin/${{ github.base_ref }} --to=HEAD --config commitlint.config.ts --verbose > commitlint-results.txt 2>&1
+          pnpm exec commitlint --from=origin/${{ github.base_ref }} --to=HEAD --config ./lib/configs/commitlint.config.ts --verbose > commitlint-results.txt 2>&1
           COMMITLINT_EXIT_CODE=$?
           set -e
 
