@@ -396,9 +396,10 @@ jobs:
     name: Claude Code Review
     needs: [validate]
     runs-on: ubuntu-latest
-    # Only run for human users or the bot (skip other bots like dependabot, renovate, etc.)
+    # Only run for human users, the bot, or copilot (skip other bots like dependabot, renovate, etc.)
     if: |
       github.event.pull_request.user.login == '${{ vars.APP_BOT_NAME }}' ||
+      github.event.pull_request.user.login == 'copilot[bot]' ||
       github.event.pull_request.user.type == 'User'
     env:
       CHECK_RUN_ID: ""
