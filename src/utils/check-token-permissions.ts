@@ -31,7 +31,6 @@ export interface TokenInfo {
  * This helps diagnose permission issues like:
  * - "installation not allowed to Create organization package"
  * - Missing packages:write permission
- * - Missing organization_packages:write permission
  *
  * @param token - GitHub token to check
  * @returns Promise resolving to token information
@@ -77,15 +76,14 @@ export async function checkTokenPermissions(token: string): Promise<TokenInfo> {
 			core.info("  • GitHub Apps use permissions, not OAuth scopes");
 			core.info("  • For publishing to GitHub Packages, the app needs:");
 			core.info("    - Repository permission: packages (write)");
-			core.info("    - For organization packages: may need org-level package permissions");
+			core.info("  • Organization packages require the app to have packages:write on the specific repository");
 			core.info("  • Configure permissions at: https://github.com/settings/apps");
 			core.info("");
 			core.info("⚠️  Common Issues:");
 			core.info('  • "installation not allowed to Create organization package"');
 			core.info("    → The GitHub App may not have packages:write permission");
-			core.info("    → Or it may not have permission to create org-level packages");
+			core.info("    → Ensure packages:write is enabled on the repository");
 			core.info("  • Ensure the app installation has been granted necessary permissions");
-			core.info("  • Repository-level packages should work with packages:write");
 		} else {
 			core.info("ℹ️  This is not a GitHub App token (PAT or other type)");
 		}
@@ -95,15 +93,7 @@ export async function checkTokenPermissions(token: string): Promise<TokenInfo> {
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		core.warning(`Failed to check token permissions: ${errorMessage}`);
-
-		// Only end group if it was started
-		// Since startGroup is inside try block, endGroup should also be
-		// But we handle it gracefully by checking if we're in a group
-		try {
-			core.endGroup();
-		} catch {
-			// Ignore if no group was started
-		}
+		core.endGroup();
 
 		return {
 			valid: false,
