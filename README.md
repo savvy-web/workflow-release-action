@@ -88,6 +88,20 @@ Your GitHub App must have these repository permissions:
 * **Contents**: Read & Write
 * **Pull Requests**: Read & Write
 * **Issues**: Read & Write
+* **Packages**: Read & Write _(Required for publishing to GitHub Packages)_
+
+### Token Permission Diagnostics
+
+The action automatically checks and logs token permissions in the pre-action phase to help diagnose permission issues. This is especially helpful when encountering errors like:
+
+* `"installation not allowed to Create organization package"` - The GitHub App needs the **Packages: Write** permission
+* Permission-related publishing failures
+
+The diagnostic logs include:
+
+* Token type (Bot for GitHub Apps, User for PATs)
+* App name and installation ID (for GitHub Apps)
+* Helpful guidance on configuring permissions
 
 ## Development
 
