@@ -87,7 +87,10 @@ export async function detectPublishableChanges(
 	packages: ChangesetPackage[];
 	checkId: number;
 }> {
-	const token = core.getInput("token", { required: true });
+	const token = core.getState("token");
+	if (!token) {
+		throw new Error("No token available from state - ensure pre.ts ran successfully");
+	}
 	const github = getOctokit(token);
 
 	// Create temp file for changeset status output

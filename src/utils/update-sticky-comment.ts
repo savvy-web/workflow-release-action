@@ -53,7 +53,10 @@ export async function updateStickyComment(
 	commentBody: string,
 	commentIdentifier: string,
 ): Promise<StickyCommentResult> {
-	const token = core.getInput("token", { required: true });
+	const token = core.getState("token");
+	if (!token) {
+		throw new Error("No token available from state - ensure pre.ts ran successfully");
+	}
 	const github = getOctokit(token);
 	core.startGroup(`Updating sticky comment on PR #${prNumber}`);
 

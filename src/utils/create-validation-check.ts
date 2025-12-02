@@ -34,7 +34,10 @@ export async function createValidationCheck(
 	validations: ValidationResult[],
 	dryRun: boolean,
 ): Promise<UnifiedValidationResult> {
-	const token = core.getInput("token", { required: true });
+	const token = core.getState("token");
+	if (!token) {
+		throw new Error("No token available from state - ensure pre.ts ran successfully");
+	}
 	const github = getOctokit(token);
 	core.startGroup("Creating unified validation check");
 

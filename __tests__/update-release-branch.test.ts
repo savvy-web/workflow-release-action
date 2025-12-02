@@ -21,6 +21,9 @@ describe("update-release-branch", () => {
 	beforeEach(() => {
 		setupTestEnvironment({ suppressOutput: true });
 
+		// Setup core.getState to return token
+		vi.mocked(core.getState).mockReturnValue("test-token");
+
 		vi.mocked(core.getInput).mockImplementation((name: string) => {
 			if (name === "token") return "test-token";
 			if (name === "release-branch") return "changeset-release/main";

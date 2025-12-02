@@ -84,7 +84,10 @@ function extractIssueReferences(message: string): number[] {
  */
 export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 	// Read all inputs
-	const token = core.getInput("token", { required: true });
+	const token = core.getState("token");
+	if (!token) {
+		throw new Error("No token available from state - ensure pre.ts ran successfully");
+	}
 	const releaseBranch = core.getInput("release-branch") || "changeset-release/main";
 	const targetBranch = core.getInput("target-branch") || "main";
 	const dryRun = core.getBooleanInput("dry-run") || false;

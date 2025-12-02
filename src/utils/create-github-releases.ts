@@ -188,7 +188,10 @@ export async function createGitHubReleases(
 	publishResults: PackagePublishResult[],
 	dryRun: boolean,
 ): Promise<CreateReleasesResult> {
-	const token = core.getInput("token", { required: true });
+	const token = core.getState("token");
+	if (!token) {
+		throw new Error("No token available from state - ensure pre.ts ran successfully");
+	}
 	const octokit = github.getOctokit(token);
 
 	const releases: ReleaseInfo[] = [];

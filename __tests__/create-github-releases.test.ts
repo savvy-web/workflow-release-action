@@ -11,6 +11,7 @@ vi.mock("@actions/core", () => ({
 	startGroup: vi.fn(),
 	endGroup: vi.fn(),
 	getInput: vi.fn().mockReturnValue("mock-token"),
+	getState: vi.fn().mockReturnValue("mock-token"),
 }));
 
 vi.mock("@actions/exec", () => ({

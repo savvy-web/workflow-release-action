@@ -15,6 +15,9 @@ describe("check-release-branch", () => {
 	beforeEach(() => {
 		setupTestEnvironment({ suppressOutput: true });
 
+		// Setup core.getState to return token
+		vi.mocked(core.getState).mockReturnValue("test-token");
+
 		// Mock core.summary
 		const mockSummary = {
 			addHeading: vi.fn().mockReturnThis(),

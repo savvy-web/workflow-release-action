@@ -66,8 +66,12 @@ export async function cleanupValidationChecks(
 		errors: [],
 	};
 
+	const token = core.getState("token");
+	if (!token) {
+		throw new Error("No token available from state - ensure pre.ts ran successfully");
+	}
+
 	for (const checkId of checkIds) {
-		const token = core.getInput("token", { required: true });
 		const github = getOctokit(token);
 
 		try {

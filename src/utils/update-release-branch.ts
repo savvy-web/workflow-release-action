@@ -338,7 +338,10 @@ async function execWithRetry(
  */
 export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> {
 	// Read all inputs
-	const token = core.getInput("token", { required: true });
+	const token = core.getState("token");
+	if (!token) {
+		throw new Error("No token available from state - ensure pre.ts ran successfully");
+	}
 	const releaseBranch = core.getInput("release-branch") || "changeset-release/main";
 	const targetBranch = core.getInput("target-branch") || "main";
 	const packageManager = core.getInput("package-manager") || "pnpm";

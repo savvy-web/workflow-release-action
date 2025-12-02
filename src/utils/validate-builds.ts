@@ -40,7 +40,10 @@ interface BuildValidationResult {
  */
 export async function validateBuilds(): Promise<BuildValidationResult> {
 	// Read all inputs
-	const token = core.getInput("token", { required: true });
+	const token = core.getState("token");
+	if (!token) {
+		throw new Error("No token available from state - ensure pre.ts ran successfully");
+	}
 	const packageManager = core.getInput("package-manager") || "pnpm";
 	const buildCommand = core.getInput("build-command") || "";
 	const dryRun = core.getBooleanInput("dry-run") || false;

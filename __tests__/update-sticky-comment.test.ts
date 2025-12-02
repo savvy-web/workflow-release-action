@@ -15,6 +15,9 @@ describe("update-sticky-comment", () => {
 	beforeEach(() => {
 		setupTestEnvironment({ suppressOutput: true });
 
+		// Setup core.getState to return token
+		vi.mocked(core.getState).mockReturnValue("test-token");
+
 		vi.mocked(core.getInput).mockImplementation((name: string) => {
 			if (name === "token") return "test-token";
 			return "";
@@ -103,6 +106,14 @@ New content.`;
 			expect.objectContaining({
 				comment_id: 300,
 			}),
+		);
+	});
+
+	it("should throw error when no token available in state", async () => {
+		vi.mocked(core.getState).mockReturnValue("");
+
+		await expect(updateStickyComment(123, "test body", "test-id")).rejects.toThrow(
+			"No token available from state - ensure pre.ts ran successfully",
 		);
 	});
 });

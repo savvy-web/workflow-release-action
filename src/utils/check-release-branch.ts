@@ -39,7 +39,10 @@ export async function checkReleaseBranch(
 	// Check if branch exists
 	let branchExists = false;
 
-	const token = core.getInput("token", { required: true });
+	const token = core.getState("token");
+	if (!token) {
+		throw new Error("No token available from state - ensure pre.ts ran successfully");
+	}
 	const github = getOctokit(token);
 
 	try {

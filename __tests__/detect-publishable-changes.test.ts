@@ -44,6 +44,7 @@ describe("detect-publishable-changes", () => {
 			if (name === "token") return "test-token";
 			return "";
 		});
+		vi.mocked(core.getState).mockReturnValue("test-token");
 
 		// Setup octokit mock
 		mockOctokit = createMockOctokit();
