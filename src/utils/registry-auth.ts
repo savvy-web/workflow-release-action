@@ -148,11 +148,11 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
  * @remarks
  * Authentication strategy:
  * - **npm public registry**: Uses OIDC trusted publishing (no token needed)
- * - **GitHub Packages**: Uses GitHub App token (from state or input)
+ * - **GitHub Packages**: Uses `github-token` input if provided, otherwise GitHub App token
  * - **JSR**: Uses OIDC (no token needed)
- * - **Custom registries**: Uses tokens from `registry-tokens` input, or GitHub App token if not specified
+ * - **Custom registries**: Uses tokens from `custom-registries` input, or GitHub App token if not specified
  *
- * The GitHub App token is set to GITHUB_TOKEN for GitHub Packages auth.
+ * The GitHub token is set to GITHUB_TOKEN for GitHub Packages auth.
  * No .npmrc entry is needed for npm/JSR since they use OIDC.
  *
  * Custom registries format (one per line):
@@ -163,16 +163,29 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
  * @returns Authentication setup result
  */
 export function setupRegistryAuth(targets: ResolvedTarget[]): AuthSetupResult {
-	// Get GitHub App token from state (set by pre.ts)
-	const githubToken = core.getState("token");
+	// Get tokens from state (set by pre.ts)
+	const appToken = core.getState("token");
+	const githubToken = core.getState("githubToken"); // Optional: workflow's GITHUB_TOKEN for packages:write
 
-	if (!githubToken) {
+	// Determine which token to use for GitHub Packages
+	// Prefer the explicit github-token input (has packages:write from workflow permissions)
+	// Fall back to GitHub App token if not provided
+	const packagesToken = githubToken || appToken;
+
+	if (!packagesToken) {
 		core.warning("No GitHub token available - GitHub Packages and custom registries may fail to authenticate");
 	} else {
-		// Set GITHUB_TOKEN for GitHub Packages and as default for custom registries
-		process.env.GITHUB_TOKEN = githubToken;
-		core.info("Using GitHub App token for GitHub Packages authentication");
+		// Set GITHUB_TOKEN for GitHub Packages
+		process.env.GITHUB_TOKEN = packagesToken;
+		if (githubToken) {
+			core.info("Using workflow GITHUB_TOKEN for GitHub Packages authentication (packages:write)");
+		} else {
+			core.info("Using GitHub App token for GitHub Packages authentication");
+		}
 	}
+
+	// Use appToken for custom registries (GitHub App token for API operations)
+	const customRegistryToken = appToken;
 
 	// Parse custom registries input
 	// Format: "https://registry.example.com/" (uses GitHub App token) or "https://registry.example.com/=TOKEN"
@@ -185,9 +198,9 @@ export function setupRegistryAuth(targets: ResolvedTarget[]): AuthSetupResult {
 			if (equalIndex === -1) {
 				// No "=" found - registry URL only, use GitHub App token
 				const registry = line.trim();
-				if (registry && githubToken) {
+				if (registry && customRegistryToken) {
 					const envVarName = registryToEnvName(registry);
-					process.env[envVarName] = githubToken;
+					process.env[envVarName] = customRegistryToken;
 					core.info(`Set ${envVarName} for custom registry: ${registry} (using GitHub App token)`);
 				}
 			} else {
@@ -201,9 +214,9 @@ export function setupRegistryAuth(targets: ResolvedTarget[]): AuthSetupResult {
 						// Explicit token provided
 						process.env[envVarName] = token;
 						core.info(`Set ${envVarName} for custom registry: ${registry}`);
-					} else if (githubToken) {
+					} else if (customRegistryToken) {
 						// No token after "=" - use GitHub App token
-						process.env[envVarName] = githubToken;
+						process.env[envVarName] = customRegistryToken;
 						core.info(`Set ${envVarName} for custom registry: ${registry} (using GitHub App token)`);
 					}
 				}

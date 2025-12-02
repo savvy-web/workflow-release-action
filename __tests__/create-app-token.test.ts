@@ -71,20 +71,18 @@ describe("create-app-token", () => {
 			// Verify token was masked
 			expect(core.setSecret).toHaveBeenCalledWith("ghs_installation_token");
 
-			// Verify permissions were requested
+			// Verify permissions were requested (only repo-level permissions, no org-level)
 			expect(mockAuth).toHaveBeenCalledWith(
 				expect.objectContaining({
 					type: "installation",
 					installationId: 12345,
-					permissions: expect.objectContaining({
+					permissions: {
 						contents: "write",
 						pull_requests: "write",
 						checks: "write",
 						issues: "write",
 						packages: "write",
-						organization_packages: "write",
-						members: "read",
-					}),
+					},
 				}),
 			);
 		});
@@ -246,7 +244,6 @@ describe("create-app-token", () => {
 					checks: "write",
 					issues: "write",
 					packages: "write",
-					members: "read",
 				},
 			});
 
@@ -265,8 +262,6 @@ describe("create-app-token", () => {
 
 			// Verify permissions were logged
 			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Granted permissions:"));
-			// Verify warning about missing organization_packages
-			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("organization_packages"));
 		});
 
 		it("handles auth error with helpful message for permission issues", async () => {
@@ -291,9 +286,7 @@ describe("create-app-token", () => {
 
 			// Verify helpful error messages were logged
 			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("Failed to create installation token"));
-			expect(core.error).toHaveBeenCalledWith(
-				expect.stringContaining("GitHub App doesn't have the required permissions"),
-			);
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("may not have the required permissions"));
 		});
 
 		it("handles auth error with 403 status", async () => {
@@ -316,10 +309,11 @@ describe("create-app-token", () => {
 				}),
 			).rejects.toThrow("403 Forbidden");
 
-			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("Required permissions:"));
+			// Should show required permissions for 403 errors
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("contents:write"));
 		});
 
-		it("handles auth error without permission hint", async () => {
+		it("handles auth error without permission hint for non-permission errors", async () => {
 			const mockAuth = vi.fn();
 			mockAuth.mockResolvedValueOnce({ token: "app-jwt" });
 			mockAuth.mockRejectedValueOnce(new Error("Network error"));
@@ -340,8 +334,8 @@ describe("create-app-token", () => {
 			).rejects.toThrow("Network error");
 
 			expect(core.error).toHaveBeenCalledWith("Failed to create installation token: Network error");
-			// Should NOT have the permissions hint
-			expect(core.error).not.toHaveBeenCalledWith(expect.stringContaining("Required permissions:"));
+			// Should NOT have the permissions hint for non-permission errors
+			expect(core.error).not.toHaveBeenCalledWith(expect.stringContaining("may not have the required permissions"));
 		});
 	});
 

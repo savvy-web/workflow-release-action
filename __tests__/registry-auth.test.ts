@@ -326,16 +326,33 @@ describe("registry-auth", () => {
 	});
 
 	describe("setupRegistryAuth", () => {
-		it("gets token from state", () => {
+		it("uses app token for GITHUB_TOKEN when no workflow token provided", () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
-				if (name === "token") return "state-token";
+				if (name === "token") return "app-token";
 				return "";
 			});
 
 			const targets: ResolvedTarget[] = [];
 			setupRegistryAuth(targets);
 
-			expect(process.env.GITHUB_TOKEN).toBe("state-token");
+			expect(process.env.GITHUB_TOKEN).toBe("app-token");
+			expect(core.info).toHaveBeenCalledWith("Using GitHub App token for GitHub Packages authentication");
+		});
+
+		it("prefers workflow GITHUB_TOKEN over app token for packages", () => {
+			vi.mocked(core.getState).mockImplementation((name: string) => {
+				if (name === "token") return "app-token";
+				if (name === "githubToken") return "workflow-token";
+				return "";
+			});
+
+			const targets: ResolvedTarget[] = [];
+			setupRegistryAuth(targets);
+
+			expect(process.env.GITHUB_TOKEN).toBe("workflow-token");
+			expect(core.info).toHaveBeenCalledWith(
+				"Using workflow GITHUB_TOKEN for GitHub Packages authentication (packages:write)",
+			);
 		});
 
 		it("warns when no token in state", () => {
@@ -351,7 +368,7 @@ describe("registry-auth", () => {
 
 		it("does not set NPM_TOKEN (npm uses OIDC)", () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
-				if (name === "token") return "github-token";
+				if (name === "token") return "app-token";
 				return "";
 			});
 
@@ -367,7 +384,7 @@ describe("registry-auth", () => {
 
 		it("does not set JSR_TOKEN (JSR uses OIDC)", () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
-				if (name === "token") return "github-token";
+				if (name === "token") return "app-token";
 				return "";
 			});
 
@@ -383,7 +400,7 @@ describe("registry-auth", () => {
 
 		it("parses custom-registries input", () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
-				if (name === "token") return "github-token";
+				if (name === "token") return "app-token";
 				return "";
 			});
 			vi.mocked(core.getInput).mockImplementation((name: string) => {
@@ -474,7 +491,7 @@ describe("registry-auth", () => {
 		it("returns configured registries", () => {
 			process.env.NPM_TOKEN = "npm-token";
 			vi.mocked(core.getState).mockImplementation((name: string) => {
-				if (name === "token") return "github-token";
+				if (name === "token") return "app-token";
 				return "";
 			});
 

@@ -13,6 +13,13 @@ inputs:
   private-key:
     description: GitHub App private key (PEM format)
     required: true
+  github-token:
+    description: |
+      GitHub token for GitHub Packages publishing (optional).
+      Use this when the GitHub App doesn't have packages:write permission.
+      Typically pass secrets.GITHUB_TOKEN with workflow permissions: packages: write.
+    required: false
+    default: ""
   skip-token-revoke:
     description: Skip token revocation in post-action (tokens expire after 1 hour anyway)
     required: false

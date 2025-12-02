@@ -43,26 +43,19 @@ interface InstallationAuth {
 }
 
 /**
- * Default permissions required for the release workflow
+ * Permissions requested for the GitHub App installation token
  *
  * @remarks
- * These permissions are needed for:
- * - contents:write - Push commits, create branches and tags
- * - pull_requests:write - Create and update release PRs
- * - checks:write - Create validation check runs
- * - issues:write - Add comments, close linked issues
- * - packages:write - Publish to GitHub Packages (repo-level)
- * - organization_packages:write - Publish to GitHub Packages (org-level)
- * - members:read - Read org membership for team notifications
+ * These are the permissions needed for core release workflow operations.
+ * Note: `packages:write` only covers repository-level packages. For organization
+ * packages, the workflow should pass `secrets.GITHUB_TOKEN` via `github-token` input.
  */
 const RELEASE_WORKFLOW_PERMISSIONS = {
-	contents: "write",
-	pull_requests: "write",
-	checks: "write",
-	issues: "write",
-	packages: "write",
-	organization_packages: "write",
-	members: "read",
+	contents: "write", // Push commits, create branches and tags
+	pull_requests: "write", // Create and update release PRs
+	checks: "write", // Create validation check runs
+	issues: "write", // Add comments, close linked issues
+	packages: "write", // Publish to GitHub Packages (repo-level only)
 } as const;
 
 /**
@@ -70,8 +63,15 @@ const RELEASE_WORKFLOW_PERMISSIONS = {
  *
  * @remarks
  * This generates a short-lived token (1 hour) that can be used to authenticate
- * as the GitHub App installation. The token has the permissions configured
+ * as the GitHub App installation. The token inherits all permissions configured
  * for the app installation on the repository.
+ *
+ * Required permissions for full release workflow functionality:
+ * - contents:write - Push commits, create branches and tags
+ * - pull_requests:write - Create and update release PRs
+ * - checks:write - Create validation check runs
+ * - issues:write - Add comments, close linked issues
+ * - packages:write - Publish to GitHub Packages (repo-level)
  *
  * @example
  * ```typescript
@@ -124,9 +124,8 @@ export async function createAppToken(options: CreateAppTokenOptions): Promise<Ap
 	const appSlug = installationResponse.data.app_slug;
 
 	core.debug(`Found installation ${installationId} for app ${appSlug}`);
-	core.debug(`Requesting permissions: ${JSON.stringify(RELEASE_WORKFLOW_PERMISSIONS)}`);
 
-	// Get an installation access token with specific permissions
+	// Get an installation access token with required permissions
 	let installationAuthentication: InstallationAuth;
 	try {
 		installationAuthentication = (await auth({
@@ -138,33 +137,23 @@ export async function createAppToken(options: CreateAppTokenOptions): Promise<Ap
 		const message = error instanceof Error ? error.message : String(error);
 		core.error(`Failed to create installation token: ${message}`);
 
-		// Check for common permission errors
+		// Provide helpful error message for permission issues
 		if (message.includes("Resource not accessible") || message.includes("403")) {
-			core.error("This may indicate the GitHub App doesn't have the required permissions configured.");
 			core.error(
-				"Required permissions: contents:write, pull_requests:write, checks:write, issues:write, packages:write, organization_packages:write, members:read",
+				"The GitHub App may not have the required permissions. " +
+					`Required: ${Object.entries(RELEASE_WORKFLOW_PERMISSIONS)
+						.map(([k, v]) => `${k}:${v}`)
+						.join(", ")}`,
 			);
 		}
 
 		throw error;
 	}
 
-	// Log granted permissions
+	// Log granted permissions for debugging
 	const grantedPermissions = installationAuthentication.permissions;
 	if (grantedPermissions) {
 		core.info(`Granted permissions: ${JSON.stringify(grantedPermissions)}`);
-
-		// Check for missing permissions
-		const requested = Object.keys(RELEASE_WORKFLOW_PERMISSIONS);
-		const granted = Object.keys(grantedPermissions);
-		const missing = requested.filter((p) => !granted.includes(p));
-
-		if (missing.length > 0) {
-			core.warning(`Some requested permissions were not granted: ${missing.join(", ")}`);
-			core.warning("The GitHub App may not have these permissions configured, or they may not be available.");
-		}
-	} else {
-		core.debug("No permissions object returned in authentication response");
 	}
 
 	core.info(`Created token for app "${appSlug}" (installation ${installationId})`);

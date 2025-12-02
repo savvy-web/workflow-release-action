@@ -24,6 +24,7 @@ async function run(): Promise<void> {
 		const appId = core.getInput("app-id", { required: true });
 		const privateKey = core.getInput("private-key", { required: true });
 		const skipTokenRevoke = core.getBooleanInput("skip-token-revoke");
+		const githubToken = core.getInput("github-token");
 
 		// Generate token from app credentials
 		core.info("Generating GitHub App installation token...");
@@ -41,6 +42,13 @@ async function run(): Promise<void> {
 		core.saveState("installationId", tokenResult.installationId.toString());
 		core.saveState("appSlug", tokenResult.appSlug);
 		core.saveState("skipTokenRevoke", skipTokenRevoke.toString());
+
+		// Save optional github-token for GitHub Packages (when app doesn't have packages:write)
+		if (githubToken) {
+			core.saveState("githubToken", githubToken);
+			core.setSecret(githubToken);
+			core.info("GitHub token provided for GitHub Packages authentication");
+		}
 
 		// Set outputs for use in subsequent workflow steps
 		core.setOutput("token", token);
