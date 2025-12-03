@@ -28,11 +28,16 @@ vi.mock("@actions/github", () => ({
 	getOctokit: vi.fn(),
 }));
 
+vi.mock("../src/utils/find-package-path.js", () => ({
+	findPackagePath: vi.fn(),
+}));
+
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import * as github from "@actions/github";
 import { createGitHubReleases } from "../src/utils/create-github-releases.js";
 import type { TagInfo } from "../src/utils/determine-tag-strategy.js";
+import { findPackagePath } from "../src/utils/find-package-path.js";
 import type { PackagePublishResult } from "../src/utils/generate-publish-summary.js";
 
 describe("create-github-releases", () => {
@@ -50,6 +55,8 @@ describe("create-github-releases", () => {
 		vi.mocked(github.getOctokit).mockReturnValue(mockOctokit as never);
 		vi.mocked(fs.existsSync).mockReturnValue(false);
 		vi.mocked(fs.readdirSync).mockReturnValue([]);
+		// Default: findPackagePath returns a mock path for any package
+		vi.mocked(findPackagePath).mockImplementation((name: string) => `/mock/packages/${name.replace(/^@[^/]+\//, "")}`);
 	});
 
 	afterEach(() => {
@@ -605,7 +612,10 @@ describe("create-github-releases", () => {
 
 			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
 				if (args?.includes("pack")) {
-					options?.listeners?.stdout?.(Buffer.from("org-pkg-a-1.0.0.tgz\n"));
+					const jsonOutput = JSON.stringify([
+						{ filename: "org-pkg-a-1.0.0.tgz", name: "@org/pkg-a", version: "1.0.0" },
+					]);
+					options?.listeners?.stdout?.(Buffer.from(jsonOutput));
 				}
 				return 0;
 			});
@@ -660,10 +670,15 @@ describe("create-github-releases", () => {
 			];
 
 			let packCalled = false;
-			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options) => {
-				if (cmd === "npm" && args?.includes("pack")) {
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				// Default package manager is pnpm, so check for dlx npm pack --json
+				if (args?.includes("pack")) {
 					packCalled = true;
-					options?.listeners?.stdout?.(Buffer.from("org-pkg-a-1.0.0.tgz\n"));
+					// npm pack --json returns array of results
+					const jsonOutput = JSON.stringify([
+						{ filename: "org-pkg-a-1.0.0.tgz", name: "@org/pkg-a", version: "1.0.0" },
+					]);
+					options?.listeners?.stdout?.(Buffer.from(jsonOutput));
 				}
 				return 0;
 			});
@@ -713,9 +728,9 @@ describe("create-github-releases", () => {
 				},
 			];
 
-			vi.mocked(exec.exec).mockImplementation(async (cmd, args) => {
-				if (cmd === "npm" && args?.includes("pack")) {
-					throw new Error("npm pack failed");
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args) => {
+				if (args?.includes("pack")) {
+					throw new Error("pack failed");
 				}
 				return 0;
 			});
@@ -740,6 +755,254 @@ describe("create-github-releases", () => {
 			expect(result.success).toBe(true);
 			expect(result.releases[0].assets).toHaveLength(0);
 			expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("Failed to create package tarball"));
+		});
+
+		it("uses pnpm dlx npm pack when package manager is pnpm", async () => {
+			vi.mocked(core.getState).mockImplementation((key: string) => {
+				if (key === "packageManager") return "pnpm";
+				return "mock-token";
+			});
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [{ target: {} as never, success: true }],
+				},
+			];
+
+			let packCmd = "";
+			let packArgs: string[] = [];
+			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options) => {
+				if (args?.includes("pack")) {
+					packCmd = cmd;
+					packArgs = args || [];
+					const jsonOutput = JSON.stringify([
+						{ filename: "org-pkg-a-1.0.0.tgz", name: "@org/pkg-a", version: "1.0.0" },
+					]);
+					options?.listeners?.stdout?.(Buffer.from(jsonOutput));
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				return true;
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue([]);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("tarball content"));
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
+				data: {
+					name: "org-pkg-a-1.0.0.tgz",
+					browser_download_url: "https://example.com/asset.tgz",
+					size: 1234,
+				},
+			});
+
+			await createGitHubReleases(tags, publishResults, false);
+
+			expect(packCmd).toBe("pnpm");
+			expect(packArgs).toEqual(["dlx", "npm", "pack", "--json"]);
+		});
+
+		it("uses yarn dlx npm pack when package manager is yarn", async () => {
+			vi.mocked(core.getState).mockImplementation((key: string) => {
+				if (key === "packageManager") return "yarn";
+				return "mock-token";
+			});
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [{ target: {} as never, success: true }],
+				},
+			];
+
+			let packCmd = "";
+			let packArgs: string[] = [];
+			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options) => {
+				if (args?.includes("pack")) {
+					packCmd = cmd;
+					packArgs = args || [];
+					const jsonOutput = JSON.stringify([
+						{ filename: "org-pkg-a-1.0.0.tgz", name: "@org/pkg-a", version: "1.0.0" },
+					]);
+					options?.listeners?.stdout?.(Buffer.from(jsonOutput));
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				return true;
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue([]);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("tarball content"));
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
+				data: {
+					name: "org-pkg-a-1.0.0.tgz",
+					browser_download_url: "https://example.com/asset.tgz",
+					size: 1234,
+				},
+			});
+
+			await createGitHubReleases(tags, publishResults, false);
+
+			expect(packCmd).toBe("yarn");
+			expect(packArgs).toEqual(["dlx", "npm", "pack", "--json"]);
+		});
+
+		it("uses bunx npm pack when package manager is bun", async () => {
+			vi.mocked(core.getState).mockImplementation((key: string) => {
+				if (key === "packageManager") return "bun";
+				return "mock-token";
+			});
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [{ target: {} as never, success: true }],
+				},
+			];
+
+			let packCmd = "";
+			let packArgs: string[] = [];
+			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options) => {
+				if (args?.includes("pack") || args?.includes("npm")) {
+					packCmd = cmd;
+					packArgs = args || [];
+					const jsonOutput = JSON.stringify([
+						{ filename: "org-pkg-a-1.0.0.tgz", name: "@org/pkg-a", version: "1.0.0" },
+					]);
+					options?.listeners?.stdout?.(Buffer.from(jsonOutput));
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				return true;
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue([]);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("tarball content"));
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
+				data: {
+					name: "org-pkg-a-1.0.0.tgz",
+					browser_download_url: "https://example.com/asset.tgz",
+					size: 1234,
+				},
+			});
+
+			await createGitHubReleases(tags, publishResults, false);
+
+			expect(packCmd).toBe("bunx");
+			expect(packArgs).toEqual(["npm", "pack", "--json"]);
+		});
+
+		it("uses npx npm pack when package manager is npm", async () => {
+			vi.mocked(core.getState).mockImplementation((key: string) => {
+				if (key === "packageManager") return "npm";
+				return "mock-token";
+			});
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [{ target: {} as never, success: true }],
+				},
+			];
+
+			let packCmd = "";
+			let packArgs: string[] = [];
+			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options) => {
+				if (args?.includes("pack")) {
+					packCmd = cmd;
+					packArgs = args || [];
+					const jsonOutput = JSON.stringify([
+						{ filename: "org-pkg-a-1.0.0.tgz", name: "@org/pkg-a", version: "1.0.0" },
+					]);
+					options?.listeners?.stdout?.(Buffer.from(jsonOutput));
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				return true;
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue([]);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("tarball content"));
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
+				data: {
+					name: "org-pkg-a-1.0.0.tgz",
+					browser_download_url: "https://example.com/asset.tgz",
+					size: 1234,
+				},
+			});
+
+			await createGitHubReleases(tags, publishResults, false);
+
+			expect(packCmd).toBe("npx");
+			expect(packArgs).toEqual(["npm", "pack", "--json"]);
 		});
 
 		it("handles asset upload failure gracefully", async () => {
@@ -779,6 +1042,46 @@ describe("create-github-releases", () => {
 			// Release should still succeed even if asset upload fails
 			expect(result.success).toBe(true);
 			expect(core.warning).toHaveBeenCalled();
+		});
+
+		it("skips artifact upload when package path not found", async () => {
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [{ target: { registry: "https://registry.npmjs.org/" } as never, success: true }],
+				},
+			];
+
+			// Mock findPackagePath to return null (package not found)
+			vi.mocked(findPackagePath).mockReturnValue(null);
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				return false;
+			});
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+
+			const result = await createGitHubReleases(tags, publishResults, false);
+
+			// Release should still succeed, but with no assets
+			expect(result.success).toBe(true);
+			expect(result.releases[0].assets).toHaveLength(0);
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find path for package @org/pkg-a"));
 		});
 	});
 });

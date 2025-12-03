@@ -101,6 +101,40 @@ function extractReleaseNotes(changelogPath: string, version: string): string | u
 }
 
 /**
+ * Get the pack command for the current package manager
+ *
+ * @returns Command and args for creating a package tarball
+ */
+function getPackCommand(): { cmd: string; args: string[] } {
+	const packageManager = core.getState("packageManager") || "pnpm";
+
+	// Use each package manager's dlx/npx to run npm pack for consistent behavior
+	// This ensures we use a compatible npm version, not whatever the user has installed
+	// --json flag provides structured output for reliable parsing
+	switch (packageManager) {
+		case "pnpm":
+			return { cmd: "pnpm", args: ["dlx", "npm", "pack", "--json"] };
+		case "yarn":
+			// yarn dlx is for yarn 2+, yarn 1.x uses npx
+			return { cmd: "yarn", args: ["dlx", "npm", "pack", "--json"] };
+		case "bun":
+			return { cmd: "bunx", args: ["npm", "pack", "--json"] };
+		default:
+			// npm uses npx
+			return { cmd: "npx", args: ["npm", "pack", "--json"] };
+	}
+}
+
+/**
+ * npm pack --json output structure
+ */
+interface NpmPackResult {
+	filename: string;
+	name: string;
+	version: string;
+}
+
+/**
  * Find package artifacts to upload
  *
  * @param packagePath - Path to the package directory
@@ -120,8 +154,9 @@ async function findPackageArtifacts(packagePath: string): Promise<string[]> {
 	// If no tgz found, try to create one
 	if (artifacts.length === 0) {
 		try {
+			const { cmd, args } = getPackCommand();
 			let output = "";
-			await exec.exec("npm", ["pack"], {
+			await exec.exec(cmd, args, {
 				cwd: packagePath,
 				listeners: {
 					stdout: (data: Buffer) => {
@@ -129,9 +164,14 @@ async function findPackageArtifacts(packagePath: string): Promise<string[]> {
 					},
 				},
 			});
-			const tgzName = output.trim().split("\n").pop();
-			if (tgzName) {
-				artifacts.push(path.join(packagePath, tgzName));
+
+			// Parse JSON output from npm pack --json
+			const packResults = JSON.parse(output.trim()) as NpmPackResult[];
+			for (const result of packResults) {
+				if (result.filename) {
+					artifacts.push(path.join(packagePath, result.filename));
+					core.debug(`npm pack created: ${result.filename} (${result.name}@${result.version})`);
+				}
 			}
 		} catch (error) {
 			core.debug(`Failed to create package tarball: ${error instanceof Error ? error.message : String(error)}`);
@@ -351,8 +391,12 @@ export async function createGitHubReleases(
 
 			// Upload artifacts for each package
 			for (const pkg of associatedPackages) {
-				const pkgPath = path.join(process.cwd(), "packages", pkg.name.replace(/^@[^/]+\//, ""));
-				const artifacts = await findPackageArtifacts(fs.existsSync(pkgPath) ? pkgPath : process.cwd());
+				const pkgPath = findPackagePath(pkg.name);
+				if (!pkgPath) {
+					core.warning(`Could not find path for package ${pkg.name}, skipping artifact upload`);
+					continue;
+				}
+				const artifacts = await findPackageArtifacts(pkgPath);
 
 				for (const artifactPath of artifacts) {
 					try {
