@@ -95,21 +95,26 @@ function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[
  * Get the publish command for a package manager
  *
  * @remarks
- * For publish, pnpm and bun have native publish commands that work directly,
- * while yarn requires its npm wrapper.
- * - npm: `npm publish`
- * - pnpm: `pnpm publish` (native)
- * - yarn: `yarn npm publish` (yarn's npm wrapper)
- * - bun: `bun publish` (native)
+ * We use `npm publish` via the package manager's dlx/npx command to avoid
+ * package manager-specific git checks. For example, pnpm has strict branch
+ * validation that fails on release branches like `changeset-release/main`.
+ *
+ * - npm: `npx npm publish`
+ * - pnpm: `pnpm dlx npm publish`
+ * - yarn: `yarn npm publish` (yarn has its own npm wrapper)
+ * - bun: `bunx npm publish`
  */
 function getPublishCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
 	switch (packageManager) {
+		case "pnpm":
+			return { cmd: "pnpm", baseArgs: ["dlx", "npm"] };
 		case "yarn":
 			// Yarn uses "yarn npm publish" for publishing to npm registries
 			return { cmd: "yarn", baseArgs: ["npm"] };
+		case "bun":
+			return { cmd: "bunx", baseArgs: ["npm"] };
 		default:
-			// pnpm and bun have native publish commands
-			return { cmd: packageManager, baseArgs: [] };
+			return { cmd: "npx", baseArgs: ["npm"] };
 	}
 }
 
