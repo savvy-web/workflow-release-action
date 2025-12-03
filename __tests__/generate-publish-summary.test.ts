@@ -87,11 +87,10 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			// New table format with enhanced columns (status column leftmost with empty header)
-			expect(summary).toContain("|   | Package | Version | Bump | Size | Changesets |");
+			// New table format with Current/Next columns (status column leftmost with empty header)
+			expect(summary).toContain("|   | Package | Current | Next | Bump | Changesets |");
 			expect(summary).toContain("@test/package");
 			expect(summary).toContain("1.0.0");
-			expect(summary).toContain("1/1 targets ready");
 		});
 
 		it("shows package status with checkmark for valid packages", () => {
@@ -234,16 +233,15 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			// Check table headers (status column leftmost with empty header, Provenance has lock icon)
-			expect(summary).toContain("|   | Protocol | Registry | Directory | \u{1F50F} Provenance |");
+			// Check table headers (new format with per-target stats)
+			expect(summary).toContain("|   | Registry | Directory | Packed | Unpacked | Files | Access | Provenance |");
 
-			// Check npm target row
+			// Check npm target row (protocol icon before registry name)
 			expect(summary).toContain("\u{1F4E6} npm");
 			expect(summary).toContain("`dist/npm`"); // directory name shows last 2 path segments
 
 			// Check jsr target row
-			expect(summary).toContain("\u{1F995} jsr");
-			expect(summary).toContain("jsr.io");
+			expect(summary).toContain("\u{1F995} jsr.io");
 		});
 
 		it("shows packages without targets in summary table", () => {
@@ -267,17 +265,19 @@ describe("generate-publish-summary", () => {
 			expect(summary).not.toContain("<details>");
 		});
 
-		it("includes legend at the end", () => {
+		it("includes legend in summary table", () => {
 			const validations: PackagePublishValidation[] = [];
 			const summary = generatePublishSummary(validations, false);
 
 			expect(summary).toContain("**Legend:**");
-			// Updated legend format
+			// Summary table legend includes status icons and bump types
+			expect(summary).toContain("\u2705 Ready");
+			expect(summary).toContain("\u23ED\uFE0F Skipped");
+			expect(summary).toContain("\u26A0\uFE0F Warning");
+			expect(summary).toContain("\u274C Failed");
 			expect(summary).toContain("\u{1F534} major");
 			expect(summary).toContain("\u{1F7E1} minor");
 			expect(summary).toContain("\u{1F7E2} patch");
-			expect(summary).toContain("\u{1F4E6} npm");
-			expect(summary).toContain("\u{1F995} JSR");
 		});
 
 		it("shows bump type icons when options provided", () => {
@@ -321,7 +321,7 @@ describe("generate-publish-summary", () => {
 			expect(summary).toContain("\u{1F7E2} patch"); // 🟢
 		});
 
-		it("shows changeset counts in notes column", () => {
+		it("shows changeset counts in column", () => {
 			const validations: PackagePublishValidation[] = [
 				{
 					name: "@test/package",
@@ -337,11 +337,11 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false, { changesetCounts });
 
-			// Changeset count now appears in Notes column
-			expect(summary).toContain("3 changesets");
+			// Changeset count now appears as just the number
+			expect(summary).toContain("| 3 |");
 		});
 
-		it("shows package sizes from stats", () => {
+		it("shows package sizes from stats in target table", () => {
 			const target: ResolvedTarget = {
 				protocol: "npm",
 				registry: "https://registry.npmjs.org/",
@@ -383,12 +383,10 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			// Size appears in summary table
+			// Sizes now appear in target table columns
 			expect(summary).toContain("1.5 kB");
-			// Details section shows all stats
-			expect(summary).toContain("Packed: 1.5 kB");
-			expect(summary).toContain("Unpacked: 4.2 kB");
-			expect(summary).toContain("Files: 5");
+			expect(summary).toContain("4.2 kB");
+			expect(summary).toContain("| 5 |");
 		});
 
 		it("shows aggregate totals when stats available", () => {
@@ -564,7 +562,7 @@ describe("generate-publish-summary", () => {
 			expect(summary).toContain("/tree/");
 		});
 
-		it("shows N/A for bump type when not provided", () => {
+		it("shows em-dash for bump type when not provided", () => {
 			const validations: PackagePublishValidation[] = [
 				{
 					name: "@test/package",
@@ -578,8 +576,144 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishSummary(validations, false);
 
-			// N/A icon for missing bump type
-			expect(summary).toContain("\u{1F6AB}"); // 🚫
+			// Em-dash for missing bump type
+			expect(summary).toContain("\u2014"); // —
+		});
+
+		it("shows skipped status when all targets already published", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					path: "/test",
+					targets: [
+						{
+							target,
+							canPublish: true,
+							directoryExists: true,
+							packageJsonValid: true,
+							dryRunPassed: true,
+							dryRunOutput: "",
+							dryRunError: "",
+							versionConflict: true, // Already published
+							existingVersion: "1.0.0",
+							provenanceReady: true,
+							message: "Already published",
+						},
+					],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// Package should show skipped icon in summary table
+			expect(summary).toContain("\u23ED\uFE0F | [@test/package]");
+			// Details section shows skipped icon
+			expect(summary).toContain("\u23ED\uFE0F @test/package@1.0.0");
+			// Issues list shows informational message
+			expect(summary).toContain("\u2139\uFE0F **npm**: v1.0.0 already published");
+		});
+
+		it("shows warning status when mix of ready and skipped targets", () => {
+			const npmTarget: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist/npm",
+				access: "public",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const ghTarget: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://npm.pkg.github.com/",
+				directory: "/test/dist/npm",
+				access: "restricted",
+				provenance: true,
+				tag: "latest",
+				tokenEnv: "GITHUB_TOKEN",
+			};
+
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					path: "/test",
+					targets: [
+						{
+							target: npmTarget,
+							canPublish: true,
+							directoryExists: true,
+							packageJsonValid: true,
+							dryRunPassed: true,
+							dryRunOutput: "",
+							dryRunError: "",
+							versionConflict: false, // Ready to publish
+							provenanceReady: true,
+							message: "Ready",
+						},
+						{
+							target: ghTarget,
+							canPublish: true,
+							directoryExists: true,
+							packageJsonValid: true,
+							dryRunPassed: true,
+							dryRunOutput: "",
+							dryRunError: "",
+							versionConflict: true, // Already published
+							existingVersion: "1.0.0",
+							provenanceReady: true,
+							message: "Already published",
+						},
+					],
+					allTargetsValid: true,
+					hasPublishableTargets: true,
+				},
+			];
+
+			const summary = generatePublishSummary(validations, false);
+
+			// Package should show warning icon in summary table
+			expect(summary).toContain("\u26A0\uFE0F | [@test/package]");
+			// Details section shows warning icon and is expanded
+			expect(summary).toContain("<details open>");
+			expect(summary).toContain("\u26A0\uFE0F @test/package@1.0.0");
+			// Issues list only shows skipped target, not ready one
+			expect(summary).toContain("\u2139\uFE0F **GitHub Packages**: v1.0.0 already published");
+			expect(summary).not.toContain("npm**: Ready");
+		});
+
+		it("shows current and next versions from options", () => {
+			const validations: PackagePublishValidation[] = [
+				{
+					name: "@test/package",
+					version: "2.0.0", // Next version
+					path: "/test",
+					targets: [],
+					allTargetsValid: true,
+					hasPublishableTargets: false,
+				},
+			];
+
+			const currentVersions = new Map([["@test/package", "1.5.0"]]);
+
+			const summary = generatePublishSummary(validations, false, { currentVersions });
+
+			// Should show both current and next versions
+			expect(summary).toContain("| 1.5.0 | 2.0.0 |");
 		});
 
 		it("formats large package sizes correctly (MB)", () => {
@@ -1338,8 +1472,8 @@ describe("generate-publish-summary", () => {
 
 			const summary = generatePublishResultsSummary(results, false);
 
-			// Should show skipped (identical) status
-			expect(summary).toContain("\u2705 Skipped (identical)");
+			// Should show skipped (identical) status with skip icon (not check)
+			expect(summary).toContain("\u23ED\uFE0F Skipped (identical)");
 			expect(summary).not.toContain("\u2705 Published");
 		});
 

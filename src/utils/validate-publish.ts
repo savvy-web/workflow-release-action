@@ -114,6 +114,9 @@ export async function validatePublish(
 	core.info("Setting up registry authentication");
 	const authResult = await setupRegistryAuth(allTargets);
 
+	// Track unreachable registries to skip them during validation
+	const unreachableRegistrySet = new Set(authResult.unreachableRegistries.map((r) => r.registry));
+
 	if (!authResult.success) {
 		if (authResult.missingTokens.length > 0) {
 			core.warning("Some registry tokens are missing:");
@@ -122,7 +125,7 @@ export async function validatePublish(
 			}
 		}
 		if (authResult.unreachableRegistries.length > 0) {
-			core.error("Some registries are unreachable:");
+			core.error("Some registries are unreachable (will skip validation):");
 			for (const unreachable of authResult.unreachableRegistries) {
 				core.error(`  - ${unreachable.registry}: ${unreachable.error}`);
 			}
@@ -169,6 +172,26 @@ export async function validatePublish(
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
 			core.startGroup(`Target: ${target.protocol} \u2192 ${registryName}`);
+
+			// Skip targets with unreachable registries - no point in dry-run
+			if (target.registry && unreachableRegistrySet.has(target.registry)) {
+				const unreachableInfo = authResult.unreachableRegistries.find((r) => r.registry === target.registry);
+				core.warning(`Skipping ${registryName} - registry unreachable: ${unreachableInfo?.error || "unknown error"}`);
+				targetResults.push({
+					target,
+					canPublish: false,
+					directoryExists: true,
+					packageJsonValid: true,
+					dryRunPassed: false,
+					dryRunOutput: "",
+					dryRunError: `Registry unreachable: ${unreachableInfo?.error || "unknown error"}`,
+					versionConflict: false,
+					provenanceReady: false,
+					message: `Registry unreachable: ${unreachableInfo?.error || "unknown error"}`,
+				});
+				core.endGroup();
+				continue;
+			}
 
 			// Pre-validate the target
 			const preValidation = await preValidateTarget(target, release.name, release.newVersion);

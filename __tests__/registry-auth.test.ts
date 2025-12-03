@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
+import * as exec from "@actions/exec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedTarget } from "../src/types/publish-config.js";
 import {
@@ -13,6 +14,7 @@ import { cleanupTestEnvironment, setupTestEnvironment } from "./utils/github-moc
 
 // Mock modules
 vi.mock("@actions/core");
+vi.mock("@actions/exec");
 vi.mock("node:fs");
 
 describe("registry-auth", () => {
@@ -331,14 +333,9 @@ describe("registry-auth", () => {
 	});
 
 	describe("validateRegistriesReachable", () => {
-		const originalFetch = globalThis.fetch;
-
-		afterEach(() => {
-			globalThis.fetch = originalFetch;
-		});
-
 		it("returns empty array when all registries are reachable", async () => {
-			globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: "OK" });
+			// npm ping returns exit code 0 for reachable registries
+			vi.mocked(exec.exec).mockResolvedValue(0);
 
 			const targets: ResolvedTarget[] = [
 				{
@@ -356,8 +353,15 @@ describe("registry-auth", () => {
 			expect(result).toHaveLength(0);
 		});
 
-		it("returns unreachable registries on fetch error", async () => {
-			globalThis.fetch = vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND"));
+		it("returns unreachable registries when npm ping fails", async () => {
+			// npm ping returns non-zero exit code for unreachable registries
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				// Simulate stderr output with ENOTFOUND
+				if (options?.listeners?.stderr) {
+					options.listeners.stderr(Buffer.from("npm ERR! getaddrinfo ENOTFOUND invalid.registry.com"));
+				}
+				return 1;
+			});
 
 			const targets: ResolvedTarget[] = [
 				{
@@ -374,18 +378,21 @@ describe("registry-auth", () => {
 			const result = await validateRegistriesReachable(targets);
 			expect(result).toHaveLength(1);
 			expect(result[0].registry).toBe("https://invalid.registry.com/");
-			expect(result[0].error).toContain("ENOTFOUND");
+			expect(result[0].error).toContain("hostname not found");
 		});
 
-		it("returns unreachable on timeout", async () => {
-			const abortError = new Error("Aborted");
-			abortError.name = "AbortError";
-			globalThis.fetch = vi.fn().mockRejectedValue(abortError);
+		it("returns unreachable on connection refused", async () => {
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stderr) {
+					options.listeners.stderr(Buffer.from("npm ERR! ECONNREFUSED"));
+				}
+				return 1;
+			});
 
 			const targets: ResolvedTarget[] = [
 				{
 					protocol: "npm",
-					registry: "https://slow.registry.com/",
+					registry: "https://down.registry.com/",
 					directory: "/test",
 					access: "public",
 					provenance: false,
@@ -396,30 +403,11 @@ describe("registry-auth", () => {
 
 			const result = await validateRegistriesReachable(targets);
 			expect(result).toHaveLength(1);
-			expect(result[0].error).toContain("Timeout");
-		});
-
-		it("accepts 401/403 responses as reachable (auth required)", async () => {
-			globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 401, statusText: "Unauthorized" });
-
-			const targets: ResolvedTarget[] = [
-				{
-					protocol: "npm",
-					registry: "https://auth-required.registry.com/",
-					directory: "/test",
-					access: "public",
-					provenance: false,
-					tag: "latest",
-					tokenEnv: "CUSTOM_TOKEN",
-				},
-			];
-
-			const result = await validateRegistriesReachable(targets);
-			expect(result).toHaveLength(0);
+			expect(result[0].error).toContain("Connection refused");
 		});
 
 		it("skips npm public registry", async () => {
-			globalThis.fetch = vi.fn();
+			vi.mocked(exec.exec).mockResolvedValue(0);
 
 			const targets: ResolvedTarget[] = [
 				{
@@ -434,11 +422,12 @@ describe("registry-auth", () => {
 			];
 
 			await validateRegistriesReachable(targets);
-			expect(globalThis.fetch).not.toHaveBeenCalled();
+			// exec should not be called for npm public registry (OIDC)
+			expect(exec.exec).not.toHaveBeenCalled();
 		});
 
 		it("skips GitHub Packages registry", async () => {
-			globalThis.fetch = vi.fn();
+			vi.mocked(exec.exec).mockResolvedValue(0);
 
 			const targets: ResolvedTarget[] = [
 				{
@@ -453,11 +442,12 @@ describe("registry-auth", () => {
 			];
 
 			await validateRegistriesReachable(targets);
-			expect(globalThis.fetch).not.toHaveBeenCalled();
+			// exec should not be called for GitHub Packages (well-known registry)
+			expect(exec.exec).not.toHaveBeenCalled();
 		});
 
 		it("skips JSR targets", async () => {
-			globalThis.fetch = vi.fn();
+			vi.mocked(exec.exec).mockResolvedValue(0);
 
 			const targets: ResolvedTarget[] = [
 				{
@@ -472,11 +462,12 @@ describe("registry-auth", () => {
 			];
 
 			await validateRegistriesReachable(targets);
-			expect(globalThis.fetch).not.toHaveBeenCalled();
+			// exec should not be called for JSR (non-npm protocol)
+			expect(exec.exec).not.toHaveBeenCalled();
 		});
 
 		it("deduplicates registry checks", async () => {
-			globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: "OK" });
+			vi.mocked(exec.exec).mockResolvedValue(0);
 
 			const targets: ResolvedTarget[] = [
 				{
@@ -500,20 +491,159 @@ describe("registry-auth", () => {
 			];
 
 			await validateRegistriesReachable(targets);
-			expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+			// Should only call exec once for the same registry
+			expect(exec.exec).toHaveBeenCalledTimes(1);
+		});
+
+		it("handles npm ping returning JSON error", async () => {
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(
+						Buffer.from(JSON.stringify({ error: { summary: "Custom error from npm", code: "E503" } })),
+					);
+				}
+				return 1;
+			});
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://error.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			const result = await validateRegistriesReachable(targets);
+			expect(result).toHaveLength(1);
+			expect(result[0].error).toBe("Custom error from npm");
+		});
+
+		it("handles 503 service unavailable", async () => {
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stderr) {
+					options.listeners.stderr(Buffer.from("503 Service Unavailable"));
+				}
+				return 1;
+			});
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://down.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			const result = await validateRegistriesReachable(targets);
+			expect(result).toHaveLength(1);
+			expect(result[0].error).toContain("Service unavailable");
+		});
+
+		it("handles timeout error", async () => {
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stderr) {
+					options.listeners.stderr(Buffer.from("ETIMEDOUT"));
+				}
+				return 1;
+			});
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://slow.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			const result = await validateRegistriesReachable(targets);
+			expect(result).toHaveLength(1);
+			expect(result[0].error).toContain("timed out");
+		});
+
+		it("handles fallback error with exit code", async () => {
+			// No specific error pattern in output - triggers fallback
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stderr) {
+					options.listeners.stderr(Buffer.from("Some generic error message"));
+				}
+				return 1;
+			});
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://unknown-error.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			const result = await validateRegistriesReachable(targets);
+			expect(result).toHaveLength(1);
+			// Should use the combined output when no specific pattern matches
+			expect(result[0].error).toContain("Some generic error message");
+		});
+
+		it("handles exec throwing an Error", async () => {
+			vi.mocked(exec.exec).mockRejectedValue(new Error("Exec failed unexpectedly"));
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://exec-error.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			const result = await validateRegistriesReachable(targets);
+			expect(result).toHaveLength(1);
+			expect(result[0].error).toBe("Exec failed unexpectedly");
+		});
+
+		it("handles exec throwing a non-Error", async () => {
+			vi.mocked(exec.exec).mockRejectedValue("String error");
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://string-error.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			const result = await validateRegistriesReachable(targets);
+			expect(result).toHaveLength(1);
+			expect(result[0].error).toBe("Unknown error checking registry");
 		});
 	});
 
 	describe("setupRegistryAuth", () => {
-		const originalFetch = globalThis.fetch;
-
 		beforeEach(() => {
-			// Mock fetch to return success by default for reachability checks
-			globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: "OK" });
-		});
-
-		afterEach(() => {
-			globalThis.fetch = originalFetch;
+			// Mock exec to return success by default for npm ping reachability checks
+			vi.mocked(exec.exec).mockResolvedValue(0);
 		});
 
 		it("uses app token for GITHUB_TOKEN when no workflow token provided", async () => {
@@ -703,7 +833,13 @@ describe("registry-auth", () => {
 		});
 
 		it("returns unreachable registries in result", async () => {
-			globalThis.fetch = vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND"));
+			// Mock npm ping to fail with ENOTFOUND
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stderr) {
+					options.listeners.stderr(Buffer.from("npm ERR! getaddrinfo ENOTFOUND invalid.registry.com"));
+				}
+				return 1;
+			});
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "app-token";
 				return "";

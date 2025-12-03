@@ -1,11 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
+import * as exec from "@actions/exec";
 import type { AuthSetupResult, ResolvedTarget } from "../types/publish-config.js";
 import { registryToEnvName } from "./resolve-targets.js";
 
-/** Timeout for registry health checks (5 seconds) */
-const REGISTRY_CHECK_TIMEOUT_MS = 5000;
+/** Timeout for registry health checks (10 seconds) */
+const REGISTRY_CHECK_TIMEOUT_MS = 10000;
 
 /**
  * Check if a registry uses OIDC-based authentication
@@ -26,43 +27,88 @@ function isOidcRegistry(registry: string | null): boolean {
 }
 
 /**
- * Check if a registry URL is reachable
+ * Check if a registry URL is reachable using npm ping
  *
  * @remarks
- * Makes a quick HTTP request with a short timeout to verify the registry
- * is accessible. This prevents npm from hanging indefinitely on invalid URLs.
+ * Uses `npm ping --registry=<url> --json` which is more accurate than HTTP fetch
+ * because it tests the actual npm protocol that will be used for publishing.
  *
  * @param registry - Registry URL to check
  * @returns Object with reachable status and error message if failed
  */
 async function checkRegistryReachable(registry: string): Promise<{ reachable: boolean; error?: string }> {
-	try {
-		const controller = new AbortController();
-		const timeoutId = setTimeout(() => controller.abort(), REGISTRY_CHECK_TIMEOUT_MS);
+	let output = "";
+	let errorOutput = "";
 
-		const response = await fetch(registry, {
-			method: "HEAD",
-			signal: controller.signal,
+	// Create a timeout promise that rejects after the timeout
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		setTimeout(() => {
+			reject(new Error(`Timeout after ${REGISTRY_CHECK_TIMEOUT_MS}ms`));
+		}, REGISTRY_CHECK_TIMEOUT_MS);
+	});
+
+	// Create the exec promise
+	const execPromise = (async (): Promise<{ reachable: boolean; error?: string }> => {
+		const exitCode = await exec.exec("npm", ["ping", "--registry", registry, "--json"], {
+			silent: true,
+			listeners: {
+				stdout: (data: Buffer) => {
+					output += data.toString();
+				},
+				stderr: (data: Buffer) => {
+					errorOutput += data.toString();
+				},
+			},
+			ignoreReturnCode: true,
 		});
 
-		clearTimeout(timeoutId);
-
-		// Accept any response - even 401/403 means the registry exists
-		// We just want to verify the URL resolves to something
-		if (response.ok || response.status === 401 || response.status === 403 || response.status === 404) {
+		if (exitCode === 0) {
 			return { reachable: true };
+		}
+
+		// Try to parse JSON error from npm
+		try {
+			const parsed = JSON.parse(output || errorOutput) as { error?: { summary?: string; code?: string } };
+			if (parsed.error) {
+				return {
+					reachable: false,
+					error: parsed.error.summary || parsed.error.code || "npm ping failed",
+				};
+			}
+		} catch {
+			// Not JSON, use raw output
+		}
+
+		// Extract meaningful error from output
+		const combinedOutput = `${output} ${errorOutput}`.trim();
+		if (combinedOutput.includes("ENOTFOUND") || combinedOutput.includes("getaddrinfo")) {
+			return { reachable: false, error: "Registry hostname not found" };
+		}
+		if (combinedOutput.includes("ECONNREFUSED")) {
+			return { reachable: false, error: "Connection refused" };
+		}
+		if (combinedOutput.includes("ETIMEDOUT") || combinedOutput.includes("timeout")) {
+			return { reachable: false, error: "Connection timed out" };
+		}
+		if (combinedOutput.includes("503") || combinedOutput.includes("Service Unavailable")) {
+			return { reachable: false, error: "Service unavailable (503)" };
 		}
 
 		return {
 			reachable: false,
-			error: `HTTP ${response.status}: ${response.statusText}`,
+			error: combinedOutput.slice(0, 200) || `npm ping failed with exit code ${exitCode}`,
 		};
+	})();
+
+	try {
+		// Race between exec and timeout
+		return await Promise.race([execPromise, timeoutPromise]);
 	} catch (error) {
 		if (error instanceof Error) {
-			if (error.name === "AbortError") {
+			if (error.message.includes("Timeout")) {
 				return {
 					reachable: false,
-					error: `Timeout after ${REGISTRY_CHECK_TIMEOUT_MS}ms - registry may not exist`,
+					error: error.message,
 				};
 			}
 			return {

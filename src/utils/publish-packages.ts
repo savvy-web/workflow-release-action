@@ -149,6 +149,9 @@ export async function publishPackages(
 	core.info("Setting up registry authentication...");
 	const authResult = await setupRegistryAuth(allTargets);
 
+	// Track unreachable registries to skip them during publish
+	const unreachableRegistrySet = new Set(authResult.unreachableRegistries.map((r) => r.registry));
+
 	if (!authResult.success) {
 		if (authResult.missingTokens.length > 0) {
 			core.warning("Some registry tokens are missing:");
@@ -157,7 +160,7 @@ export async function publishPackages(
 			}
 		}
 		if (authResult.unreachableRegistries.length > 0) {
-			core.error("Some registries are unreachable:");
+			core.error("Some registries are unreachable (will skip publishing):");
 			for (const unreachable of authResult.unreachableRegistries) {
 				core.error(`  - ${unreachable.registry}: ${unreachable.error}`);
 			}
@@ -222,6 +225,23 @@ export async function publishPackages(
 
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
+
+			// Skip targets with unreachable registries - avoid long timeouts
+			if (target.registry && unreachableRegistrySet.has(target.registry)) {
+				const unreachableInfo = authResult.unreachableRegistries.find((r) => r.registry === target.registry);
+				const errorMsg = `Registry unreachable: ${unreachableInfo?.error || "unknown error"}`;
+				core.warning(`Skipping ${registryName} - ${errorMsg}`);
+
+				targetResults.push({
+					target,
+					success: false,
+					error: errorMsg,
+					exitCode: 1,
+				});
+				allTargetsSuccess = false;
+				continue;
+			}
+
 			core.info(`Publishing to ${registryName}...`);
 
 			try {

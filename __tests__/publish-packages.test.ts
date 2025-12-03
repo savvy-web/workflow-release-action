@@ -377,7 +377,7 @@ describe("publish-packages", () => {
 
 		await publishPackages("pnpm", "main", false);
 
-		expect(core.error).toHaveBeenCalledWith("Some registries are unreachable:");
+		expect(core.error).toHaveBeenCalledWith("Some registries are unreachable (will skip publishing):");
 		expect(core.error).toHaveBeenCalledWith("  - https://invalid.registry.com/: ENOTFOUND");
 	});
 
@@ -450,6 +450,49 @@ describe("publish-packages", () => {
 		// Should emit warning, not error
 		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("already published"));
 		expect(core.error).not.toHaveBeenCalledWith(expect.stringContaining("Failed to publish"));
+	});
+
+	it("skips publishing to unreachable registries", async () => {
+		vi.mocked(getChangesetStatus).mockResolvedValue({
+			releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+			changesets: [],
+		});
+		vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+		vi.mocked(fs.existsSync).mockReturnValue(true);
+		vi.mocked(fs.readFileSync).mockReturnValue(
+			JSON.stringify({
+				name: "@org/pkg-a",
+				version: "1.0.0",
+				publishConfig: {
+					access: "public",
+					targets: ["https://unreachable.registry.com/"],
+				},
+			}),
+		);
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
+			success: false,
+			configuredRegistries: [],
+			missingTokens: [],
+			unreachableRegistries: [{ registry: "https://unreachable.registry.com/", error: "Connection refused" }],
+		});
+		vi.mocked(exec.exec).mockResolvedValue(0);
+		// publishToTarget should NOT be called for unreachable registries
+		vi.mocked(publishToTarget).mockResolvedValue({
+			success: true,
+			output: "",
+			error: "",
+		});
+
+		const result = await publishPackages("pnpm", "main", false);
+
+		// Should fail because target is unreachable
+		expect(result.success).toBe(false);
+		expect(result.packages[0].targets[0].success).toBe(false);
+		expect(result.packages[0].targets[0].error).toContain("Registry unreachable");
+		// publishToTarget should NOT have been called - we skip unreachable registries
+		expect(publishToTarget).not.toHaveBeenCalled();
+		// Should log warning about skipping
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Registry unreachable"));
 	});
 
 	describe("pre-detected releases", () => {

@@ -638,5 +638,61 @@ describe("validate-publish", () => {
 			// Should fall back to "Dry-run failed" when error is empty
 			expect(result.validations[0].targets[0].message).toBe("Dry-run failed");
 		});
+
+		it("skips validation for targets with unreachable registries", async () => {
+			const changesetStatus: ChangesetStatus = {
+				changesets: [],
+				releases: [{ name: "@test/package", type: "patch", oldVersion: "1.0.0", newVersion: "1.0.1" }],
+			};
+
+			const packageJson: PackageJson = {
+				name: "@test/package",
+				version: "1.0.1",
+				publishConfig: {
+					access: "public",
+					targets: ["https://custom.unreachable.com/"],
+				},
+			};
+
+			vi.mocked(fs.existsSync).mockImplementation((filePath) => {
+				const p = String(filePath);
+				if (p.includes(".npmrc")) return false;
+				return true;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((filePath) => {
+				const p = String(filePath);
+				if (p.includes("changeset-status")) return JSON.stringify(changesetStatus);
+				if (p.includes("test-package") && p.endsWith("package.json")) {
+					return JSON.stringify(packageJson);
+				}
+				return JSON.stringify({});
+			});
+
+			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options) => {
+				// Changeset status command
+				if (cmd === "pnpm" && args?.includes("changeset")) {
+					return 0;
+				}
+				// npm ping for custom registry - simulate failure
+				if (cmd === "npm" && args?.includes("ping")) {
+					if (options?.listeners?.stderr) {
+						options.listeners.stderr(Buffer.from("npm ERR! ECONNREFUSED"));
+					}
+					return 1;
+				}
+				return 0;
+			});
+
+			const result = await validatePublish("pnpm", "main", false);
+
+			// Should fail because registry is unreachable
+			expect(result.success).toBe(false);
+			expect(result.validations).toHaveLength(1);
+			expect(result.validations[0].targets[0].canPublish).toBe(false);
+			expect(result.validations[0].targets[0].message).toContain("Registry unreachable");
+			// Should log warning about skipping
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("registry unreachable"));
+		});
 	});
 });

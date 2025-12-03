@@ -60,6 +60,53 @@ export interface PublishSummaryOptions {
 	bumpTypes?: Map<string, string>;
 	/** Map of package name to changeset count */
 	changesetCounts?: Map<string, number>;
+	/** Map of package name to current (pre-release) version */
+	currentVersions?: Map<string, string>;
+}
+
+/**
+ * Package status for summary table
+ */
+type PackageStatus = "ready" | "skipped" | "warning" | "failed";
+
+/**
+ * Determine package status based on target states
+ * - ready: all targets ready to publish
+ * - skipped: all targets already published
+ * - warning: mix of ready + skipped
+ * - failed: any target has an error
+ */
+function getPackageStatus(validation: PackagePublishValidation): PackageStatus {
+	if (validation.discoveryError) return "failed";
+	if (validation.targets.length === 0) return "ready"; // No targets = nothing to do
+
+	const hasErrors = validation.targets.some((t) => !t.canPublish && !t.versionConflict);
+	if (hasErrors) return "failed";
+
+	const readyTargets = validation.targets.filter((t) => t.canPublish && !t.versionConflict);
+	const skippedTargets = validation.targets.filter((t) => t.canPublish && t.versionConflict);
+
+	if (readyTargets.length === validation.targets.length) return "ready";
+	if (skippedTargets.length === validation.targets.length) return "skipped";
+	if (readyTargets.length > 0 && skippedTargets.length > 0) return "warning";
+
+	return "failed"; // Fallback for unexpected states
+}
+
+/**
+ * Get status icon for package
+ */
+function getPackageStatusIcon(status: PackageStatus): string {
+	switch (status) {
+		case "ready":
+			return "\u2705"; // ✅
+		case "skipped":
+			return "\u23ED\uFE0F"; // ⏭️
+		case "warning":
+			return "\u26A0\uFE0F"; // ⚠️
+		case "failed":
+			return "\u274C"; // ❌
+	}
 }
 
 /**
@@ -139,47 +186,50 @@ export function generatePublishSummary(
 	options?: PublishSummaryOptions,
 ): string {
 	const sections: string[] = [];
-	const { bumpTypes, changesetCounts } = options || {};
+	const { bumpTypes, changesetCounts, currentVersions } = options || {};
 
 	// Header
 	sections.push(`## \u{1F4E6} Publish Validation ${dryRun ? "\u{1F9EA} (Dry Run)" : ""}\n`);
 
-	// Enhanced summary table with all packages
-	const totalPackages = validations.length;
-	const readyPackages = validations.filter((v) => v.allTargetsValid).length;
+	// Calculate stats
 	const totalTargets = validations.reduce((sum, v) => sum + v.targets.length, 0);
-	const readyTargets = validations.reduce((sum, v) => sum + v.targets.filter((t) => t.canPublish).length, 0);
+	const readyTargets = validations.reduce(
+		(sum, v) => sum + v.targets.filter((t) => t.canPublish && !t.versionConflict).length,
+		0,
+	);
 
-	// Package summary table with enhanced columns (status column leftmost with empty header)
-	sections.push("|   | Package | Version | Bump | Size | Changesets |");
+	// Package summary table (status column leftmost with empty header)
+	sections.push("|   | Package | Current | Next | Bump | Changesets |");
 	sections.push("|---|---------|---------|------|------|------------|");
 
-	// Aggregate stats
+	// Aggregate stats for totals
 	let totalPackedBytes = 0;
 	let totalUnpackedBytes = 0;
 	let totalFileCount = 0;
 
 	for (const pkg of validations) {
-		const status = pkg.allTargetsValid ? "\u2705" : "\u274C";
+		const pkgStatus = getPackageStatus(pkg);
+		const statusIcon = getPackageStatusIcon(pkgStatus);
 
 		// Package name with link
 		const packageLink = getPackageGitHubLink(pkg.path, pkg.name);
 
+		// Current and next versions
+		const currentVersion = currentVersions?.get(pkg.name) || pkg.version;
+		const nextVersion = pkg.version;
+
 		// Bump type with icon
 		const bumpType = bumpTypes?.get(pkg.name) || "";
 		const bumpIcon = bumpType ? getBumpTypeIcon(bumpType) : "";
-		const bumpDisplay = bumpType ? `${bumpIcon} ${bumpType}` : "\u{1F6AB}";
+		const bumpDisplay = bumpType ? `${bumpIcon}` : "\u2014"; // em-dash for no bump
 
-		// Changeset count for notes column
+		// Changeset count
 		const changesetCount = changesetCounts?.get(pkg.name) || 0;
-		const notesDisplay =
-			changesetCount > 0 ? `${changesetCount} changeset${changesetCount > 1 ? "s" : ""}` : "\u{1F6AB}";
+		const changesetDisplay = changesetCount > 0 ? `${changesetCount}` : "\u2014";
 
-		// Package size from stats
+		// Aggregate stats from targets
 		const stats = getPackageStats(pkg);
-		let sizeDisplay = "\u{1F6AB}";
 		if (stats?.packageSize) {
-			sizeDisplay = stats.packageSize;
 			totalPackedBytes += parseSizeToBytes(stats.packageSize);
 		}
 		if (stats?.unpackedSize) {
@@ -190,15 +240,19 @@ export function generatePublishSummary(
 		}
 
 		sections.push(
-			`| ${status} | ${packageLink} | ${pkg.version} | ${bumpDisplay} | ${sizeDisplay} | ${notesDisplay} |`,
+			`| ${statusIcon} | ${packageLink} | ${currentVersion} | ${nextVersion} | ${bumpDisplay} | ${changesetDisplay} |`,
 		);
 	}
 
+	// Summary table legend (always show all possible icons)
+	sections.push("");
+	sections.push(
+		"**Legend:** \u2705 Ready | \u23ED\uFE0F Skipped | \u26A0\uFE0F Warning | \u274C Failed | \u{1F534} major | \u{1F7E1} minor | \u{1F7E2} patch",
+	);
 	sections.push("");
 
 	// Aggregate metrics
 	if (totalPackedBytes > 0 || totalFileCount > 0) {
-		sections.push("**Totals:**");
 		const totals: string[] = [];
 		if (totalPackedBytes > 0) {
 			totals.push(`\u{1F4E6} ${formatBytes(totalPackedBytes)} packed`);
@@ -210,25 +264,23 @@ export function generatePublishSummary(
 			totals.push(`\u{1F4C4} ${totalFileCount} files`);
 		}
 		totals.push(`\u{1F3AF} ${readyTargets}/${totalTargets} targets ready`);
-		sections.push(totals.join(" \u2022 "));
+		sections.push(`**Totals:** ${totals.join(" \u2022 ")}`);
 		sections.push("");
-	} else {
-		// Fallback simple stats
-		sections.push(
-			`**Summary:** ${readyPackages}/${totalPackages} packages ready, ${readyTargets}/${totalTargets} targets ready\n`,
-		);
 	}
 
 	// Per-package details in individual collapsible sections
-	// Expanded by default if there are errors, collapsed if all targets are valid
+	// Expanded by default if there are errors/warnings, collapsed if all ready or all skipped
+	sections.push("---\n");
+
 	const packagesWithTargets = validations.filter((v) => v.targets.length > 0 || v.discoveryError);
 	if (packagesWithTargets.length > 0) {
 		for (const pkg of packagesWithTargets) {
-			const status = pkg.allTargetsValid ? "\u2705" : "\u274C";
-			// Open if there are errors (not all targets valid)
-			const openAttr = pkg.allTargetsValid ? "" : " open";
+			const pkgStatus = getPackageStatus(pkg);
+			const statusIcon = getPackageStatusIcon(pkgStatus);
+			// Open if there are errors or warnings
+			const openAttr = pkgStatus === "failed" || pkgStatus === "warning" ? " open" : "";
 			sections.push(`<details${openAttr}>`);
-			sections.push(`<summary><strong>${status} ${pkg.name}@${pkg.version}</strong></summary>\n`);
+			sections.push(`<summary><strong>${statusIcon} ${pkg.name}@${pkg.version}</strong></summary>\n`);
 
 			// Handle discovery errors (package path or package.json not found)
 			if (pkg.discoveryError) {
@@ -239,21 +291,9 @@ export function generatePublishSummary(
 
 			// At this point, targets.length > 0 is guaranteed by the filter above
 
-			// Show stats if available
-			const stats = getPackageStats(pkg);
-			if (stats) {
-				const statParts: string[] = [];
-				if (stats.packageSize) statParts.push(`Packed: ${stats.packageSize}`);
-				if (stats.unpackedSize) statParts.push(`Unpacked: ${stats.unpackedSize}`);
-				if (stats.totalFiles) statParts.push(`Files: ${stats.totalFiles}`);
-				if (statParts.length > 0) {
-					sections.push(`> ${statParts.join(" \u2022 ")}\n`);
-				}
-			}
-
-			// Target table (status column leftmost with empty header)
-			sections.push("|   | Protocol | Registry | Directory | \u{1F50F} Provenance |");
-			sections.push("|---|----------|----------|-----------|---------------|");
+			// Target table with per-target stats
+			sections.push("|   | Registry | Directory | Packed | Unpacked | Files | Access | Provenance |");
+			sections.push("|---|----------|-----------|--------|----------|-------|--------|------------|");
 
 			for (const result of pkg.targets) {
 				const { target } = result;
@@ -262,24 +302,63 @@ export function generatePublishSummary(
 				// Show last 2 path segments for better context (e.g., "dist/npm" instead of just "npm")
 				const pathParts = target.directory.split("/").filter(Boolean);
 				const dirName = pathParts.length > 1 ? pathParts.slice(-2).join("/") : pathParts.pop() || ".";
-				const targetStatus = result.canPublish ? "\u2705 Ready" : `\u274C ${result.message}`;
-				const provenance = target.provenance ? (result.provenanceReady ? "\u2705" : "\u26A0\uFE0F") : "\u{1F6AB}";
+
+				// Status icon only (legend explains meaning)
+				let targetStatusIcon: string;
+				if (result.canPublish) {
+					targetStatusIcon = result.versionConflict ? "\u23ED\uFE0F" : "\u2705";
+				} else {
+					targetStatusIcon = "\u274C";
+				}
+
+				// Per-target stats
+				const packed = result.stats?.packageSize || "\u2014";
+				const unpacked = result.stats?.unpackedSize || "\u2014";
+				const files = result.stats?.totalFiles?.toString() || "\u2014";
+				const access = target.access;
+
+				// Provenance status
+				let provenance: string;
+				if (target.provenance) {
+					provenance = result.provenanceReady ? "\u2705" : "\u26A0\uFE0F";
+				} else {
+					provenance = "\u{1F6AB}";
+				}
 
 				sections.push(
-					`| ${targetStatus} | ${icon} ${target.protocol} | ${registry} | \`${dirName}\` | ${provenance} |`,
+					`| ${targetStatusIcon} | ${icon} ${registry} | \`${dirName}\` | ${packed} | ${unpacked} | ${files} | ${access} | ${provenance} |`,
 				);
+			}
+
+			// Per-table legend (always show all possible icons)
+			sections.push("");
+			sections.push("**Legend:** \u2705 Ready | \u23ED\uFE0F Skipped | \u274C Failed | \u{1F4E6} npm | \u{1F995} JSR");
+			sections.push("**Provenance:** \u2705 Configured | \u26A0\uFE0F Available | \u{1F6AB} Not available");
+
+			// Issues list (only show non-ready items)
+			const issues: string[] = [];
+			for (const result of pkg.targets) {
+				const registry = getRegistryDisplayName(result.target.registry);
+				if (!result.canPublish) {
+					// Error
+					issues.push(`- \u274C **${registry}**: ${result.message}`);
+				} else if (result.versionConflict) {
+					// Informational - already published
+					const versionInfo = result.existingVersion || pkg.version;
+					issues.push(`- \u2139\uFE0F **${registry}**: v${versionInfo} already published`);
+				}
+				// Don't list ready targets
+			}
+
+			if (issues.length > 0) {
+				sections.push("");
+				sections.push(issues.join("\n"));
 			}
 
 			sections.push("");
 			sections.push("</details>\n");
 		}
 	}
-
-	// Legend
-	sections.push("---");
-	sections.push(
-		"**Legend:** \u{1F534} major | \u{1F7E1} minor | \u{1F7E2} patch | \u{1F4E6} npm | \u{1F995} JSR | \u2705 Ready | \u274C Failed | \u{1F6AB} N/A",
-	);
 
 	return sections.join("\n");
 }
@@ -483,8 +562,9 @@ export function generatePublishResultsSummary(results: PackagePublishResult[], d
 			let targetStatus: string;
 			if (result.alreadyPublished) {
 				// Show different status based on tarball comparison result
+				// Use skip icon (⏭️) instead of check for skipped targets
 				if (result.alreadyPublishedReason === "identical") {
-					targetStatus = "\u2705 Skipped (identical)";
+					targetStatus = "\u23ED\uFE0F Skipped (identical)";
 				} else if (result.alreadyPublishedReason === "different") {
 					targetStatus = "\u274C Content mismatch";
 				} else {
