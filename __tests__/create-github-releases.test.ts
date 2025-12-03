@@ -471,7 +471,53 @@ describe("create-github-releases", () => {
 			expect(createReleaseCall.body).toContain("Published to:");
 			expect(createReleaseCall.body).toContain("npm");
 			expect(createReleaseCall.body).toContain("https://www.npmjs.com/package/@org/pkg-a");
-			expect(createReleaseCall.body).toContain("Provenance attestation");
+			expect(createReleaseCall.body).toContain("Sigstore provenance");
+		});
+
+		it("includes GitHub attestation URL in release notes", async () => {
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [
+						{
+							target: {
+								protocol: "npm",
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/pkg-a",
+								access: "public",
+								provenance: true,
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							success: true,
+							registryUrl: "https://www.npmjs.com/package/@org/pkg-a",
+						},
+					],
+					githubAttestationUrl: "https://github.com/test-owner/test-repo/attestations/12345",
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+
+			await createGitHubReleases(tags, publishResults, false);
+
+			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
+			expect(createReleaseCall.body).toContain("GitHub attestation");
+			expect(createReleaseCall.body).toContain("https://github.com/test-owner/test-repo/attestations/12345");
 		});
 
 		it("marks prerelease for versions with hyphen", async () => {

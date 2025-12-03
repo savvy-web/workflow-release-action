@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import type { PackageJson, ResolvedTarget } from "../types/publish-config.js";
+import { createPackageAttestation } from "./create-attestation.js";
 import { findPackagePath } from "./find-package-path.js";
 import type { PackagePublishResult, TargetPublishResult } from "./generate-publish-summary.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
@@ -312,10 +313,20 @@ export async function publishPackages(
 			}
 		}
 
+		// Create GitHub attestation for successfully published packages
+		let githubAttestationUrl: string | undefined;
+		if (allTargetsSuccess && targetResults.some((t) => t.success)) {
+			const attestationResult = await createPackageAttestation(name, packageInfo.version, packageInfo.path, dryRun);
+			if (attestationResult.success && attestationResult.attestationUrl) {
+				githubAttestationUrl = attestationResult.attestationUrl;
+			}
+		}
+
 		results.push({
 			name,
 			version: packageInfo.version,
 			targets: targetResults,
+			githubAttestationUrl,
 		});
 
 		if (allTargetsSuccess) {

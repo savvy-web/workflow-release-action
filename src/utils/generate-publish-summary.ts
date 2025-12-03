@@ -391,6 +391,8 @@ export interface PackagePublishResult {
 	name: string;
 	version: string;
 	targets: TargetPublishResult[];
+	/** URL to GitHub attestation (SLSA provenance) */
+	githubAttestationUrl?: string;
 }
 
 /**

@@ -296,8 +296,13 @@ export async function createGitHubReleases(
 				}
 
 				if (target.attestationUrl) {
-					releaseNotes += `  - [Provenance attestation](${target.attestationUrl})\n`;
+					releaseNotes += `  - [Sigstore provenance](${target.attestationUrl})\n`;
 				}
+			}
+
+			// Add GitHub attestation if available (per-package, not per-target)
+			if (pkg.githubAttestationUrl) {
+				releaseNotes += `  - [GitHub attestation](${pkg.githubAttestationUrl})\n`;
 			}
 		}
 
