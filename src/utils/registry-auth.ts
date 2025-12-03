@@ -4,6 +4,9 @@ import * as core from "@actions/core";
 import type { AuthSetupResult, ResolvedTarget } from "../types/publish-config.js";
 import { registryToEnvName } from "./resolve-targets.js";
 
+/** Timeout for registry health checks (5 seconds) */
+const REGISTRY_CHECK_TIMEOUT_MS = 5000;
+
 /**
  * Check if a registry uses OIDC-based authentication
  *
@@ -20,6 +23,103 @@ function isOidcRegistry(registry: string | null): boolean {
 	// npm public registry supports OIDC trusted publishing
 	if (registry.includes("registry.npmjs.org")) return true;
 	return false;
+}
+
+/**
+ * Check if a registry URL is reachable
+ *
+ * @remarks
+ * Makes a quick HTTP request with a short timeout to verify the registry
+ * is accessible. This prevents npm from hanging indefinitely on invalid URLs.
+ *
+ * @param registry - Registry URL to check
+ * @returns Object with reachable status and error message if failed
+ */
+async function checkRegistryReachable(registry: string): Promise<{ reachable: boolean; error?: string }> {
+	try {
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), REGISTRY_CHECK_TIMEOUT_MS);
+
+		const response = await fetch(registry, {
+			method: "HEAD",
+			signal: controller.signal,
+		});
+
+		clearTimeout(timeoutId);
+
+		// Accept any response - even 401/403 means the registry exists
+		// We just want to verify the URL resolves to something
+		if (response.ok || response.status === 401 || response.status === 403 || response.status === 404) {
+			return { reachable: true };
+		}
+
+		return {
+			reachable: false,
+			error: `HTTP ${response.status}: ${response.statusText}`,
+		};
+	} catch (error) {
+		if (error instanceof Error) {
+			if (error.name === "AbortError") {
+				return {
+					reachable: false,
+					error: `Timeout after ${REGISTRY_CHECK_TIMEOUT_MS}ms - registry may not exist`,
+				};
+			}
+			return {
+				reachable: false,
+				error: error.message,
+			};
+		}
+		return {
+			reachable: false,
+			error: "Unknown error checking registry",
+		};
+	}
+}
+
+/**
+ * Validate that all non-OIDC registries are reachable
+ *
+ * @remarks
+ * Checks each custom registry URL to ensure it responds. This prevents
+ * npm from hanging indefinitely when a registry URL is misconfigured.
+ *
+ * @param targets - Array of resolved targets to validate
+ * @returns Array of unreachable registries with error messages
+ */
+export async function validateRegistriesReachable(
+	targets: ResolvedTarget[],
+): Promise<Array<{ registry: string; error: string }>> {
+	const unreachable: Array<{ registry: string; error: string }> = [];
+	const checkedRegistries = new Set<string>();
+
+	for (const target of targets) {
+		// Skip non-npm protocols
+		if (target.protocol !== "npm" || !target.registry) continue;
+
+		// Skip already checked registries
+		if (checkedRegistries.has(target.registry)) continue;
+		checkedRegistries.add(target.registry);
+
+		// Skip well-known registries that we trust
+		if (isOidcRegistry(target.registry)) continue;
+		if (target.registry.includes("npm.pkg.github.com")) continue;
+
+		core.debug(`Checking registry reachability: ${target.registry}`);
+		const result = await checkRegistryReachable(target.registry);
+
+		if (!result.reachable) {
+			core.warning(`Registry unreachable: ${target.registry} - ${result.error}`);
+			unreachable.push({
+				registry: target.registry,
+				error: result.error || "Unknown error",
+			});
+		} else {
+			core.debug(`Registry reachable: ${target.registry}`);
+		}
+	}
+
+	return unreachable;
 }
 
 /**
@@ -162,7 +262,7 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
  * @param targets - Array of resolved targets to setup auth for
  * @returns Authentication setup result
  */
-export function setupRegistryAuth(targets: ResolvedTarget[]): AuthSetupResult {
+export async function setupRegistryAuth(targets: ResolvedTarget[]): Promise<AuthSetupResult> {
 	// Get tokens from state (set by pre.ts)
 	const appToken = core.getState("token");
 	const githubToken = core.getState("githubToken"); // Optional: workflow's GITHUB_TOKEN for packages:write
@@ -227,14 +327,18 @@ export function setupRegistryAuth(targets: ResolvedTarget[]): AuthSetupResult {
 	// Validate tokens for non-OIDC registries
 	const validation = validateTokensAvailable(targets);
 
+	// Check custom registries are reachable before attempting to use them
+	const unreachableRegistries = await validateRegistriesReachable(targets);
+
 	// Generate .npmrc for GitHub Packages and custom registries
 	generateNpmrc(targets);
 
 	return {
-		success: validation.valid,
+		success: validation.valid && unreachableRegistries.length === 0,
 		configuredRegistries: Array.from(
 			new Set(targets.filter((t) => t.protocol === "npm" && t.registry).map((t) => t.registry as string)),
 		),
 		missingTokens: validation.missing,
+		unreachableRegistries,
 	};
 }

@@ -112,12 +112,20 @@ export async function validatePublish(
 
 	// Setup authentication for all registries
 	core.info("Setting up registry authentication");
-	const authResult = setupRegistryAuth(allTargets);
+	const authResult = await setupRegistryAuth(allTargets);
 
 	if (!authResult.success) {
-		core.warning("Some registry tokens are missing:");
-		for (const missing of authResult.missingTokens) {
-			core.warning(`  - ${missing.registry}: ${missing.tokenEnv} not set`);
+		if (authResult.missingTokens.length > 0) {
+			core.warning("Some registry tokens are missing:");
+			for (const missing of authResult.missingTokens) {
+				core.warning(`  - ${missing.registry}: ${missing.tokenEnv} not set`);
+			}
+		}
+		if (authResult.unreachableRegistries.length > 0) {
+			core.error("Some registries are unreachable:");
+			for (const unreachable of authResult.unreachableRegistries) {
+				core.error(`  - ${unreachable.registry}: ${unreachable.error}`);
+			}
 		}
 	}
 
@@ -191,12 +199,15 @@ export async function validatePublish(
 			// Dry-run publish
 			const dryRunResult = await dryRunPublish(target, packageManager);
 
+			// Version conflicts are not errors - the package is already published
+			const effectiveSuccess = dryRunResult.success || dryRunResult.versionConflict;
+
 			const result: TargetValidationResult = {
 				target,
-				canPublish: dryRunResult.success,
+				canPublish: effectiveSuccess,
 				directoryExists: true,
 				packageJsonValid: true,
-				dryRunPassed: dryRunResult.success,
+				dryRunPassed: effectiveSuccess,
 				dryRunOutput: dryRunResult.output,
 				dryRunError: dryRunResult.error,
 				versionConflict: dryRunResult.versionConflict,
@@ -214,6 +225,9 @@ export async function validatePublish(
 
 			if (dryRunResult.success) {
 				core.info(`\u2713 Ready to publish to ${registryName}`);
+			} else if (dryRunResult.versionConflict) {
+				// Version conflict is a warning, not an error - package already published
+				core.warning(`\u26A0 ${result.message} - will skip`);
 			} else {
 				core.error(`\u2717 ${result.message}`);
 			}

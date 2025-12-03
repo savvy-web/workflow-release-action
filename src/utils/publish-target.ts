@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
-import type { PublishResult, ResolvedTarget } from "../types/publish-config.js";
+import type { AlreadyPublishedReason, PublishResult, ResolvedTarget } from "../types/publish-config.js";
 
 /**
  * Get a display name for a registry URL
@@ -50,6 +50,115 @@ function generatePackageUrl(target: ResolvedTarget): string | undefined {
 function extractProvenanceUrl(output: string): string | undefined {
 	const match = output.match(/Provenance statement published to (https:\/\/[^\s]+)/);
 	return match?.[1];
+}
+
+/**
+ * Check if error indicates version already published
+ */
+function isVersionAlreadyPublished(output: string, error: string): boolean {
+	return (
+		output.includes("cannot publish over previously published version") ||
+		error.includes("cannot publish over previously published version") ||
+		error.includes("You cannot publish over the previously published versions")
+	);
+}
+
+/**
+ * Get local tarball integrity by running npm pack --json
+ */
+async function getLocalTarballIntegrity(directory: string): Promise<string | undefined> {
+	let output = "";
+	try {
+		await exec.exec("npm", ["pack", "--json", "--dry-run"], {
+			cwd: directory,
+			silent: true,
+			listeners: {
+				stdout: (data: Buffer) => {
+					output += data.toString();
+				},
+			},
+			ignoreReturnCode: true,
+		});
+
+		// npm pack --json returns an array of package info
+		const parsed = JSON.parse(output) as Array<{ shasum?: string; integrity?: string }>;
+		// Return shasum (SHA-1) for comparison - it's more universally available
+		return parsed[0]?.shasum;
+	} catch {
+		core.debug(`Failed to get local tarball integrity: ${output}`);
+		return undefined;
+	}
+}
+
+/**
+ * Get remote tarball integrity from registry
+ */
+async function getRemoteTarballIntegrity(
+	packageName: string,
+	version: string,
+	registry: string | null,
+): Promise<string | undefined> {
+	let output = "";
+	const args = ["view", `${packageName}@${version}`, "dist.shasum"];
+
+	if (registry) {
+		args.push("--registry", registry);
+	}
+
+	try {
+		await exec.exec("npm", args, {
+			silent: true,
+			listeners: {
+				stdout: (data: Buffer) => {
+					output += data.toString();
+				},
+			},
+			ignoreReturnCode: true,
+		});
+
+		const shasum = output.trim();
+		return shasum || undefined;
+	} catch {
+		core.debug(`Failed to get remote tarball integrity for ${packageName}@${version}`);
+		return undefined;
+	}
+}
+
+/**
+ * Compare local and remote tarball integrity to determine if skip is safe
+ */
+async function compareTarballIntegrity(
+	target: ResolvedTarget,
+): Promise<{ reason: AlreadyPublishedReason; localIntegrity?: string; remoteIntegrity?: string }> {
+	const pkgJsonPath = path.join(target.directory, "package.json");
+	if (!fs.existsSync(pkgJsonPath)) {
+		return { reason: "unknown" };
+	}
+
+	const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as { name?: string; version?: string };
+	if (!pkg.name || !pkg.version) {
+		return { reason: "unknown" };
+	}
+
+	const [localIntegrity, remoteIntegrity] = await Promise.all([
+		getLocalTarballIntegrity(target.directory),
+		getRemoteTarballIntegrity(pkg.name, pkg.version, target.registry),
+	]);
+
+	if (!localIntegrity || !remoteIntegrity) {
+		core.debug(`Could not compare integrity: local=${localIntegrity}, remote=${remoteIntegrity}`);
+		return { reason: "unknown", localIntegrity, remoteIntegrity };
+	}
+
+	if (localIntegrity === remoteIntegrity) {
+		core.info(`✓ Local tarball matches remote (shasum: ${localIntegrity.substring(0, 12)}...)`);
+		return { reason: "identical", localIntegrity, remoteIntegrity };
+	}
+
+	core.warning(`✗ Local tarball differs from remote!`);
+	core.warning(`  Local:  ${localIntegrity}`);
+	core.warning(`  Remote: ${remoteIntegrity}`);
+	return { reason: "different", localIntegrity, remoteIntegrity };
 }
 
 /**
@@ -104,6 +213,20 @@ async function publishToNpmCompatible(target: ResolvedTarget): Promise<PublishRe
 
 	const registryUrl = generatePackageUrl(target);
 	const attestationUrl = target.provenance ? extractProvenanceUrl(output) : undefined;
+	const alreadyPublished = isVersionAlreadyPublished(output, error);
+
+	// If version already published, compare tarballs to determine if safe to skip
+	let alreadyPublishedReason: AlreadyPublishedReason | undefined;
+	let localIntegrity: string | undefined;
+	let remoteIntegrity: string | undefined;
+
+	if (alreadyPublished) {
+		core.info("Version already published - comparing tarball integrity...");
+		const comparison = await compareTarballIntegrity(target);
+		alreadyPublishedReason = comparison.reason;
+		localIntegrity = comparison.localIntegrity;
+		remoteIntegrity = comparison.remoteIntegrity;
+	}
 
 	return {
 		success: exitCode === 0,
@@ -112,7 +235,22 @@ async function publishToNpmCompatible(target: ResolvedTarget): Promise<PublishRe
 		exitCode,
 		registryUrl,
 		attestationUrl,
+		alreadyPublished,
+		alreadyPublishedReason,
+		localIntegrity,
+		remoteIntegrity,
 	};
+}
+
+/**
+ * Check if JSR error indicates version already published
+ */
+function isJsrVersionAlreadyPublished(output: string, error: string): boolean {
+	return (
+		output.includes("already exists") ||
+		error.includes("already exists") ||
+		(error.includes("Version") && error.includes("already published"))
+	);
 }
 
 /**
@@ -151,6 +289,7 @@ async function publishToJsr(target: ResolvedTarget): Promise<PublishResult> {
 	// Extract JSR package URL from output
 	const urlMatch = output.match(/https:\/\/jsr\.io\/@[^\s]+/);
 	const registryUrl = urlMatch?.[0];
+	const alreadyPublished = isJsrVersionAlreadyPublished(output, error);
 
 	return {
 		success: exitCode === 0,
@@ -158,6 +297,7 @@ async function publishToJsr(target: ResolvedTarget): Promise<PublishResult> {
 		error,
 		exitCode,
 		registryUrl,
+		alreadyPublished,
 	};
 }
 

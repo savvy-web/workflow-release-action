@@ -577,8 +577,10 @@ describe("validate-publish", () => {
 
 			const result = await validatePublish("pnpm", "main", false);
 
-			expect(result.success).toBe(false);
+			// Version conflicts are now treated as successful (already published = nothing to do)
+			expect(result.success).toBe(true);
 			expect(result.validations[0].targets[0].versionConflict).toBe(true);
+			expect(result.validations[0].targets[0].canPublish).toBe(true);
 			// Message should use release.newVersion as fallback
 			expect(result.validations[0].targets[0].message).toContain("1.1.0");
 		});

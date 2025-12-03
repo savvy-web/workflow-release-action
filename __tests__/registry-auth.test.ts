@@ -3,7 +3,12 @@ import * as path from "node:path";
 import * as core from "@actions/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedTarget } from "../src/types/publish-config.js";
-import { generateNpmrc, setupRegistryAuth, validateTokensAvailable } from "../src/utils/registry-auth.js";
+import {
+	generateNpmrc,
+	setupRegistryAuth,
+	validateRegistriesReachable,
+	validateTokensAvailable,
+} from "../src/utils/registry-auth.js";
 import { cleanupTestEnvironment, setupTestEnvironment } from "./utils/github-mocks.js";
 
 // Mock modules
@@ -325,21 +330,206 @@ describe("registry-auth", () => {
 		});
 	});
 
+	describe("validateRegistriesReachable", () => {
+		const originalFetch = globalThis.fetch;
+
+		afterEach(() => {
+			globalThis.fetch = originalFetch;
+		});
+
+		it("returns empty array when all registries are reachable", async () => {
+			globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: "OK" });
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://custom.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			const result = await validateRegistriesReachable(targets);
+			expect(result).toHaveLength(0);
+		});
+
+		it("returns unreachable registries on fetch error", async () => {
+			globalThis.fetch = vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND"));
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://invalid.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			const result = await validateRegistriesReachable(targets);
+			expect(result).toHaveLength(1);
+			expect(result[0].registry).toBe("https://invalid.registry.com/");
+			expect(result[0].error).toContain("ENOTFOUND");
+		});
+
+		it("returns unreachable on timeout", async () => {
+			const abortError = new Error("Aborted");
+			abortError.name = "AbortError";
+			globalThis.fetch = vi.fn().mockRejectedValue(abortError);
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://slow.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			const result = await validateRegistriesReachable(targets);
+			expect(result).toHaveLength(1);
+			expect(result[0].error).toContain("Timeout");
+		});
+
+		it("accepts 401/403 responses as reachable (auth required)", async () => {
+			globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 401, statusText: "Unauthorized" });
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://auth-required.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			const result = await validateRegistriesReachable(targets);
+			expect(result).toHaveLength(0);
+		});
+
+		it("skips npm public registry", async () => {
+			globalThis.fetch = vi.fn();
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://registry.npmjs.org/",
+					directory: "/test",
+					access: "public",
+					provenance: true,
+					tag: "latest",
+					tokenEnv: null,
+				},
+			];
+
+			await validateRegistriesReachable(targets);
+			expect(globalThis.fetch).not.toHaveBeenCalled();
+		});
+
+		it("skips GitHub Packages registry", async () => {
+			globalThis.fetch = vi.fn();
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://npm.pkg.github.com/",
+					directory: "/test",
+					access: "restricted",
+					provenance: true,
+					tag: "latest",
+					tokenEnv: "GITHUB_TOKEN",
+				},
+			];
+
+			await validateRegistriesReachable(targets);
+			expect(globalThis.fetch).not.toHaveBeenCalled();
+		});
+
+		it("skips JSR targets", async () => {
+			globalThis.fetch = vi.fn();
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "jsr",
+					registry: null,
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: null,
+				},
+			];
+
+			await validateRegistriesReachable(targets);
+			expect(globalThis.fetch).not.toHaveBeenCalled();
+		});
+
+		it("deduplicates registry checks", async () => {
+			globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: "OK" });
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://custom.registry.com/",
+					directory: "/test/pkg1",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+				{
+					protocol: "npm",
+					registry: "https://custom.registry.com/",
+					directory: "/test/pkg2",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			await validateRegistriesReachable(targets);
+			expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+		});
+	});
+
 	describe("setupRegistryAuth", () => {
-		it("uses app token for GITHUB_TOKEN when no workflow token provided", () => {
+		const originalFetch = globalThis.fetch;
+
+		beforeEach(() => {
+			// Mock fetch to return success by default for reachability checks
+			globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: "OK" });
+		});
+
+		afterEach(() => {
+			globalThis.fetch = originalFetch;
+		});
+
+		it("uses app token for GITHUB_TOKEN when no workflow token provided", async () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "app-token";
 				return "";
 			});
 
 			const targets: ResolvedTarget[] = [];
-			setupRegistryAuth(targets);
+			await setupRegistryAuth(targets);
 
 			expect(process.env.GITHUB_TOKEN).toBe("app-token");
 			expect(core.info).toHaveBeenCalledWith("Using GitHub App token for GitHub Packages authentication");
 		});
 
-		it("prefers workflow GITHUB_TOKEN over app token for packages", () => {
+		it("prefers workflow GITHUB_TOKEN over app token for packages", async () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "app-token";
 				if (name === "githubToken") return "workflow-token";
@@ -347,7 +537,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			setupRegistryAuth(targets);
+			await setupRegistryAuth(targets);
 
 			expect(process.env.GITHUB_TOKEN).toBe("workflow-token");
 			expect(core.info).toHaveBeenCalledWith(
@@ -355,18 +545,18 @@ describe("registry-auth", () => {
 			);
 		});
 
-		it("warns when no token in state", () => {
+		it("warns when no token in state", async () => {
 			vi.mocked(core.getState).mockReturnValue("");
 
 			const targets: ResolvedTarget[] = [];
-			setupRegistryAuth(targets);
+			await setupRegistryAuth(targets);
 
 			expect(core.warning).toHaveBeenCalledWith(
 				"No GitHub token available - GitHub Packages and custom registries may fail to authenticate",
 			);
 		});
 
-		it("does not set NPM_TOKEN (npm uses OIDC)", () => {
+		it("does not set NPM_TOKEN (npm uses OIDC)", async () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "app-token";
 				return "";
@@ -376,13 +566,13 @@ describe("registry-auth", () => {
 			delete process.env.NPM_TOKEN;
 
 			const targets: ResolvedTarget[] = [];
-			setupRegistryAuth(targets);
+			await setupRegistryAuth(targets);
 
 			// NPM_TOKEN should not be set - npm uses OIDC trusted publishing
 			expect(process.env.NPM_TOKEN).toBeUndefined();
 		});
 
-		it("does not set JSR_TOKEN (JSR uses OIDC)", () => {
+		it("does not set JSR_TOKEN (JSR uses OIDC)", async () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "app-token";
 				return "";
@@ -392,13 +582,13 @@ describe("registry-auth", () => {
 			delete process.env.JSR_TOKEN;
 
 			const targets: ResolvedTarget[] = [];
-			setupRegistryAuth(targets);
+			await setupRegistryAuth(targets);
 
 			// JSR_TOKEN should not be set - JSR uses OIDC
 			expect(process.env.JSR_TOKEN).toBeUndefined();
 		});
 
-		it("parses custom-registries input", () => {
+		it("parses custom-registries input", async () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "app-token";
 				return "";
@@ -409,12 +599,12 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			setupRegistryAuth(targets);
+			await setupRegistryAuth(targets);
 
 			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("custom-token");
 		});
 
-		it("uses GitHub App token for custom-registries without explicit token", () => {
+		it("uses GitHub App token for custom-registries without explicit token", async () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "github-app-token";
 				return "";
@@ -425,7 +615,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			setupRegistryAuth(targets);
+			await setupRegistryAuth(targets);
 
 			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
 			expect(core.info).toHaveBeenCalledWith(
@@ -433,7 +623,7 @@ describe("registry-auth", () => {
 			);
 		});
 
-		it("uses GitHub App token for custom-registries with trailing = but no token", () => {
+		it("uses GitHub App token for custom-registries with trailing = but no token", async () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "github-app-token";
 				return "";
@@ -444,7 +634,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			setupRegistryAuth(targets);
+			await setupRegistryAuth(targets);
 
 			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
 			expect(core.info).toHaveBeenCalledWith(
@@ -452,7 +642,7 @@ describe("registry-auth", () => {
 			);
 		});
 
-		it("handles multiple custom-registries with mixed formats", () => {
+		it("handles multiple custom-registries with mixed formats", async () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "github-app-token";
 				return "";
@@ -465,13 +655,13 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			setupRegistryAuth(targets);
+			await setupRegistryAuth(targets);
 
 			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
 			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("explicit-token");
 		});
 
-		it("warns when no GitHub token and custom-registries without explicit value", () => {
+		it("warns when no GitHub token and custom-registries without explicit value", async () => {
 			vi.mocked(core.getState).mockReturnValue("");
 			vi.mocked(core.getInput).mockImplementation((name: string) => {
 				if (name === "custom-registries") return "https://npm.savvyweb.dev/";
@@ -479,7 +669,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			setupRegistryAuth(targets);
+			await setupRegistryAuth(targets);
 
 			expect(core.warning).toHaveBeenCalledWith(
 				"No GitHub token available - GitHub Packages and custom registries may fail to authenticate",
@@ -488,7 +678,7 @@ describe("registry-auth", () => {
 			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBeUndefined();
 		});
 
-		it("returns configured registries", () => {
+		it("returns configured registries", async () => {
 			process.env.NPM_TOKEN = "npm-token";
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "app-token";
@@ -507,9 +697,36 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = setupRegistryAuth(targets);
+			const result = await setupRegistryAuth(targets);
 
 			expect(result.configuredRegistries).toContain("https://registry.npmjs.org/");
+		});
+
+		it("returns unreachable registries in result", async () => {
+			globalThis.fetch = vi.fn().mockRejectedValue(new Error("getaddrinfo ENOTFOUND"));
+			vi.mocked(core.getState).mockImplementation((name: string) => {
+				if (name === "token") return "app-token";
+				return "";
+			});
+
+			const targets: ResolvedTarget[] = [
+				{
+					protocol: "npm",
+					registry: "https://invalid.registry.com/",
+					directory: "/test",
+					access: "public",
+					provenance: false,
+					tag: "latest",
+					tokenEnv: "CUSTOM_TOKEN",
+				},
+			];
+
+			process.env.CUSTOM_TOKEN = "test-token";
+			const result = await setupRegistryAuth(targets);
+
+			expect(result.success).toBe(false);
+			expect(result.unreachableRegistries).toHaveLength(1);
+			expect(result.unreachableRegistries[0].registry).toBe("https://invalid.registry.com/");
 		});
 	});
 });

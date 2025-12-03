@@ -1308,6 +1308,171 @@ describe("generate-publish-summary", () => {
 			expect(summary).toContain("id-token: write");
 			expect(summary).toContain("attestations: write");
 		});
+
+		it("shows skipped (identical) status for already published targets with matching content", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: true,
+							alreadyPublished: true,
+							alreadyPublishedReason: "identical",
+							registryUrl: "https://www.npmjs.com/package/@test/package",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+
+			// Should show skipped (identical) status
+			expect(summary).toContain("\u2705 Skipped (identical)");
+			expect(summary).not.toContain("\u2705 Published");
+		});
+
+		it("shows content mismatch error for already published targets with different content", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: false, // Content mismatch is an error
+							alreadyPublished: true,
+							alreadyPublishedReason: "different",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+
+			// Should show content mismatch error
+			expect(summary).toContain("\u274C Content mismatch");
+		});
+
+		it("shows skipped (unverified) status when content could not be compared", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: true,
+							alreadyPublished: true,
+							alreadyPublishedReason: "unknown",
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+
+			// Should show skipped (unverified) status
+			expect(summary).toContain("\u26A0\uFE0F Skipped (unverified)");
+		});
+
+		it("shows summary note when targets were skipped", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: true,
+							alreadyPublished: true,
+						},
+						{
+							target: { ...target, registry: "https://npm.pkg.github.com/" },
+							success: true,
+							alreadyPublished: true,
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+
+			// Should show summary note about skipped targets
+			expect(summary).toContain("2 targets were already published and skipped");
+		});
+
+		it("shows singular note when one target was skipped", () => {
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const results: PackagePublishResult[] = [
+				{
+					name: "@test/package",
+					version: "1.0.0",
+					targets: [
+						{
+							target,
+							success: true,
+							alreadyPublished: true,
+						},
+					],
+				},
+			];
+
+			const summary = generatePublishResultsSummary(results, false);
+
+			// Should show singular note
+			expect(summary).toContain("1 target was already published and skipped");
+		});
 	});
 
 	describe("generateBuildFailureSummary", () => {

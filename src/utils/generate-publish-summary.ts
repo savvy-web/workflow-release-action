@@ -1,5 +1,10 @@
 import { context } from "@actions/github";
-import type { PackagePublishValidation, PackageStats, ResolvedTarget } from "../types/publish-config.js";
+import type {
+	AlreadyPublishedReason,
+	PackagePublishValidation,
+	PackageStats,
+	ResolvedTarget,
+} from "../types/publish-config.js";
 import type { PublishPackagesResult } from "./publish-packages.js";
 
 /**
@@ -294,6 +299,10 @@ export interface TargetPublishResult {
 	stderr?: string;
 	/** Exit code from publish command */
 	exitCode?: number;
+	/** True if version was already published - not an error, just skipped */
+	alreadyPublished?: boolean;
+	/** Reason for already published state */
+	alreadyPublishedReason?: AlreadyPublishedReason;
 }
 
 /**
@@ -423,6 +432,7 @@ export function generatePublishResultsSummary(results: PackagePublishResult[], d
 	const successPackages = results.filter((p) => p.targets.every((t) => t.success)).length;
 	const totalTargets = results.reduce((sum, p) => sum + p.targets.length, 0);
 	const successTargets = results.reduce((sum, p) => sum + p.targets.filter((t) => t.success).length, 0);
+	const skippedTargets = results.reduce((sum, p) => sum + p.targets.filter((t) => t.alreadyPublished).length, 0);
 	const allSuccess = successPackages === totalPackages;
 
 	// Header with overall status
@@ -433,6 +443,10 @@ export function generatePublishResultsSummary(results: PackagePublishResult[], d
 	if (!allSuccess) {
 		sections.push(
 			`> **\u26A0\uFE0F Publishing failed:** ${successPackages}/${totalPackages} packages, ${successTargets}/${totalTargets} targets succeeded\n`,
+		);
+	} else if (skippedTargets > 0) {
+		sections.push(
+			`> **\u26A0\uFE0F Note:** ${skippedTargets} target${skippedTargets > 1 ? "s were" : " was"} already published and skipped\n`,
 		);
 	}
 
@@ -466,7 +480,21 @@ export function generatePublishResultsSummary(results: PackagePublishResult[], d
 
 		for (const result of pkg.targets) {
 			const registry = getRegistryDisplayName(result.target.registry);
-			const targetStatus = result.success ? "\u2705 Published" : "\u274C Failed";
+			let targetStatus: string;
+			if (result.alreadyPublished) {
+				// Show different status based on tarball comparison result
+				if (result.alreadyPublishedReason === "identical") {
+					targetStatus = "\u2705 Skipped (identical)";
+				} else if (result.alreadyPublishedReason === "different") {
+					targetStatus = "\u274C Content mismatch";
+				} else {
+					targetStatus = "\u26A0\uFE0F Skipped (unverified)";
+				}
+			} else if (result.success) {
+				targetStatus = "\u2705 Published";
+			} else {
+				targetStatus = "\u274C Failed";
+			}
 			const packageUrl = result.registryUrl ? `[View](${result.registryUrl})` : "\u{1F6AB}";
 			const provenance = result.attestationUrl
 				? `[View](${result.attestationUrl})`

@@ -45,10 +45,11 @@ describe("publish-packages", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.mocked(core.getInput).mockReturnValue("");
-		vi.mocked(setupRegistryAuth).mockReturnValue({
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
 			success: true,
 			configuredRegistries: [],
 			missingTokens: [],
+			unreachableRegistries: [],
 		});
 	});
 
@@ -131,10 +132,11 @@ describe("publish-packages", () => {
 				publishConfig: { access: "public" },
 			}),
 		);
-		vi.mocked(setupRegistryAuth).mockReturnValue({
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
 			success: true,
 			configuredRegistries: [],
 			missingTokens: [],
+			unreachableRegistries: [],
 		});
 		// Mock exec to call listeners and return non-zero exit code
 		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
@@ -169,10 +171,11 @@ describe("publish-packages", () => {
 				publishConfig: { access: "public" },
 			}),
 		);
-		vi.mocked(setupRegistryAuth).mockReturnValue({
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
 			success: true,
 			configuredRegistries: [],
 			missingTokens: [],
+			unreachableRegistries: [],
 		});
 		vi.mocked(exec.exec).mockRejectedValue(new Error("Command not found"));
 
@@ -197,10 +200,11 @@ describe("publish-packages", () => {
 				publishConfig: { access: "public" },
 			}),
 		);
-		vi.mocked(setupRegistryAuth).mockReturnValue({
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
 			success: true,
 			configuredRegistries: [],
 			missingTokens: [],
+			unreachableRegistries: [],
 		});
 		vi.mocked(exec.exec).mockResolvedValue(0); // Build succeeds
 		vi.mocked(publishToTarget).mockResolvedValue({
@@ -233,10 +237,11 @@ describe("publish-packages", () => {
 				publishConfig: { access: "public" },
 			}),
 		);
-		vi.mocked(setupRegistryAuth).mockReturnValue({
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
 			success: true,
 			configuredRegistries: [],
 			missingTokens: [],
+			unreachableRegistries: [],
 		});
 		vi.mocked(exec.exec).mockResolvedValue(0);
 		vi.mocked(publishToTarget).mockResolvedValue({
@@ -271,10 +276,11 @@ describe("publish-packages", () => {
 				},
 			}),
 		);
-		vi.mocked(setupRegistryAuth).mockReturnValue({
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
 			success: true,
 			configuredRegistries: [],
 			missingTokens: [],
+			unreachableRegistries: [],
 		});
 		vi.mocked(exec.exec).mockResolvedValue(0);
 		vi.mocked(publishToTarget)
@@ -323,10 +329,11 @@ describe("publish-packages", () => {
 				publishConfig: { access: "public" },
 			}),
 		);
-		vi.mocked(setupRegistryAuth).mockReturnValue({
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
 			success: false,
 			configuredRegistries: [],
 			missingTokens: [{ registry: "https://registry.npmjs.org/", tokenEnv: "NPM_TOKEN" }],
+			unreachableRegistries: [],
 		});
 		vi.mocked(exec.exec).mockResolvedValue(0);
 		vi.mocked(publishToTarget).mockResolvedValue({
@@ -339,6 +346,39 @@ describe("publish-packages", () => {
 
 		expect(core.warning).toHaveBeenCalledWith("Some registry tokens are missing:");
 		expect(core.warning).toHaveBeenCalledWith("  - https://registry.npmjs.org/: NPM_TOKEN not set");
+	});
+
+	it("logs error for unreachable registries", async () => {
+		vi.mocked(getChangesetStatus).mockResolvedValue({
+			releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+			changesets: [],
+		});
+		vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+		vi.mocked(fs.existsSync).mockReturnValue(true);
+		vi.mocked(fs.readFileSync).mockReturnValue(
+			JSON.stringify({
+				name: "@org/pkg-a",
+				version: "1.0.0",
+				publishConfig: { access: "public" },
+			}),
+		);
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
+			success: false,
+			configuredRegistries: [],
+			missingTokens: [],
+			unreachableRegistries: [{ registry: "https://invalid.registry.com/", error: "ENOTFOUND" }],
+		});
+		vi.mocked(exec.exec).mockResolvedValue(0);
+		vi.mocked(publishToTarget).mockResolvedValue({
+			success: true,
+			output: "",
+			error: "",
+		});
+
+		await publishPackages("pnpm", "main", false);
+
+		expect(core.error).toHaveBeenCalledWith("Some registries are unreachable:");
+		expect(core.error).toHaveBeenCalledWith("  - https://invalid.registry.com/: ENOTFOUND");
 	});
 
 	it("handles publish target throwing an error", async () => {
@@ -355,10 +395,11 @@ describe("publish-packages", () => {
 				publishConfig: { access: "public" },
 			}),
 		);
-		vi.mocked(setupRegistryAuth).mockReturnValue({
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
 			success: true,
 			configuredRegistries: [],
 			missingTokens: [],
+			unreachableRegistries: [],
 		});
 		vi.mocked(exec.exec).mockResolvedValue(0);
 		vi.mocked(publishToTarget).mockRejectedValue(new Error("Network error"));
@@ -368,6 +409,47 @@ describe("publish-packages", () => {
 		expect(result.success).toBe(false);
 		expect(result.packages[0].targets[0].success).toBe(false);
 		expect(result.packages[0].targets[0].error).toBe("Network error");
+	});
+
+	it("treats already-published versions as successful with warning", async () => {
+		vi.mocked(getChangesetStatus).mockResolvedValue({
+			releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+			changesets: [],
+		});
+		vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+		vi.mocked(fs.existsSync).mockReturnValue(true);
+		vi.mocked(fs.readFileSync).mockReturnValue(
+			JSON.stringify({
+				name: "@org/pkg-a",
+				version: "1.0.0",
+				publishConfig: { access: "public" },
+			}),
+		);
+		vi.mocked(setupRegistryAuth).mockResolvedValue({
+			success: true,
+			configuredRegistries: [],
+			missingTokens: [],
+			unreachableRegistries: [],
+		});
+		vi.mocked(exec.exec).mockResolvedValue(0);
+		// Simulate already-published response
+		vi.mocked(publishToTarget).mockResolvedValue({
+			success: false,
+			output: "",
+			error: "You cannot publish over the previously published versions: 1.0.0",
+			exitCode: 1,
+			alreadyPublished: true,
+		});
+
+		const result = await publishPackages("pnpm", "main", false);
+
+		// Overall success because already-published is not an error
+		expect(result.success).toBe(true);
+		expect(result.packages[0].targets[0].success).toBe(true);
+		expect(result.packages[0].targets[0].alreadyPublished).toBe(true);
+		// Should emit warning, not error
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("already published"));
+		expect(core.error).not.toHaveBeenCalledWith(expect.stringContaining("Failed to publish"));
 	});
 
 	describe("pre-detected releases", () => {
@@ -381,10 +463,11 @@ describe("publish-packages", () => {
 					publishConfig: { access: "public" },
 				}),
 			);
-			vi.mocked(setupRegistryAuth).mockReturnValue({
+			vi.mocked(setupRegistryAuth).mockResolvedValue({
 				success: true,
 				configuredRegistries: [],
 				missingTokens: [],
+				unreachableRegistries: [],
 			});
 			vi.mocked(exec.exec).mockResolvedValue(0);
 			vi.mocked(publishToTarget).mockResolvedValue({
@@ -426,10 +509,11 @@ describe("publish-packages", () => {
 					publishConfig: { access: "public" },
 				}),
 			);
-			vi.mocked(setupRegistryAuth).mockReturnValue({
+			vi.mocked(setupRegistryAuth).mockResolvedValue({
 				success: true,
 				configuredRegistries: [],
 				missingTokens: [],
+				unreachableRegistries: [],
 			});
 			vi.mocked(exec.exec).mockResolvedValue(0);
 			vi.mocked(publishToTarget).mockResolvedValue({
@@ -453,10 +537,11 @@ describe("publish-packages", () => {
 					publishConfig: { access: "public" },
 				}),
 			);
-			vi.mocked(setupRegistryAuth).mockReturnValue({
+			vi.mocked(setupRegistryAuth).mockResolvedValue({
 				success: true,
 				configuredRegistries: [],
 				missingTokens: [],
+				unreachableRegistries: [],
 			});
 			vi.mocked(exec.exec).mockResolvedValue(0);
 			vi.mocked(publishToTarget).mockResolvedValue({

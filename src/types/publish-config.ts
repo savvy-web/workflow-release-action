@@ -202,6 +202,14 @@ export interface PackagePublishValidation {
 }
 
 /**
+ * Skip reason when a version is already published
+ * - "identical": Local tarball matches remote (safe to skip)
+ * - "different": Local tarball differs from remote (error - content mismatch)
+ * - "unknown": Could not compare (treat as warning)
+ */
+export type AlreadyPublishedReason = "identical" | "different" | "unknown";
+
+/**
  * Result of actually publishing a target
  */
 export interface PublishResult {
@@ -211,6 +219,14 @@ export interface PublishResult {
 	exitCode?: number; // Exit code from publish command
 	registryUrl?: string; // URL to the published package
 	attestationUrl?: string; // URL to provenance/attestation
+	/** True if publish failed because version already exists */
+	alreadyPublished?: boolean;
+	/** Reason for already published state - helps determine if it's safe to skip */
+	alreadyPublishedReason?: AlreadyPublishedReason;
+	/** Local tarball integrity (shasum) */
+	localIntegrity?: string;
+	/** Remote tarball integrity (shasum) from registry */
+	remoteIntegrity?: string;
 }
 
 /**
@@ -231,4 +247,5 @@ export interface AuthSetupResult {
 	success: boolean;
 	configuredRegistries: string[];
 	missingTokens: Array<{ registry: string; tokenEnv: string }>;
+	unreachableRegistries: Array<{ registry: string; error: string }>;
 }

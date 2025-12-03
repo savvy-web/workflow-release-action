@@ -147,12 +147,20 @@ export async function publishPackages(
 
 	// Setup authentication for all registries
 	core.info("Setting up registry authentication...");
-	const authResult = setupRegistryAuth(allTargets);
+	const authResult = await setupRegistryAuth(allTargets);
 
 	if (!authResult.success) {
-		core.warning("Some registry tokens are missing:");
-		for (const missing of authResult.missingTokens) {
-			core.warning(`  - ${missing.registry}: ${missing.tokenEnv} not set`);
+		if (authResult.missingTokens.length > 0) {
+			core.warning("Some registry tokens are missing:");
+			for (const missing of authResult.missingTokens) {
+				core.warning(`  - ${missing.registry}: ${missing.tokenEnv} not set`);
+			}
+		}
+		if (authResult.unreachableRegistries.length > 0) {
+			core.error("Some registries are unreachable:");
+			for (const unreachable of authResult.unreachableRegistries) {
+				core.error(`  - ${unreachable.registry}: ${unreachable.error}`);
+			}
 		}
 	}
 
@@ -219,15 +227,23 @@ export async function publishPackages(
 			try {
 				const publishResult = await publishToTarget(target, dryRun);
 
+				// Determine if this is a safe skip or an error
+				// "different" means tarball content mismatch - this is an error
+				const isDifferentContent = publishResult.alreadyPublishedReason === "different";
+				const isSafeSkip = publishResult.alreadyPublished === true && !isDifferentContent;
+				const effectiveSuccess = publishResult.success || isSafeSkip;
+
 				const result: TargetPublishResult = {
 					target,
-					success: publishResult.success,
+					success: effectiveSuccess,
 					registryUrl: publishResult.registryUrl,
 					attestationUrl: publishResult.attestationUrl,
-					error: publishResult.success ? undefined : publishResult.error,
+					error: effectiveSuccess ? undefined : publishResult.error,
 					stdout: publishResult.output,
 					stderr: publishResult.error,
 					exitCode: publishResult.exitCode,
+					alreadyPublished: publishResult.alreadyPublished,
+					alreadyPublishedReason: publishResult.alreadyPublishedReason,
 				};
 
 				targetResults.push(result);
@@ -240,6 +256,23 @@ export async function publishPackages(
 					}
 					if (publishResult.attestationUrl) {
 						core.info(`  Provenance: ${publishResult.attestationUrl}`);
+					}
+				} else if (publishResult.alreadyPublished) {
+					if (isDifferentContent) {
+						// Content mismatch is an actual error
+						allTargetsSuccess = false;
+						core.error(`✗ Version already published to ${registryName} with DIFFERENT content!`);
+						core.error(`  Local shasum:  ${publishResult.localIntegrity}`);
+						core.error(`  Remote shasum: ${publishResult.remoteIntegrity}`);
+						core.error(`  This indicates the same version was published with different files.`);
+					} else if (publishResult.alreadyPublishedReason === "identical") {
+						// Identical content - safe to skip
+						successfulTargets++;
+						core.info(`✓ Version already published to ${registryName} with identical content - skipping`);
+					} else {
+						// Unknown - couldn't compare, treat as warning
+						successfulTargets++;
+						core.warning(`⚠ Version already published to ${registryName} - skipping (could not verify content)`);
 					}
 				} else {
 					allTargetsSuccess = false;
