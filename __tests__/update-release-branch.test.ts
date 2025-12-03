@@ -192,7 +192,8 @@ describe("update-release-branch", () => {
 		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("[DRY RUN]"));
 	});
 
-	it("should handle missing open PR", async () => {
+	it("should create new PR when no existing PR found", async () => {
+		// No open PRs and no closed PRs
 		mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
 
 		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
@@ -207,7 +208,23 @@ describe("update-release-branch", () => {
 		const result = await updateReleaseBranch();
 
 		expect(result.success).toBe(true);
-		expect(result.prNumber).toBeNull();
+		// Should create a new PR (mock returns number 123)
+		expect(result.prNumber).toBe(123);
+		expect(mockOctokit.rest.pulls.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				owner: "test-owner",
+				repo: "test-repo",
+				head: "changeset-release/main",
+				base: "main",
+			}),
+		);
+		expect(mockOctokit.rest.issues.addLabels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				issue_number: 123,
+				labels: ["automated", "release"],
+			}),
+		);
+		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Created new release PR #123"));
 	});
 
 	it("should use npm command for npm package manager", async () => {
@@ -260,7 +277,7 @@ describe("update-release-branch", () => {
 		expect(exec.exec).toHaveBeenCalledWith("yarn", ["ci:version"], expect.any(Object));
 	});
 
-	it("should handle errors when checking for PR", async () => {
+	it("should create new PR when checking for PR fails with error", async () => {
 		mockOctokit.rest.pulls.list.mockRejectedValue(new Error("API Error"));
 
 		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
@@ -275,8 +292,12 @@ describe("update-release-branch", () => {
 		const result = await updateReleaseBranch();
 
 		expect(result.success).toBe(true);
-		expect(result.prNumber).toBeNull();
+		// Should warn about the error and create a new PR
 		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find PR"));
+		// Should create a new PR (mock returns number 123)
+		expect(result.prNumber).toBe(123);
+		expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Created new release PR #123"));
 	});
 
 	it("should find and reopen a closed PR after force push", async () => {
@@ -311,7 +332,7 @@ describe("update-release-branch", () => {
 		expect(core.info).toHaveBeenCalledWith("✓ Reopened PR #789");
 	});
 
-	it("should not reopen a merged PR", async () => {
+	it("should create new PR when only merged PRs exist (not reopen merged PR)", async () => {
 		// First call returns no open PRs, second call returns a merged PR
 		mockOctokit.rest.pulls.list
 			.mockResolvedValueOnce({ data: [] }) // open PRs
@@ -331,8 +352,12 @@ describe("update-release-branch", () => {
 		const result = await updateReleaseBranch();
 
 		expect(result.success).toBe(true);
-		expect(result.prNumber).toBeNull();
-		expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+		// Should NOT try to reopen the merged PR
+		expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalledWith(expect.objectContaining({ state: "open" }));
+		// Should create a new PR instead (mock returns number 123)
+		expect(result.prNumber).toBe(123);
+		expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Created new release PR #123"));
 	});
 
 	it("should handle error when reopening PR", async () => {
@@ -802,5 +827,56 @@ describe("update-release-branch", () => {
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(0);
+	});
+
+	it("should retry PR creation on failure", async () => {
+		// No open PRs and no closed PRs
+		mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+		// First PR creation fails, second succeeds
+		let createCallCount = 0;
+		mockOctokit.rest.pulls.create.mockImplementation(async () => {
+			createCallCount++;
+			if (createCallCount === 1) {
+				throw new Error("Network error");
+			}
+			return { data: { number: 999, html_url: "https://github.com/test/pull/999" } };
+		});
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		const result = await updateReleaseBranch();
+
+		expect(result.success).toBe(true);
+		expect(result.prNumber).toBe(999);
+		expect(createCallCount).toBe(2);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("PR creation failed, retrying"));
+		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Created new release PR #999"));
+	});
+
+	it("should log dry-run message when no PR found in dry-run mode", async () => {
+		// No open PRs and no closed PRs
+		mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+		vi.mocked(core.getBooleanInput).mockImplementation((name: string) => {
+			if (name === "dry-run") return true;
+			return false;
+		});
+
+		const result = await updateReleaseBranch();
+
+		expect(result.success).toBe(true);
+		expect(result.prNumber).toBeNull();
+		// Should NOT create a PR in dry-run mode
+		expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+		// Should log dry-run message
+		expect(core.info).toHaveBeenCalledWith("[DRY RUN] Would create new release PR (no existing PR found)");
 	});
 });
