@@ -5,6 +5,7 @@ import { context } from "@actions/github";
 
 import { checkReleaseBranch } from "./utils/check-release-branch.js";
 import { cleanupValidationChecks } from "./utils/cleanup-validation-checks.js";
+import { closeLinkedIssues } from "./utils/close-linked-issues.js";
 import { createGitHubReleases } from "./utils/create-github-releases.js";
 import { createReleaseBranch } from "./utils/create-release-branch.js";
 import { createValidationCheck } from "./utils/create-validation-check.js";
@@ -1005,6 +1006,36 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 
 		logger.endStep();
 
+		// Step 4: Close linked issues
+		let closedIssuesResult: { closedCount: number; failedCount: number } = { closedCount: 0, failedCount: 0 };
+		if (mergedPRNumber) {
+			logger.step(4, "Close Linked Issues");
+
+			try {
+				const result = await closeLinkedIssues(inputs.token, mergedPRNumber, inputs.dryRun);
+
+				closedIssuesResult = { closedCount: result.closedCount, failedCount: result.failedCount };
+				core.setOutput("closed_issues_count", result.closedCount);
+				core.setOutput("failed_issues_count", result.failedCount);
+				core.setOutput("closed_issues", JSON.stringify(result.issues));
+
+				if (result.closedCount > 0) {
+					logger.success(`Closed ${result.closedCount} linked issue(s)`);
+				} else {
+					logger.info("No linked issues to close");
+				}
+
+				if (result.failedCount > 0) {
+					logger.warn(`Failed to close ${result.failedCount} issue(s)`);
+				}
+			} catch (error) {
+				logger.warn(`Failed to close linked issues: ${error instanceof Error ? error.message : String(error)}`);
+				// Don't fail the workflow if issue closing fails - publishing already succeeded
+			}
+
+			logger.endStep();
+		}
+
 		// Write job summary
 		await core.summary
 			.addHeading("🚀 Release Published", 1)
@@ -1015,6 +1046,11 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 			.addList(tagStrategy.tags.map((t) => `\`${t.name}\``))
 			.addHeading("📝 GitHub Releases", 2)
 			.addList(releasesResult.releases.map((r) => `[${r.tag}](${r.url})`))
+			.addRaw(
+				closedIssuesResult.closedCount > 0
+					? `\n## 🔒 Closed Issues\n\n${closedIssuesResult.closedCount} linked issue(s) were closed.\n`
+					: "",
+			)
 			.write();
 
 		logger.phaseComplete(3);
