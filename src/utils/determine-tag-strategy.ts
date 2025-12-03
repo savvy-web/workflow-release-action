@@ -1,5 +1,6 @@
 import * as core from "@actions/core";
 import type { PackagePublishResult } from "./generate-publish-summary.js";
+import { getAllWorkspacePackages, readChangesetConfig } from "./release-summary-helpers.js";
 
 /**
  * Tag strategy result
@@ -26,13 +27,65 @@ export interface TagInfo {
 }
 
 /**
+ * Determines if the repository requires per-package tags (is a "monorepo" for tagging purposes)
+ *
+ * @remarks
+ * A repository needs per-package tags when:
+ * - Multiple publishable packages exist AND they are NOT all in the same fixed group
+ *
+ * A repository uses single version tags when:
+ * - Only 1 publishable package exists, OR
+ * - All publishable packages are in the same fixed group
+ *
+ * A package is "publishable" if:
+ * - It has publishConfig.targets or publishConfig.access, OR
+ * - It is not marked as private
+ *
+ * @returns True if per-package tags are needed, false for single version tag
+ */
+export function isMonorepoForTagging(): boolean {
+	const allPackages = getAllWorkspacePackages();
+	const changesetConfig = readChangesetConfig();
+
+	// Filter to publishable packages
+	// A package is publishable if it has publish config OR is not private
+	const publishablePackages = allPackages.filter((pkg) => pkg.hasPublishConfig || pkg.targetCount > 0 || !pkg.private);
+
+	core.debug(`Found ${publishablePackages.length} publishable packages out of ${allPackages.length} total`);
+
+	// Single publishable package → single tag
+	if (publishablePackages.length <= 1) {
+		core.debug("Single publishable package detected, using single tag strategy");
+		return false;
+	}
+
+	// Check if all publishable packages are in the same fixed group
+	if (changesetConfig?.fixed) {
+		const publishableNames = new Set(publishablePackages.map((p) => p.name));
+
+		for (const fixedGroup of changesetConfig.fixed) {
+			// Check if all publishable packages are in this fixed group
+			const allInGroup = [...publishableNames].every((name) => fixedGroup.includes(name));
+			if (allInGroup) {
+				core.debug(`All publishable packages are in fixed group: [${fixedGroup.join(", ")}]`);
+				return false;
+			}
+		}
+	}
+
+	// Multiple publishable packages not all in same fixed group → per-package tags
+	core.debug("Multiple publishable packages with independent/linked versioning, using per-package tags");
+	return true;
+}
+
+/**
  * Determine the tagging strategy for releases
  *
  * @remarks
  * Tagging strategy rules:
- * - Single package → single tag: `v1.0.0`
- * - Fixed versioning (all same version) → single tag: `v1.0.0`
- * - Independent versioning → multiple tags: `@scope/pkg@1.0.0`, `@scope/pkg-b@2.0.0`
+ * - Single-package repo → single tag: `v1.0.0`
+ * - Monorepo with all packages in same fixed group → single tag: `v1.0.0`
+ * - Monorepo with independent/linked versioning → per-package tags: `@scope/pkg@1.0.0`
  *
  * @param publishResults - Results from publishing packages
  * @returns Tag strategy with tags to create
@@ -50,33 +103,41 @@ export function determineTagStrategy(publishResults: PackagePublishResult[]): Ta
 		};
 	}
 
-	// Check if single package
-	if (successfulPackages.length === 1) {
-		const pkg = successfulPackages[0];
-		const tag = `v${pkg.version}`;
-		core.info(`Single package strategy: creating tag ${tag}`);
+	// Check if this is a monorepo that needs per-package tags
+	const needsPerPackageTags = isMonorepoForTagging();
 
-		return {
-			strategy: "single",
-			tags: [
-				{
-					name: tag,
-					packageName: pkg.name,
-					version: pkg.version,
-				},
-			],
-			isFixedVersioning: true,
-		};
-	}
+	if (!needsPerPackageTags) {
+		// Single-package repo or all packages in same fixed group
+		// Check if all released packages have same version (should be true for fixed)
+		const versions = new Set(successfulPackages.map((pkg) => pkg.version));
+		const isFixedVersioning = versions.size === 1;
 
-	// Check if all packages have the same version (fixed versioning)
-	const versions = new Set(successfulPackages.map((pkg) => pkg.version));
-	const isFixedVersioning = versions.size === 1;
+		if (isFixedVersioning) {
+			const version = successfulPackages[0].version;
+			const tag = `v${version}`;
+			const packageNames =
+				successfulPackages.length === 1 ? successfulPackages[0].name : successfulPackages.map((p) => p.name).join(", ");
 
-	if (isFixedVersioning) {
-		const version = successfulPackages[0].version;
-		const tag = `v${version}`;
-		core.info(`Fixed versioning strategy: all packages at ${version}, creating single tag ${tag}`);
+			core.info(`Single tag strategy: creating tag ${tag} for ${packageNames}`);
+
+			return {
+				strategy: "single",
+				tags: [
+					{
+						name: tag,
+						packageName: packageNames,
+						version,
+					},
+				],
+				isFixedVersioning: true,
+			};
+		}
+
+		// Edge case: multiple packages released with different versions but not a monorepo
+		// This shouldn't happen in practice, but handle it by using highest version
+		const highestVersion = [...versions].sort().pop() || successfulPackages[0].version;
+		const tag = `v${highestVersion}`;
+		core.warning(`Unexpected: multiple versions in single-tag mode. Using highest version: ${tag}`);
 
 		return {
 			strategy: "single",
@@ -84,15 +145,15 @@ export function determineTagStrategy(publishResults: PackagePublishResult[]): Ta
 				{
 					name: tag,
 					packageName: successfulPackages.map((p) => p.name).join(", "),
-					version,
+					version: highestVersion,
 				},
 			],
-			isFixedVersioning: true,
+			isFixedVersioning: false,
 		};
 	}
 
-	// Independent versioning - create tag per package
-	core.info(`Independent versioning strategy: creating ${successfulPackages.length} tags`);
+	// Monorepo with independent/linked versioning - create tag per package
+	core.info(`Per-package tag strategy: creating ${successfulPackages.length} tags`);
 
 	const tags = successfulPackages.map((pkg) => {
 		// Use npm-style tags for scoped packages: @scope/pkg@1.0.0
@@ -108,10 +169,14 @@ export function determineTagStrategy(publishResults: PackagePublishResult[]): Ta
 		};
 	});
 
+	// Check if all released packages happen to have same version
+	const versions = new Set(successfulPackages.map((pkg) => pkg.version));
+	const isFixedVersioning = versions.size === 1;
+
 	return {
 		strategy: "multiple",
 		tags,
-		isFixedVersioning: false,
+		isFixedVersioning,
 	};
 }
 
