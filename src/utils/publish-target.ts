@@ -64,12 +64,79 @@ function isVersionAlreadyPublished(output: string, error: string): boolean {
 }
 
 /**
- * Get local tarball integrity by running npm pack --json
+ * Get the command to run npm operations
+ *
+ * This is the primary wrapper for running npm commands across different package managers.
+ * All package managers use their "execute" command to run npm.
+ *
+ * @remarks
+ * - npm: `npx npm <args>`
+ * - pnpm: `pnpm dlx npm <args>`
+ * - yarn: `yarn npm <args>`
+ * - bun: `bunx npm <args>`
+ *
+ * @param packageManager - The package manager being used
+ * @returns Command and base args to prepend before npm arguments
  */
-async function getLocalTarballIntegrity(directory: string): Promise<string | undefined> {
+function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
+	switch (packageManager) {
+		case "pnpm":
+			return { cmd: "pnpm", baseArgs: ["dlx", "npm"] };
+		case "yarn":
+			return { cmd: "yarn", baseArgs: ["npm"] };
+		case "bun":
+			return { cmd: "bunx", baseArgs: ["npm"] };
+		default:
+			return { cmd: "npx", baseArgs: ["npm"] };
+	}
+}
+
+/**
+ * Get the publish command for a package manager
+ *
+ * @remarks
+ * For publish, pnpm and bun have native publish commands that work directly,
+ * while yarn requires its npm wrapper.
+ * - npm: `npm publish`
+ * - pnpm: `pnpm publish` (native)
+ * - yarn: `yarn npm publish` (yarn's npm wrapper)
+ * - bun: `bun publish` (native)
+ */
+function getPublishCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
+	switch (packageManager) {
+		case "yarn":
+			// Yarn uses "yarn npm publish" for publishing to npm registries
+			return { cmd: "yarn", baseArgs: ["npm"] };
+		default:
+			// pnpm and bun have native publish commands
+			return { cmd: packageManager, baseArgs: [] };
+	}
+}
+
+/**
+ * Get the npx equivalent for a package manager (for running external tools)
+ */
+function getNpxCommand(packageManager: string): { cmd: string; args: string[] } {
+	switch (packageManager) {
+		case "pnpm":
+			return { cmd: "pnpm", args: ["dlx"] };
+		case "yarn":
+			return { cmd: "yarn", args: ["dlx"] };
+		case "bun":
+			return { cmd: "bunx", args: [] };
+		default:
+			return { cmd: "npx", args: [] };
+	}
+}
+
+/**
+ * Get local tarball integrity by running npm pack --json --dry-run
+ */
+async function getLocalTarballIntegrity(directory: string, packageManager: string): Promise<string | undefined> {
 	let output = "";
+	const npmCmd = getNpmCommand(packageManager);
 	try {
-		await exec.exec("npm", ["pack", "--json", "--dry-run"], {
+		await exec.exec(npmCmd.cmd, [...npmCmd.baseArgs, "pack", "--json", "--dry-run"], {
 			cwd: directory,
 			silent: true,
 			listeners: {
@@ -80,7 +147,7 @@ async function getLocalTarballIntegrity(directory: string): Promise<string | und
 			ignoreReturnCode: true,
 		});
 
-		// npm pack --json returns an array of package info
+		// pack --json returns an array of package info
 		const parsed = JSON.parse(output) as Array<{ shasum?: string; integrity?: string }>;
 		// Return shasum (SHA-1) for comparison - it's more universally available
 		return parsed[0]?.shasum;
@@ -91,22 +158,24 @@ async function getLocalTarballIntegrity(directory: string): Promise<string | und
 }
 
 /**
- * Get remote tarball integrity from registry
+ * Get remote tarball integrity from registry using npm view
  */
 async function getRemoteTarballIntegrity(
 	packageName: string,
 	version: string,
 	registry: string | null,
+	packageManager: string,
 ): Promise<string | undefined> {
 	let output = "";
-	const args = ["view", `${packageName}@${version}`, "dist.shasum"];
+	const npmCmd = getNpmCommand(packageManager);
+	const args = [...npmCmd.baseArgs, "view", `${packageName}@${version}`, "dist.shasum"];
 
 	if (registry) {
 		args.push("--registry", registry);
 	}
 
 	try {
-		await exec.exec("npm", args, {
+		await exec.exec(npmCmd.cmd, args, {
 			silent: true,
 			listeners: {
 				stdout: (data: Buffer) => {
@@ -129,6 +198,7 @@ async function getRemoteTarballIntegrity(
  */
 async function compareTarballIntegrity(
 	target: ResolvedTarget,
+	packageManager: string,
 ): Promise<{ reason: AlreadyPublishedReason; localIntegrity?: string; remoteIntegrity?: string }> {
 	const pkgJsonPath = path.join(target.directory, "package.json");
 	if (!fs.existsSync(pkgJsonPath)) {
@@ -141,8 +211,8 @@ async function compareTarballIntegrity(
 	}
 
 	const [localIntegrity, remoteIntegrity] = await Promise.all([
-		getLocalTarballIntegrity(target.directory),
-		getRemoteTarballIntegrity(pkg.name, pkg.version, target.registry),
+		getLocalTarballIntegrity(target.directory, packageManager),
+		getRemoteTarballIntegrity(pkg.name, pkg.version, target.registry, packageManager),
 	]);
 
 	if (!localIntegrity || !remoteIntegrity) {
@@ -164,7 +234,7 @@ async function compareTarballIntegrity(
 /**
  * Publish to any npm-compatible registry
  */
-async function publishToNpmCompatible(target: ResolvedTarget): Promise<PublishResult> {
+async function publishToNpmCompatible(target: ResolvedTarget, packageManager: string): Promise<PublishResult> {
 	let output = "";
 	let error = "";
 	let exitCode = 0;
@@ -189,12 +259,14 @@ async function publishToNpmCompatible(target: ResolvedTarget): Promise<PublishRe
 		args.push("--tag", target.tag);
 	}
 
+	const publishCmd = getPublishCommand(packageManager);
+	const fullArgs = [...publishCmd.baseArgs, ...args];
 	const registryName = getRegistryDisplayName(target.registry);
-	core.info(`Publishing to ${registryName}: npm ${args.join(" ")}`);
+	core.info(`Publishing to ${registryName}: ${publishCmd.cmd} ${fullArgs.join(" ")}`);
 	core.info(`  Directory: ${target.directory}`);
 
 	try {
-		exitCode = await exec.exec("npm", args, {
+		exitCode = await exec.exec(publishCmd.cmd, fullArgs, {
 			cwd: target.directory,
 			listeners: {
 				stdout: (data: Buffer) => {
@@ -222,7 +294,7 @@ async function publishToNpmCompatible(target: ResolvedTarget): Promise<PublishRe
 
 	if (alreadyPublished) {
 		core.info("Version already published - comparing tarball integrity...");
-		const comparison = await compareTarballIntegrity(target);
+		const comparison = await compareTarballIntegrity(target, packageManager);
 		alreadyPublishedReason = comparison.reason;
 		localIntegrity = comparison.localIntegrity;
 		remoteIntegrity = comparison.remoteIntegrity;
@@ -256,20 +328,21 @@ function isJsrVersionAlreadyPublished(output: string, error: string): boolean {
 /**
  * Publish to JSR
  */
-async function publishToJsr(target: ResolvedTarget): Promise<PublishResult> {
+async function publishToJsr(target: ResolvedTarget, packageManager: string): Promise<PublishResult> {
 	let output = "";
 	let error = "";
 	let exitCode = 0;
 
-	// JSR uses npx jsr publish
+	// JSR uses npx/pnpm dlx/bunx to run jsr publish
 	// --allow-dirty is needed because we're in a git repo with changes
-	const args = ["jsr", "publish", "--allow-dirty"];
+	const npx = getNpxCommand(packageManager);
+	const args = [...npx.args, "jsr", "publish", "--allow-dirty"];
 
-	core.info(`Publishing to JSR: npx ${args.join(" ")}`);
+	core.info(`Publishing to JSR: ${npx.cmd} ${args.join(" ")}`);
 	core.info(`  Directory: ${target.directory}`);
 
 	try {
-		exitCode = await exec.exec("npx", args, {
+		exitCode = await exec.exec(npx.cmd, args, {
 			cwd: target.directory,
 			listeners: {
 				stdout: (data: Buffer) => {
@@ -306,9 +379,14 @@ async function publishToJsr(target: ResolvedTarget): Promise<PublishResult> {
  *
  * @param target - Resolved target to publish to
  * @param dryRun - Whether this is a dry-run (skip actual publish)
+ * @param packageManager - Package manager to use (defaults to "npm")
  * @returns Publish result
  */
-export async function publishToTarget(target: ResolvedTarget, dryRun: boolean): Promise<PublishResult> {
+export async function publishToTarget(
+	target: ResolvedTarget,
+	dryRun: boolean,
+	packageManager: string = "npm",
+): Promise<PublishResult> {
 	if (dryRun) {
 		const registryName = target.protocol === "jsr" ? "JSR" : getRegistryDisplayName(target.registry);
 		core.info(`[DRY RUN] Would publish to ${registryName}: ${target.directory}`);
@@ -322,9 +400,9 @@ export async function publishToTarget(target: ResolvedTarget, dryRun: boolean): 
 
 	switch (target.protocol) {
 		case "npm":
-			return publishToNpmCompatible(target);
+			return publishToNpmCompatible(target, packageManager);
 		case "jsr":
-			return publishToJsr(target);
+			return publishToJsr(target, packageManager);
 		default:
 			throw new Error(`Unknown protocol: ${(target as ResolvedTarget).protocol}`);
 	}

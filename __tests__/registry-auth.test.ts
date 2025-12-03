@@ -349,7 +349,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = await validateRegistriesReachable(targets);
+			const result = await validateRegistriesReachable(targets, "npm");
 			expect(result).toHaveLength(0);
 		});
 
@@ -375,7 +375,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = await validateRegistriesReachable(targets);
+			const result = await validateRegistriesReachable(targets, "npm");
 			expect(result).toHaveLength(1);
 			expect(result[0].registry).toBe("https://invalid.registry.com/");
 			expect(result[0].error).toContain("hostname not found");
@@ -401,7 +401,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = await validateRegistriesReachable(targets);
+			const result = await validateRegistriesReachable(targets, "npm");
 			expect(result).toHaveLength(1);
 			expect(result[0].error).toContain("Connection refused");
 		});
@@ -421,7 +421,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			await validateRegistriesReachable(targets);
+			await validateRegistriesReachable(targets, "npm");
 			// exec should not be called for npm public registry (OIDC)
 			expect(exec.exec).not.toHaveBeenCalled();
 		});
@@ -441,7 +441,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			await validateRegistriesReachable(targets);
+			await validateRegistriesReachable(targets, "npm");
 			// exec should not be called for GitHub Packages (well-known registry)
 			expect(exec.exec).not.toHaveBeenCalled();
 		});
@@ -461,7 +461,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			await validateRegistriesReachable(targets);
+			await validateRegistriesReachable(targets, "npm");
 			// exec should not be called for JSR (non-npm protocol)
 			expect(exec.exec).not.toHaveBeenCalled();
 		});
@@ -490,7 +490,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			await validateRegistriesReachable(targets);
+			await validateRegistriesReachable(targets, "npm");
 			// Should only call exec once for the same registry
 			expect(exec.exec).toHaveBeenCalledTimes(1);
 		});
@@ -517,7 +517,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = await validateRegistriesReachable(targets);
+			const result = await validateRegistriesReachable(targets, "npm");
 			expect(result).toHaveLength(1);
 			expect(result[0].error).toBe("Custom error from npm");
 		});
@@ -542,7 +542,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = await validateRegistriesReachable(targets);
+			const result = await validateRegistriesReachable(targets, "npm");
 			expect(result).toHaveLength(1);
 			expect(result[0].error).toContain("Service unavailable");
 		});
@@ -567,7 +567,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = await validateRegistriesReachable(targets);
+			const result = await validateRegistriesReachable(targets, "npm");
 			expect(result).toHaveLength(1);
 			expect(result[0].error).toContain("timed out");
 		});
@@ -593,7 +593,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = await validateRegistriesReachable(targets);
+			const result = await validateRegistriesReachable(targets, "npm");
 			expect(result).toHaveLength(1);
 			// Should use the combined output when no specific pattern matches
 			expect(result[0].error).toContain("Some generic error message");
@@ -614,7 +614,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = await validateRegistriesReachable(targets);
+			const result = await validateRegistriesReachable(targets, "npm");
 			expect(result).toHaveLength(1);
 			expect(result[0].error).toBe("Exec failed unexpectedly");
 		});
@@ -634,7 +634,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = await validateRegistriesReachable(targets);
+			const result = await validateRegistriesReachable(targets, "npm");
 			expect(result).toHaveLength(1);
 			expect(result[0].error).toBe("Unknown error checking registry");
 		});
@@ -653,7 +653,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			await setupRegistryAuth(targets);
+			await setupRegistryAuth(targets, "npm");
 
 			expect(process.env.GITHUB_TOKEN).toBe("app-token");
 			expect(core.info).toHaveBeenCalledWith("Using GitHub App token for GitHub Packages authentication");
@@ -667,7 +667,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			await setupRegistryAuth(targets);
+			await setupRegistryAuth(targets, "npm");
 
 			expect(process.env.GITHUB_TOKEN).toBe("workflow-token");
 			expect(core.info).toHaveBeenCalledWith(
@@ -679,7 +679,7 @@ describe("registry-auth", () => {
 			vi.mocked(core.getState).mockReturnValue("");
 
 			const targets: ResolvedTarget[] = [];
-			await setupRegistryAuth(targets);
+			await setupRegistryAuth(targets, "npm");
 
 			expect(core.warning).toHaveBeenCalledWith(
 				"No GitHub token available - GitHub Packages and custom registries may fail to authenticate",
@@ -696,7 +696,7 @@ describe("registry-auth", () => {
 			delete process.env.NPM_TOKEN;
 
 			const targets: ResolvedTarget[] = [];
-			await setupRegistryAuth(targets);
+			await setupRegistryAuth(targets, "npm");
 
 			// NPM_TOKEN should not be set - npm uses OIDC trusted publishing
 			expect(process.env.NPM_TOKEN).toBeUndefined();
@@ -712,7 +712,7 @@ describe("registry-auth", () => {
 			delete process.env.JSR_TOKEN;
 
 			const targets: ResolvedTarget[] = [];
-			await setupRegistryAuth(targets);
+			await setupRegistryAuth(targets, "npm");
 
 			// JSR_TOKEN should not be set - JSR uses OIDC
 			expect(process.env.JSR_TOKEN).toBeUndefined();
@@ -729,7 +729,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			await setupRegistryAuth(targets);
+			await setupRegistryAuth(targets, "npm");
 
 			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("custom-token");
 		});
@@ -745,7 +745,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			await setupRegistryAuth(targets);
+			await setupRegistryAuth(targets, "npm");
 
 			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
 			expect(core.info).toHaveBeenCalledWith(
@@ -764,7 +764,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			await setupRegistryAuth(targets);
+			await setupRegistryAuth(targets, "npm");
 
 			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
 			expect(core.info).toHaveBeenCalledWith(
@@ -785,7 +785,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			await setupRegistryAuth(targets);
+			await setupRegistryAuth(targets, "npm");
 
 			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
 			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("explicit-token");
@@ -799,7 +799,7 @@ describe("registry-auth", () => {
 			});
 
 			const targets: ResolvedTarget[] = [];
-			await setupRegistryAuth(targets);
+			await setupRegistryAuth(targets, "npm");
 
 			expect(core.warning).toHaveBeenCalledWith(
 				"No GitHub token available - GitHub Packages and custom registries may fail to authenticate",
@@ -827,7 +827,7 @@ describe("registry-auth", () => {
 				},
 			];
 
-			const result = await setupRegistryAuth(targets);
+			const result = await setupRegistryAuth(targets, "npm");
 
 			expect(result.configuredRegistries).toContain("https://registry.npmjs.org/");
 		});
@@ -858,7 +858,7 @@ describe("registry-auth", () => {
 			];
 
 			process.env.CUSTOM_TOKEN = "test-token";
-			const result = await setupRegistryAuth(targets);
+			const result = await setupRegistryAuth(targets, "npm");
 
 			expect(result.success).toBe(false);
 			expect(result.unreachableRegistries).toHaveLength(1);

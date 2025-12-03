@@ -18,6 +18,41 @@ function getRegistryDisplayName(registry: string | null): string {
 }
 
 /**
+ * Get the publish command for a package manager
+ *
+ * @remarks
+ * - npm: `npm publish`
+ * - pnpm: `pnpm publish`
+ * - yarn: `yarn npm publish` (yarn has its own npm wrapper)
+ * - bun: `bun publish`
+ */
+function getPublishCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
+	switch (packageManager) {
+		case "yarn":
+			// Yarn uses "yarn npm publish" for publishing to npm registries
+			return { cmd: "yarn", baseArgs: ["npm"] };
+		default:
+			return { cmd: packageManager, baseArgs: [] };
+	}
+}
+
+/**
+ * Get the npx equivalent for a package manager
+ */
+function getNpxCommand(packageManager: string): { cmd: string; args: string[] } {
+	switch (packageManager) {
+		case "pnpm":
+			return { cmd: "pnpm", args: ["dlx"] };
+		case "yarn":
+			return { cmd: "yarn", args: ["dlx"] };
+		case "bun":
+			return { cmd: "bunx", args: [] };
+		default:
+			return { cmd: "npx", args: [] };
+	}
+}
+
+/**
  * Parse package statistics from npm dry-run output
  *
  * Extracts package size, unpacked size, and total files from output like:
@@ -42,7 +77,7 @@ function parseNpmDryRunStats(output: string): PackageStats {
 /**
  * Dry-run publish to any npm-compatible registry
  */
-async function dryRunNpmCompatible(target: ResolvedTarget): Promise<DryRunResult> {
+async function dryRunNpmCompatible(target: ResolvedTarget, packageManager: string): Promise<DryRunResult> {
 	let output = "";
 	let error = "";
 	let exitCode = 0;
@@ -67,12 +102,14 @@ async function dryRunNpmCompatible(target: ResolvedTarget): Promise<DryRunResult
 		args.push("--tag", target.tag);
 	}
 
+	const publishCmd = getPublishCommand(packageManager);
+	const fullArgs = [...publishCmd.baseArgs, ...args];
 	const registryName = getRegistryDisplayName(target.registry);
-	core.info(`[Dry Run] Publishing to ${registryName}: npm ${args.join(" ")}`);
+	core.info(`[Dry Run] Publishing to ${registryName}: ${publishCmd.cmd} ${fullArgs.join(" ")}`);
 	core.info(`  Directory: ${target.directory}`);
 
 	try {
-		exitCode = await exec.exec("npm", args, {
+		exitCode = await exec.exec(publishCmd.cmd, fullArgs, {
 			cwd: target.directory,
 			listeners: {
 				stdout: (data: Buffer) => {
@@ -122,18 +159,20 @@ async function dryRunNpmCompatible(target: ResolvedTarget): Promise<DryRunResult
 /**
  * Dry-run publish to JSR
  */
-async function dryRunJsr(target: ResolvedTarget): Promise<DryRunResult> {
+async function dryRunJsr(target: ResolvedTarget, packageManager: string): Promise<DryRunResult> {
 	let output = "";
 	let error = "";
 	let exitCode = 0;
 
-	const args = ["jsr", "publish", "--dry-run"];
+	// JSR uses npx/pnpm dlx/bunx to run jsr publish
+	const npx = getNpxCommand(packageManager);
+	const args = [...npx.args, "jsr", "publish", "--dry-run"];
 
-	core.info(`[Dry Run] Publishing to JSR: npx ${args.join(" ")}`);
+	core.info(`[Dry Run] Publishing to JSR: ${npx.cmd} ${args.join(" ")}`);
 	core.info(`  Directory: ${target.directory}`);
 
 	try {
-		exitCode = await exec.exec("npx", args, {
+		exitCode = await exec.exec(npx.cmd, args, {
 			cwd: target.directory,
 			listeners: {
 				stdout: (data: Buffer) => {
@@ -169,15 +208,15 @@ async function dryRunJsr(target: ResolvedTarget): Promise<DryRunResult> {
  * Run a dry-run publish for a target
  *
  * @param target - Resolved target to publish
- * @param _packageManager - Package manager to use (currently unused, always uses npm for publish)
+ * @param packageManager - Package manager to use
  * @returns Dry-run result
  */
-export async function dryRunPublish(target: ResolvedTarget, _packageManager: string): Promise<DryRunResult> {
+export async function dryRunPublish(target: ResolvedTarget, packageManager: string): Promise<DryRunResult> {
 	switch (target.protocol) {
 		case "npm":
-			return dryRunNpmCompatible(target);
+			return dryRunNpmCompatible(target, packageManager);
 		case "jsr":
-			return dryRunJsr(target);
+			return dryRunJsr(target, packageManager);
 		default:
 			throw new Error(`Unknown protocol: ${(target as ResolvedTarget).protocol}`);
 	}

@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
+import * as exec from "@actions/exec";
 import { context } from "@actions/github";
 
 /**
@@ -61,6 +62,66 @@ function findTarball(directory: string, packageName: string, version: string): s
 }
 
 /**
+ * Get the command to run npm operations
+ *
+ * @remarks
+ * - npm: `npx npm <args>`
+ * - pnpm: `pnpm dlx npm <args>`
+ * - yarn: `yarn npm <args>`
+ * - bun: `bunx npm <args>`
+ */
+function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
+	switch (packageManager) {
+		case "pnpm":
+			return { cmd: "pnpm", baseArgs: ["dlx", "npm"] };
+		case "yarn":
+			return { cmd: "yarn", baseArgs: ["npm"] };
+		case "bun":
+			return { cmd: "bunx", baseArgs: ["npm"] };
+		default:
+			return { cmd: "npx", baseArgs: ["npm"] };
+	}
+}
+
+/**
+ * Create a tarball for a package using npm pack via the configured package manager
+ *
+ * @param directory - Directory containing the package
+ * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
+ * @returns Path to created tarball, or undefined if failed
+ */
+async function createTarball(directory: string, packageManager: string): Promise<string | undefined> {
+	try {
+		let output = "";
+		const npmCmd = getNpmCommand(packageManager);
+		const packArgs = [...npmCmd.baseArgs, "pack", "--json"];
+
+		await exec.exec(npmCmd.cmd, packArgs, {
+			cwd: directory,
+			silent: true,
+			listeners: {
+				stdout: (data: Buffer) => {
+					output += data.toString();
+				},
+			},
+		});
+
+		// Parse JSON output to get filename
+		const packInfo = JSON.parse(output) as Array<{ filename: string }>;
+		if (packInfo.length > 0 && packInfo[0].filename) {
+			const tarballPath = path.join(directory, packInfo[0].filename);
+			if (fs.existsSync(tarballPath)) {
+				return tarballPath;
+			}
+		}
+	} catch (error) {
+		core.debug(`Failed to create tarball: ${error instanceof Error ? error.message : String(error)}`);
+	}
+
+	return undefined;
+}
+
+/**
  * Create a GitHub attestation for a published package
  *
  * @remarks
@@ -76,6 +137,7 @@ function findTarball(directory: string, packageName: string, version: string): s
  * @param version - Version of the package
  * @param directory - Directory containing the package (with tarball)
  * @param dryRun - Whether to skip actual attestation creation
+ * @param packageManager - Package manager to use for creating tarball if needed (defaults to "npm")
  * @returns Promise resolving to attestation result
  */
 export async function createPackageAttestation(
@@ -83,6 +145,7 @@ export async function createPackageAttestation(
 	version: string,
 	directory: string,
 	dryRun: boolean,
+	packageManager: string = "npm",
 ): Promise<AttestationResult> {
 	if (dryRun) {
 		core.info(`[DRY RUN] Would create attestation for ${packageName}@${version}`);
@@ -102,14 +165,19 @@ export async function createPackageAttestation(
 		};
 	}
 
-	// Find the tarball
-	const tarballPath = findTarball(directory, packageName, version);
+	// Find the tarball, or create one if it doesn't exist
+	let tarballPath = findTarball(directory, packageName, version);
 	if (!tarballPath) {
-		core.debug(`No tarball found in ${directory} for ${packageName}@${version}`);
-		return {
-			success: false,
-			error: `No tarball found for ${packageName}@${version}`,
-		};
+		core.debug(`No tarball found in ${directory} for ${packageName}@${version}, creating one...`);
+		tarballPath = await createTarball(directory, packageManager);
+		if (!tarballPath) {
+			core.debug(`Failed to create tarball in ${directory}`);
+			return {
+				success: false,
+				error: `No tarball found and could not create one for ${packageName}@${version}`,
+			};
+		}
+		core.debug(`Created tarball: ${tarballPath}`);
 	}
 
 	const tarballName = path.basename(tarballPath);

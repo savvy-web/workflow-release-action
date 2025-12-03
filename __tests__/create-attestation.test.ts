@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as core from "@actions/core";
+import * as exec from "@actions/exec";
 import { context } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPackageAttestation } from "../src/utils/create-attestation.js";
@@ -7,6 +8,7 @@ import { createPackageAttestation } from "../src/utils/create-attestation.js";
 // Mock dependencies
 vi.mock("node:fs");
 vi.mock("@actions/core");
+vi.mock("@actions/exec");
 vi.mock("@actions/github", () => ({
 	context: {
 		repo: {
@@ -50,15 +52,152 @@ describe("create-attestation", () => {
 			expect(result.error).toBe("No GITHUB_TOKEN available for attestation creation");
 		});
 
-		it("returns error when no tarball is found", async () => {
+		it("returns error when no tarball is found and cannot be created", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 			vi.mocked(fs.existsSync).mockReturnValue(false);
 			vi.mocked(fs.readdirSync).mockReturnValue([]);
+			// Mock npm pack to fail
+			vi.mocked(exec.exec).mockRejectedValue(new Error("npm pack failed"));
 
 			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
 
 			expect(result.success).toBe(false);
-			expect(result.error).toBe("No tarball found for @org/pkg@1.0.0");
+			expect(result.error).toBe("No tarball found and could not create one for @org/pkg@1.0.0");
+		});
+
+		it("creates tarball via npm pack when not found", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			let existsCallCount = 0;
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				existsCallCount++;
+				// First call (findTarball's expected name check) returns false
+				// Second call (createTarball's check after npm pack) returns true
+				if (existsCallCount <= 1) return false;
+				return String(path).endsWith("org-pkg-1.0.0.tgz");
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue([]);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			// Mock npm pack to succeed with JSON output
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(JSON.stringify([{ filename: "org-pkg-1.0.0.tgz" }])));
+				}
+				return 0;
+			});
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+				tlogID: "67890",
+			});
+
+			// Default package manager is npm, which uses npx npm
+			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+
+			expect(result.success).toBe(true);
+			expect(exec.exec).toHaveBeenCalledWith("npx", ["npm", "pack", "--json"], expect.any(Object));
+		});
+
+		it("uses specified package manager for tarball creation", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			let existsCallCount = 0;
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				existsCallCount++;
+				if (existsCallCount <= 1) return false;
+				return String(path).endsWith("org-pkg-1.0.0.tgz");
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue([]);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(JSON.stringify([{ filename: "org-pkg-1.0.0.tgz" }])));
+				}
+				return 0;
+			});
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+				tlogID: "67890",
+			});
+
+			// Use pnpm as package manager, which uses pnpm dlx npm
+			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false, "pnpm");
+
+			expect(result.success).toBe(true);
+			expect(exec.exec).toHaveBeenCalledWith("pnpm", ["dlx", "npm", "pack", "--json"], expect.any(Object));
+		});
+
+		it("uses yarn npm for tarball creation with yarn", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			let existsCallCount = 0;
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				existsCallCount++;
+				if (existsCallCount <= 1) return false;
+				return String(path).endsWith("org-pkg-1.0.0.tgz");
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue([]);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(JSON.stringify([{ filename: "org-pkg-1.0.0.tgz" }])));
+				}
+				return 0;
+			});
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+				tlogID: "67890",
+			});
+
+			// Use yarn as package manager, which uses yarn npm
+			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false, "yarn");
+
+			expect(result.success).toBe(true);
+			expect(exec.exec).toHaveBeenCalledWith("yarn", ["npm", "pack", "--json"], expect.any(Object));
+		});
+
+		it("uses bunx npm for tarball creation with bun", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			let existsCallCount = 0;
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				existsCallCount++;
+				if (existsCallCount <= 1) return false;
+				return String(path).endsWith("org-pkg-1.0.0.tgz");
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue([]);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(JSON.stringify([{ filename: "org-pkg-1.0.0.tgz" }])));
+				}
+				return 0;
+			});
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+				tlogID: "67890",
+			});
+
+			// Use bun as package manager, which uses bunx npm
+			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false, "bun");
+
+			expect(result.success).toBe(true);
+			expect(exec.exec).toHaveBeenCalledWith("bunx", ["npm", "pack", "--json"], expect.any(Object));
 		});
 
 		it("finds tarball with scoped package name", async () => {

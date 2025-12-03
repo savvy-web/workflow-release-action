@@ -112,7 +112,7 @@ export async function validatePublish(
 
 	// Setup authentication for all registries
 	core.info("Setting up registry authentication");
-	const authResult = await setupRegistryAuth(allTargets);
+	const authResult = await setupRegistryAuth(allTargets, packageManager);
 
 	// Track unreachable registries to skip them during validation
 	const unreachableRegistrySet = new Set(authResult.unreachableRegistries.map((r) => r.registry));

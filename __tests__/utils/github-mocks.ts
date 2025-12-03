@@ -110,8 +110,8 @@ export function createMockCore(): MockCore {
  * @example
  * ```typescript
  * const mockExec = createMockExec();
- * await exec.exec("npm", ["install"]);
- * expect(mockExec.exec).toHaveBeenCalledWith("npm", ["install"]);
+ * await exec.exec("biome", ["check"]);
+ * expect(mockExec.exec).toHaveBeenCalledWith("biome", ["check"], expect.anything());
  * ```
  */
 export function createMockExec(defaultReturnValue: number = 0): MockExec {

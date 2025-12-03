@@ -148,7 +148,7 @@ export async function publishPackages(
 
 	// Setup authentication for all registries
 	core.info("Setting up registry authentication...");
-	const authResult = await setupRegistryAuth(allTargets);
+	const authResult = await setupRegistryAuth(allTargets, packageManager);
 
 	// Track unreachable registries to skip them during publish
 	const unreachableRegistrySet = new Set(authResult.unreachableRegistries.map((r) => r.registry));
@@ -246,7 +246,7 @@ export async function publishPackages(
 			core.info(`Publishing to ${registryName}...`);
 
 			try {
-				const publishResult = await publishToTarget(target, dryRun);
+				const publishResult = await publishToTarget(target, dryRun, packageManager);
 
 				// Determine if this is a safe skip or an error
 				// "different" means tarball content mismatch - this is an error
@@ -314,9 +314,18 @@ export async function publishPackages(
 		}
 
 		// Create GitHub attestation for successfully published packages
+		// Use the directory from the first successful target (where the tarball was created by npm publish)
 		let githubAttestationUrl: string | undefined;
-		if (allTargetsSuccess && targetResults.some((t) => t.success)) {
-			const attestationResult = await createPackageAttestation(name, packageInfo.version, packageInfo.path, dryRun);
+		const firstSuccessfulTarget = targetResults.find((t) => t.success);
+		if (allTargetsSuccess && firstSuccessfulTarget) {
+			const attestationDir = firstSuccessfulTarget.target.directory;
+			const attestationResult = await createPackageAttestation(
+				name,
+				packageInfo.version,
+				attestationDir,
+				dryRun,
+				packageManager,
+			);
 			if (attestationResult.success && attestationResult.attestationUrl) {
 				githubAttestationUrl = attestationResult.attestationUrl;
 			}

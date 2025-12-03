@@ -9,6 +9,34 @@ import { registryToEnvName } from "./resolve-targets.js";
 const REGISTRY_CHECK_TIMEOUT_MS = 10000;
 
 /**
+ * Get the command to run npm operations
+ *
+ * This is the primary wrapper for running npm commands across different package managers.
+ * All package managers use their "execute" command to run npm.
+ *
+ * @remarks
+ * - npm: `npx npm <args>`
+ * - pnpm: `pnpm dlx npm <args>`
+ * - yarn: `yarn npm <args>`
+ * - bun: `bunx npm <args>`
+ *
+ * @param packageManager - The package manager being used
+ * @returns Command and base args to prepend before npm arguments
+ */
+function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
+	switch (packageManager) {
+		case "pnpm":
+			return { cmd: "pnpm", baseArgs: ["dlx", "npm"] };
+		case "yarn":
+			return { cmd: "yarn", baseArgs: ["npm"] };
+		case "bun":
+			return { cmd: "bunx", baseArgs: ["npm"] };
+		default:
+			return { cmd: "npx", baseArgs: ["npm"] };
+	}
+}
+
+/**
  * Check if a registry uses OIDC-based authentication
  *
  * @remarks
@@ -34,9 +62,13 @@ function isOidcRegistry(registry: string | null): boolean {
  * because it tests the actual npm protocol that will be used for publishing.
  *
  * @param registry - Registry URL to check
+ * @param packageManager - Package manager to use for running npm commands
  * @returns Object with reachable status and error message if failed
  */
-async function checkRegistryReachable(registry: string): Promise<{ reachable: boolean; error?: string }> {
+async function checkRegistryReachable(
+	registry: string,
+	packageManager: string,
+): Promise<{ reachable: boolean; error?: string }> {
 	let output = "";
 	let errorOutput = "";
 
@@ -49,7 +81,9 @@ async function checkRegistryReachable(registry: string): Promise<{ reachable: bo
 
 	// Create the exec promise
 	const execPromise = (async (): Promise<{ reachable: boolean; error?: string }> => {
-		const exitCode = await exec.exec("npm", ["ping", "--registry", registry, "--json"], {
+		const npmCmd = getNpmCommand(packageManager);
+		const args = [...npmCmd.baseArgs, "ping", "--registry", registry, "--json"];
+		const exitCode = await exec.exec(npmCmd.cmd, args, {
 			silent: true,
 			listeners: {
 				stdout: (data: Buffer) => {
@@ -131,10 +165,12 @@ async function checkRegistryReachable(registry: string): Promise<{ reachable: bo
  * npm from hanging indefinitely when a registry URL is misconfigured.
  *
  * @param targets - Array of resolved targets to validate
+ * @param packageManager - Package manager to use for running npm commands
  * @returns Array of unreachable registries with error messages
  */
 export async function validateRegistriesReachable(
 	targets: ResolvedTarget[],
+	packageManager: string,
 ): Promise<Array<{ registry: string; error: string }>> {
 	const unreachable: Array<{ registry: string; error: string }> = [];
 	const checkedRegistries = new Set<string>();
@@ -152,7 +188,7 @@ export async function validateRegistriesReachable(
 		if (target.registry.includes("npm.pkg.github.com")) continue;
 
 		core.debug(`Checking registry reachability: ${target.registry}`);
-		const result = await checkRegistryReachable(target.registry);
+		const result = await checkRegistryReachable(target.registry, packageManager);
 
 		if (!result.reachable) {
 			core.warning(`Registry unreachable: ${target.registry} - ${result.error}`);
@@ -306,9 +342,10 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
  * - `https://registry.example.com/=TOKEN` - Use explicit token (optional)
  *
  * @param targets - Array of resolved targets to setup auth for
+ * @param packageManager - Package manager to use for running npm commands
  * @returns Authentication setup result
  */
-export async function setupRegistryAuth(targets: ResolvedTarget[]): Promise<AuthSetupResult> {
+export async function setupRegistryAuth(targets: ResolvedTarget[], packageManager: string): Promise<AuthSetupResult> {
 	// Get tokens from state (set by pre.ts)
 	const appToken = core.getState("token");
 	const githubToken = core.getState("githubToken"); // Optional: workflow's GITHUB_TOKEN for packages:write
@@ -374,7 +411,7 @@ export async function setupRegistryAuth(targets: ResolvedTarget[]): Promise<Auth
 	const validation = validateTokensAvailable(targets);
 
 	// Check custom registries are reachable before attempting to use them
-	const unreachableRegistries = await validateRegistriesReachable(targets);
+	const unreachableRegistries = await validateRegistriesReachable(targets, packageManager);
 
 	// Generate .npmrc for GitHub Packages and custom registries
 	generateNpmrc(targets);

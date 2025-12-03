@@ -123,7 +123,8 @@ describe("validate-publish", () => {
 
 			vi.mocked(exec.exec).mockImplementation(async (cmd, args) => {
 				if (cmd === "pnpm" && args?.includes("changeset")) return 0;
-				if (cmd === "npm" && args?.includes("publish")) return 0;
+				// pnpm is the package manager, so check for pnpm publish
+				if (cmd === "pnpm" && args?.includes("publish")) return 0;
 				return 0;
 			});
 
@@ -290,7 +291,8 @@ describe("validate-publish", () => {
 			});
 
 			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options) => {
-				if (cmd === "npm" && args?.includes("publish")) {
+				// pnpm is the package manager, so check for pnpm publish
+				if (cmd === "pnpm" && args?.includes("publish")) {
 					if (options?.listeners?.stderr) {
 						options.listeners.stderr(Buffer.from("Version conflict"));
 					}
@@ -566,7 +568,8 @@ describe("validate-publish", () => {
 
 			// Simulate version conflict error without existingVersion
 			vi.mocked(exec.exec).mockImplementation(async (cmd, args, options) => {
-				if (cmd === "npm" && args?.includes("publish")) {
+				// pnpm is the package manager
+				if (cmd === "pnpm" && args?.includes("publish")) {
 					if (options?.listeners?.stderr) {
 						options.listeners.stderr(Buffer.from("cannot publish over previously published version"));
 					}
@@ -625,7 +628,8 @@ describe("validate-publish", () => {
 
 			// Simulate failure with empty error message (no stderr output)
 			vi.mocked(exec.exec).mockImplementation(async (cmd, args) => {
-				if (cmd === "npm" && args?.includes("publish")) {
+				// pnpm is the package manager
+				if (cmd === "pnpm" && args?.includes("publish")) {
 					return 1; // Fail without providing stderr
 				}
 				return 0;
@@ -675,7 +679,8 @@ describe("validate-publish", () => {
 					return 0;
 				}
 				// npm ping for custom registry - simulate failure
-				if (cmd === "npm" && args?.includes("ping")) {
+				// pnpm uses: pnpm dlx npm ping --registry ...
+				if (cmd === "pnpm" && args?.includes("dlx") && args?.includes("ping")) {
 					if (options?.listeners?.stderr) {
 						options.listeners.stderr(Buffer.from("npm ERR! ECONNREFUSED"));
 					}

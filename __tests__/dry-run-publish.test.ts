@@ -38,7 +38,7 @@ describe("dry-run-publish", () => {
 			expect(result.versionConflict).toBe(false);
 			expect(result.provenanceReady).toBe(true);
 			expect(exec.exec).toHaveBeenCalledWith(
-				"npm",
+				"pnpm",
 				expect.arrayContaining([
 					"publish",
 					"--dry-run",
@@ -144,7 +144,8 @@ describe("dry-run-publish", () => {
 
 			await dryRunPublish(target, "pnpm");
 
-			expect(exec.exec).toHaveBeenCalledWith("npm", expect.arrayContaining(["--tag", "beta"]), expect.anything());
+			// pnpm is the package manager
+			expect(exec.exec).toHaveBeenCalledWith("pnpm", expect.arrayContaining(["--tag", "beta"]), expect.anything());
 		});
 
 		it("does not add tag flag for latest", async () => {
@@ -386,7 +387,7 @@ npm notice Publishing to https://registry.npmjs.org/ with tag latest and public 
 	});
 
 	describe("dryRunPublish with jsr protocol", () => {
-		it("runs npx jsr publish --dry-run successfully", async () => {
+		it("runs jsr publish --dry-run successfully with pnpm", async () => {
 			vi.mocked(exec.exec).mockResolvedValue(0);
 
 			const target: ResolvedTarget = {
@@ -403,9 +404,10 @@ npm notice Publishing to https://registry.npmjs.org/ with tag latest and public 
 
 			expect(result.success).toBe(true);
 			expect(result.provenanceReady).toBe(true); // JSR always true
+			// pnpm uses "pnpm dlx" instead of "npx"
 			expect(exec.exec).toHaveBeenCalledWith(
-				"npx",
-				["jsr", "publish", "--dry-run"],
+				"pnpm",
+				["dlx", "jsr", "publish", "--dry-run"],
 				expect.objectContaining({
 					cwd: "/test/dist/jsr",
 				}),
