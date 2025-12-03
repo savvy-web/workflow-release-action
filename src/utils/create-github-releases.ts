@@ -5,6 +5,7 @@ import * as exec from "@actions/exec";
 import * as github from "@actions/github";
 import { context } from "@actions/github";
 import type { TagInfo } from "./determine-tag-strategy.js";
+import { findPackagePath } from "./find-package-path.js";
 import type { PackagePublishResult } from "./generate-publish-summary.js";
 
 /**
@@ -249,17 +250,24 @@ export async function createGitHubReleases(
 		let releaseNotes = "";
 
 		for (const pkg of associatedPackages) {
-			// Try to find CHANGELOG in the package directory
-			const pkgPath = path.join(process.cwd(), "packages", pkg.name.replace(/^@[^/]+\//, ""));
-			const changelogPaths = [
-				path.join(pkgPath, "CHANGELOG.md"),
-				path.join(process.cwd(), "CHANGELOG.md"), // Root changelog for single-package repos
-			];
+			// Try to find CHANGELOG in the package directory using workspace-tools
+			const pkgPath = findPackagePath(pkg.name);
+			const changelogPaths: string[] = [];
+
+			if (pkgPath) {
+				changelogPaths.push(path.join(pkgPath, "CHANGELOG.md"));
+			}
+			// Fall back to root changelog for single-package repos
+			changelogPaths.push(path.join(process.cwd(), "CHANGELOG.md"));
 
 			let notes: string | undefined;
 			for (const changelogPath of changelogPaths) {
+				core.debug(`Looking for CHANGELOG at: ${changelogPath}`);
 				notes = extractReleaseNotes(changelogPath, pkg.version);
-				if (notes) break;
+				if (notes) {
+					core.debug(`Found release notes for ${pkg.name}@${pkg.version} in ${changelogPath}`);
+					break;
+				}
 			}
 
 			if (associatedPackages.length > 1) {
