@@ -141,6 +141,29 @@ async function findPackageArtifacts(packagePath: string): Promise<string[]> {
 }
 
 /**
+ * Configure git identity for creating annotated tags
+ *
+ * @remarks
+ * Annotated tags require a committer identity. This function configures
+ * git user.name and user.email based on the GitHub App that created the token.
+ */
+async function configureGitIdentity(): Promise<void> {
+	const appSlug = core.getState("appSlug");
+
+	// Use app identity or fall back to github-actions bot
+	const userName = appSlug ? `${appSlug}[bot]` : "github-actions[bot]";
+	// Use a generic noreply email format - the exact ID doesn't matter for tag creation
+	const userEmail = appSlug
+		? `${appSlug}[bot]@users.noreply.github.com`
+		: "41898282+github-actions[bot]@users.noreply.github.com";
+
+	core.debug(`Configuring git identity: ${userName} <${userEmail}>`);
+
+	await exec.exec("git", ["config", "user.name", userName]);
+	await exec.exec("git", ["config", "user.email", userEmail]);
+}
+
+/**
  * Create a git tag
  *
  * @param tagName - Name of the tag to create
@@ -199,6 +222,11 @@ export async function createGitHubReleases(
 	const errors: string[] = [];
 
 	core.startGroup("Creating GitHub releases");
+
+	// Configure git identity for creating annotated tags (required for non-dry-run)
+	if (!dryRun) {
+		await configureGitIdentity();
+	}
 
 	for (const tag of tags) {
 		core.info(`Processing release for ${tag.name}...`);

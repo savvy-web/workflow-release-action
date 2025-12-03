@@ -387,7 +387,13 @@ describe("create-github-releases", () => {
 				},
 			];
 
-			vi.mocked(exec.exec).mockRejectedValue(new Error("Git tag failed"));
+			// Allow git config calls (for identity setup) but fail the git tag command
+			vi.mocked(exec.exec).mockImplementation(async (_cmd: string, args?: string[]) => {
+				if (args?.includes("tag")) {
+					throw new Error("Git tag failed");
+				}
+				return 0;
+			});
 
 			const result = await createGitHubReleases(tags, publishResults, false);
 
