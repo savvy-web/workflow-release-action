@@ -736,10 +736,14 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 					content: `---\n\n<sub>Updated at ${new Date().toISOString()}</sub>`,
 				});
 
-				const commentBody = `<!-- sticky-comment-id: release-validation -->\n${summaryWriter.build(commentSections)}`;
+				const summaryContent = summaryWriter.build(commentSections);
+				const commentBody = `<!-- sticky-comment-id: release-validation -->\n${summaryContent}`;
 
 				await updateStickyComment(pr.number, commentBody, "release-validation");
 				logger.success("Updated sticky comment on PR");
+
+				// Write job summary with same content
+				await core.summary.addRaw(summaryContent).write();
 			} else {
 				logger.warn("No open PR found for release branch - skipping sticky comment update");
 			}

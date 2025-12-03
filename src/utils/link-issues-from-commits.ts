@@ -164,23 +164,34 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 			? `Found ${linkedIssues.length} linked issue(s) from ${commits.length} commit(s)`
 			: `No issue references found in ${commits.length} commit(s)`;
 
-	// Build check details using summaryWriter (markdown, not HTML)
-	const issuesList =
+	// Build linked issues section using GFM shorthand
+	const issuesContent =
 		linkedIssues.length > 0
-			? summaryWriter.list(
-					linkedIssues.map(
-						(issue) =>
-							`[#${issue.number}](${issue.url}) - ${issue.title} (${issue.state})\n  Referenced by: ${issue.commits.map((sha) => `\`${sha.slice(0, 7)}\``).join(", ")}`,
-					),
-				)
-			: "_No issue references found_";
+			? linkedIssues
+					.map((issue) => {
+						const stateIcon = issue.state === "open" ? "🟢" : "🟣";
+						return `- ${stateIcon} #${issue.number} — ${issue.title}`;
+					})
+					.join("\n")
+			: "_No issue references found in commits_";
+
+	// Build commits section with blockquotes
+	const commitsContent =
+		commits.length > 0
+			? commits
+					.map((commit) => {
+						const shortSha = commit.sha.slice(0, 7);
+						const commitUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${commit.sha}`;
+						// Get first line of commit message
+						const firstLine = commit.message.split("\n")[0];
+						return `[\`${shortSha}\`](${commitUrl})\n> ${firstLine}`;
+					})
+					.join("\n\n")
+			: "_No commits found_";
 
 	const checkDetails = summaryWriter.build([
-		{ heading: "Linked Issues", content: issuesList },
-		{
-			heading: "Commits Analyzed",
-			content: `${commits.length} commit(s) between \`${targetBranch}\` and \`${releaseBranch}\``,
-		},
+		{ heading: "🔗 Linked Issues", level: 3, content: issuesContent },
+		{ heading: "📝 Commits Analyzed", level: 3, content: commitsContent },
 	]);
 
 	const { data: checkRun } = await github.rest.checks.create({
@@ -197,28 +208,6 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 	});
 
 	core.info(`Created check run: ${checkRun.html_url}`);
-
-	// Write job summary using summaryWriter (markdown, not HTML)
-	const issuesTable =
-		linkedIssues.length > 0
-			? summaryWriter.table(
-					["Issue", "Title", "State", "Commits"],
-					linkedIssues.map((issue) => [
-						`[#${issue.number}](${issue.url})`,
-						issue.title,
-						issue.state,
-						issue.commits.length.toString(),
-					]),
-				)
-			: "_No issue references found_";
-
-	const jobSummary = summaryWriter.build([
-		{ heading: checkTitle, content: checkSummary },
-		{ heading: "Linked Issues", level: 3, content: issuesTable },
-		{ heading: "Commits Analyzed", level: 3, content: `${commits.length} commit(s)` },
-	]);
-
-	await summaryWriter.write(jobSummary);
 
 	return {
 		linkedIssues,
