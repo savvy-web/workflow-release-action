@@ -789,14 +789,23 @@ function categorizePreValidationError(
 	// Custom registry errors
 	if (isCustomRegistry) {
 		if (lowerError.includes("401") || lowerError.includes("unauthorized")) {
+			// Extract hostname for the example
+			let hostname = "your-registry.example.com";
+			try {
+				hostname = new URL(registryUrl || "").hostname;
+			} catch {
+				// Use default
+			}
 			return {
 				icon: "\u{1F512}",
 				category: "Custom Registry Auth Error",
 				hint:
-					"Check that the registry token is provided in `registry-tokens` input:\n```yaml\nregistry-tokens: |\n  " +
+					"Check that the registry auth is provided in `custom-registries` input:\n```yaml\ncustom-registries: |\n  " +
 					(registryUrl || "https://your-registry.example.com/") +
-					"=$" +
-					"{{ secrets.YOUR_TOKEN }}\n```",
+					"$" +
+					`{{ secrets.${hostname.toUpperCase().replace(/[.-]/g, "_")}_AUTH }}\n` +
+					"```\n" +
+					"The secret should contain the auth string (e.g., `_authToken=<token>` or `_auth=<htpasswd>`).",
 			};
 		}
 		if (lowerError.includes("403") || lowerError.includes("forbidden")) {
@@ -967,11 +976,11 @@ export function generatePreValidationFailureSummary(details: PreValidationDetail
 	});
 
 	if (hasCustomRegistryErrors) {
-		sections.push("**For custom registries**, add tokens to `registry-tokens`:\n");
+		sections.push("**For custom registries**, add auth to `custom-registries`:\n");
 		sections.push("```yaml");
 		sections.push("- uses: savvy-web/workflow-release-action@main");
 		sections.push("  with:");
-		sections.push("    registry-tokens: |");
+		sections.push("    custom-registries: |");
 		// Show unique custom registries from errors
 		const customRegistries = new Set(
 			details.errorTargets
@@ -981,9 +990,21 @@ export function generatePreValidationFailureSummary(details: PreValidationDetail
 				.map((t) => t.registryUrl),
 		);
 		for (const registry of customRegistries) {
-			sections.push(`      ${registry}=$` + "{{ secrets.YOUR_TOKEN }}");
+			// Extract hostname for secret name suggestion
+			let secretName = "YOUR_REGISTRY_AUTH";
+			try {
+				const hostname = new URL(registry || "").hostname;
+				secretName = `${hostname.toUpperCase().replace(/[.-]/g, "_")}_AUTH`;
+			} catch {
+				// Use default
+			}
+			// biome-ignore lint/style/useTemplate: This is to avoid template literal detection
+			sections.push(`      ${registry}$` + "{{ secrets." + secretName + " }}");
 		}
 		sections.push("```\n");
+		sections.push("Your secret should contain the npmrc auth string:\n");
+		sections.push("- Token auth: `_authToken=<your-token>`");
+		sections.push("- Htpasswd: `_auth=<base64-encoded-credentials>`\n");
 	}
 
 	// GitHub Packages help

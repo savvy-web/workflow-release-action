@@ -1891,8 +1891,9 @@ describe("generate-publish-summary", () => {
 			const summary = generatePreValidationFailureSummary(details, false);
 
 			expect(summary).toContain("Custom Registry Auth Error");
-			expect(summary).toContain("registry-tokens");
+			expect(summary).toContain("custom-registries");
 			expect(summary).toContain("npm.savvyweb.dev");
+			expect(summary).toContain("_authToken");
 		});
 
 		it("shows custom registry permission error hints", () => {
@@ -2014,8 +2015,10 @@ describe("generate-publish-summary", () => {
 
 			expect(summary).toContain("Configuration");
 			expect(summary).toContain("custom registries");
-			expect(summary).toContain("registry-tokens:");
+			expect(summary).toContain("custom-registries:");
 			expect(summary).toContain("npm.savvyweb.dev");
+			expect(summary).toContain("_authToken");
+			expect(summary).toContain("_auth=");
 		});
 
 		it("shows GitHub Packages configuration help", () => {

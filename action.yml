@@ -51,16 +51,21 @@ inputs:
   # NOTE: GitHub Packages uses the GitHub App token automatically
   custom-registries:
     description: |
-      Custom registries to authenticate with the GitHub App token (one per line).
-      These registries will use the same token as GitHub Packages.
+      Custom registries with authentication (one per line).
 
       Format:
-        https://registry.example.com/           # Uses GitHub App token
-        https://registry.example.com/=TOKEN     # Uses explicit token (optional)
+        https://registry.example.com/                         # GitHub App token used as fallback (registry ignores if auth not required)
+        https://registry.example.com/$\{{ secrets.AUTH }}     # Uses auth string from secret
+
+      The secret should contain the npmrc auth string:
+        - Token auth: _authToken=<your-token>
+        - Htpasswd:   _auth=<base64-encoded-credentials>
 
       Example:
         custom-registries: |
-          https://npm.mycompany.com/
+          https://registry.my-company.com/$\{{ secrets.MY_COMPANY_NPM_AUTH }}
+          https://registry.my-other-company.com/$\{{ secrets.MY_COMPANY_NPM_AUTH }}
+
 
       Note: npm/JSR use OIDC trusted publishing (no configuration needed)
       Note: GitHub Packages authenticates automatically with the GitHub App token
