@@ -284,16 +284,22 @@ export async function validatePublish(
 
 	// Build maps for enhanced summary
 	const bumpTypes = new Map<string, string>();
+	const currentVersions = new Map<string, string>();
 	const changesetCounts = countChangesetsPerPackage(changesetStatus.changesets);
 
 	for (const release of changesetStatus.releases) {
 		bumpTypes.set(release.name, release.type);
+		// oldVersion is the current version before the bump (from merge base)
+		if (release.oldVersion) {
+			currentVersions.set(release.name, release.oldVersion);
+		}
 	}
 
 	// Generate summary markdown with enhanced options
 	const summary = generatePublishSummary(validations, dryRun, {
 		bumpTypes,
 		changesetCounts,
+		currentVersions,
 	});
 
 	// Calculate totals
