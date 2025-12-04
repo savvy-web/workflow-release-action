@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { attestProvenance } from "@actions/attest";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
-import { context } from "@actions/github";
+import { context, getOctokit } from "@actions/github";
 
 /**
  * Result of creating a GitHub attestation
@@ -81,6 +81,51 @@ function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[
 			return { cmd: "bunx", baseArgs: ["npm"] };
 		default:
 			return { cmd: "npx", baseArgs: ["npm"] };
+	}
+}
+
+/**
+ * Create artifact metadata storage record to link attestation with GitHub Packages
+ *
+ * @remarks
+ * This creates a storage record in GitHub's artifact metadata API, which links
+ * the attestation to the package artifact in GitHub Packages.
+ *
+ * @param org - Organization name
+ * @param packageName - Name of the package (e.g., "@org/pkg")
+ * @param version - Package version
+ * @param digest - SHA256 digest of the tarball (format: "sha256:hex")
+ * @param token - GitHub token for authentication
+ * @returns Whether the storage record was created successfully
+ */
+async function createArtifactMetadataRecord(
+	org: string,
+	packageName: string,
+	version: string,
+	digest: string,
+	token: string,
+): Promise<boolean> {
+	const octokit = getOctokit(token);
+
+	// Use PURL format for the artifact name
+	const purlName = `pkg:npm/${packageName}@${version}`;
+
+	try {
+		await octokit.request("POST /orgs/{org}/artifacts/metadata/storage-record", {
+			org,
+			name: purlName,
+			digest,
+			registry_url: "https://npm.pkg.github.com/",
+			version,
+			repository: packageName,
+			github_repository: `${context.repo.owner}/${context.repo.repo}`,
+		});
+
+		core.debug(`Created artifact metadata record for ${purlName}`);
+		return true;
+	} catch (error) {
+		core.debug(`Failed to create artifact metadata record: ${error instanceof Error ? error.message : String(error)}`);
+		return false;
 	}
 }
 
@@ -210,6 +255,12 @@ export async function createPackageAttestation(
 		}
 		if (attestation.tlogID) {
 			core.info(`  Transparency log: https://search.sigstore.dev/?logIndex=${attestation.tlogID}`);
+		}
+
+		// Link attestation to GitHub Packages artifact via metadata API
+		const metadataLinked = await createArtifactMetadataRecord(context.repo.owner, packageName, version, digest, token);
+		if (metadataLinked) {
+			core.info(`  ✓ Linked attestation to GitHub Packages artifact`);
 		}
 
 		return {

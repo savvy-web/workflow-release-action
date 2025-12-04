@@ -16,6 +16,9 @@ vi.mock("@actions/github", () => ({
 			repo: "test-repo",
 		},
 	},
+	getOctokit: vi.fn(() => ({
+		request: vi.fn().mockResolvedValue({ status: 200 }),
+	})),
 }));
 
 vi.mock("@actions/attest", () => ({
@@ -395,6 +398,31 @@ describe("create-attestation", () => {
 					subjectName: "pkg:npm/my-package@2.0.0",
 				}),
 			);
+		});
+
+		it("handles artifact metadata API errors gracefully", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			// Mock getOctokit to throw an error for the metadata API call
+			const { getOctokit } = await import("@actions/github");
+			vi.mocked(getOctokit).mockReturnValue({
+				request: vi.fn().mockRejectedValue(new Error("API error")),
+			} as never);
+
+			// Should still succeed even if metadata linking fails
+			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+
+			expect(result.success).toBe(true);
+			expect(result.attestationId).toBe("12345");
 		});
 	});
 });
