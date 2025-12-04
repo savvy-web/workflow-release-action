@@ -168,6 +168,104 @@ async function createTarball(directory: string, packageManager: string): Promise
 }
 
 /**
+ * Create a GitHub attestation for a release asset (tarball)
+ *
+ * @remarks
+ * This creates a SLSA provenance attestation for a specific artifact file.
+ * Unlike createPackageAttestation, this uses the artifact's file path directly
+ * and is designed for GitHub Release assets.
+ *
+ * The attestation links the artifact to the workflow and repository that created it,
+ * making it verifiable via `gh attestation verify`.
+ *
+ * Requires:
+ * - `id-token: write` permission for OIDC signing
+ * - `attestations: write` permission for storing attestations
+ *
+ * @param artifactPath - Full path to the artifact file
+ * @param packageName - Name of the package (for PURL format)
+ * @param version - Version of the package
+ * @param dryRun - Whether to skip actual attestation creation
+ * @returns Promise resolving to attestation result
+ */
+export async function createReleaseAssetAttestation(
+	artifactPath: string,
+	packageName: string,
+	version: string,
+	dryRun: boolean,
+): Promise<AttestationResult> {
+	if (dryRun) {
+		core.info(`[DRY RUN] Would create attestation for release asset ${path.basename(artifactPath)}`);
+		return {
+			success: true,
+			attestationUrl: `https://github.com/${context.repo.owner}/${context.repo.repo}/attestations/dry-run`,
+		};
+	}
+
+	// Get the GITHUB_TOKEN for attestation API
+	const token = process.env.GITHUB_TOKEN || core.getState("githubToken");
+	if (!token) {
+		return {
+			success: false,
+			error: "No GITHUB_TOKEN available for attestation creation",
+		};
+	}
+
+	if (!fs.existsSync(artifactPath)) {
+		return {
+			success: false,
+			error: `Artifact not found: ${artifactPath}`,
+		};
+	}
+
+	const artifactName = path.basename(artifactPath);
+	// Use PURL format for npm packages to link with GitHub Packages
+	const purlName = `pkg:npm/${packageName}@${version}`;
+	core.info(`Creating attestation for release asset ${artifactName}...`);
+
+	try {
+		// Compute digest of the actual artifact
+		const digest = computeFileDigest(artifactPath);
+		core.debug(`Artifact digest: ${digest}`);
+		core.debug(`Subject name (PURL): ${purlName}`);
+
+		// Create the attestation
+		const attestation = await attestProvenance({
+			subjectName: purlName,
+			subjectDigest: { sha256: digest.replace("sha256:", "") },
+			token,
+		});
+
+		const attestationUrl = attestation.attestationID
+			? `https://github.com/${context.repo.owner}/${context.repo.repo}/attestations/${attestation.attestationID}`
+			: undefined;
+
+		core.info(`✓ Created attestation for ${artifactName}`);
+		if (attestationUrl) {
+			core.info(`  Attestation URL: ${attestationUrl}`);
+		}
+		if (attestation.tlogID) {
+			core.info(`  Transparency log: https://search.sigstore.dev/?logIndex=${attestation.tlogID}`);
+		}
+
+		return {
+			success: true,
+			attestationUrl,
+			attestationId: attestation.attestationID,
+			tlogId: attestation.tlogID,
+		};
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		core.warning(`Failed to create attestation for ${artifactName}: ${message}`);
+
+		return {
+			success: false,
+			error: message,
+		};
+	}
+}
+
+/**
  * Create a GitHub attestation for a published package
  *
  * @remarks

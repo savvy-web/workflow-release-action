@@ -97,9 +97,9 @@ Run different steps based on whether the repo is a single-package private repo:
     GH_TOKEN: ${{ steps.setup.outputs.token }}
 ```
 
-## Complete Release Workflow
+## Complete Release Workflow with Attestations
 
-A complete workflow that sets up, validates, and creates releases:
+A complete workflow that sets up, validates, creates releases, and generates attestations:
 
 ```yaml
 name: Release
@@ -117,6 +117,12 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write       # Required for OIDC signing (attestations)
+      contents: write       # Required for creating releases and tags
+      pull-requests: write  # Required for creating/updating release PRs
+      packages: write       # Required for GitHub Packages
+      attestations: write   # Required for storing attestations
     steps:
       - name: Setup release environment
         id: setup
@@ -145,6 +151,14 @@ jobs:
           GITHUB_TOKEN: ${{ steps.setup.outputs.token }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
+
+**Key points:**
+
+- `id-token: write` enables OIDC for signing attestations
+- `attestations: write` allows storing attestations in GitHub
+- `packages: write` required for publishing to GitHub Packages
+- Attestations are created automatically for npm/GitHub Packages (via `--provenance`)
+- Release assets get attestations when uploaded to GitHub Releases
 
 ## Using with Different Node.js Versions
 
@@ -181,13 +195,13 @@ Use the detected package manager in subsequent steps:
 
 All examples require these secrets to be configured in your repository or organization:
 
-* `APP_ID` - Your GitHub App ID
-* `APP_PRIVATE_KEY` - Your GitHub App private key (PEM format)
+- `APP_ID` - Your GitHub App ID
+- `APP_PRIVATE_KEY` - Your GitHub App private key (PEM format)
 
 Optional secrets for Turbo cache:
 
-* `TURBO_TOKEN` - Turbo remote cache token
-* `TURBO_TEAM` - Turbo team slug
+- `TURBO_TOKEN` - Turbo remote cache token
+- `TURBO_TEAM` - Turbo team slug
 
 ## GitHub App Setup
 
@@ -195,10 +209,11 @@ To use this action, you need to create a GitHub App with the following permissio
 
 **Repository Permissions:**
 
-* Actions: Read & Write
-* Contents: Read & Write
-* Pull Requests: Read & Write
-* Issues: Read & Write
+- Actions: Read & Write
+- Contents: Read & Write
+- Pull Requests: Read & Write
+- Issues: Read & Write
+- Packages: Read & Write _(Required for GitHub Packages)_
 
 **Steps to Create:**
 
@@ -208,3 +223,37 @@ To use this action, you need to create a GitHub App with the following permissio
 4. Generate a private key
 5. Install the app on your repositories
 6. Add the App ID and Private Key as secrets
+
+## Verifying Package Attestations
+
+After publishing with attestations, users can verify packages:
+
+```bash
+# Verify a package from npm
+gh attestation verify pkg:npm/@scope/package@1.0.0 -o your-organization
+
+# Verify a package from GitHub Packages
+gh attestation verify pkg:npm/@scope/package@1.0.0 -o your-organization
+
+# Verify a downloaded release asset
+gh attestation verify ./package-1.0.0.tgz -o your-organization
+```
+
+### What Gets Attested?
+
+1. **npm/GitHub Packages**: Attestations created via npm's `--provenance` flag
+   - Automatically linked to the published package
+   - Visible in the package's "Provenance" section
+   - Verifiable with `gh attestation verify pkg:npm/...`
+
+2. **GitHub Release Assets**: Attestations created for uploaded tarballs
+   - Linked in the release notes
+   - Use the actual uploaded file's digest
+   - Verifiable with `gh attestation verify <file>`
+
+### Attestation Benefits
+
+- **Supply Chain Security**: Cryptographically prove artifact origin
+- **Transparency**: Full build provenance visible and auditable
+- **Trust**: Users can verify artifacts before installation
+- **Compliance**: Meets SLSA Level 2+ requirements

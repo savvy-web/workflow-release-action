@@ -89,6 +89,7 @@ Your GitHub App must have these repository permissions:
 * **Pull Requests**: Read & Write
 * **Issues**: Read & Write
 * **Packages**: Read & Write _(Required for publishing to GitHub Packages)_
+* **Attestations**: Write _(Required for creating build provenance attestations)_
 
 ### Token Permission Diagnostics
 
@@ -102,6 +103,58 @@ The diagnostic logs include:
 * Token type (Bot for GitHub Apps, User for PATs)
 * App name and installation ID (for GitHub Apps)
 * Helpful guidance on configuring permissions
+
+## Artifact Attestations
+
+This action automatically creates and links cryptographic attestations (provenance) for published packages and release assets, providing supply chain security and verifiability.
+
+### What are Attestations?
+
+Attestations are cryptographically signed statements that link artifacts to their source code and build process. They enable:
+
+* **Verification**: Users can verify that an artifact came from a trusted source
+* **Transparency**: Build provenance is recorded and auditable
+* **Supply Chain Security**: Prevents tampering and unauthorized modifications
+
+### How Attestations Work
+
+#### For npm and GitHub Packages
+
+* Uses npm's built-in `--provenance` flag (OIDC-based)
+* Attestations are automatically created during `npm publish`
+* Linked to packages in the registry
+* Viewable in the package's "Provenance" section
+
+#### For GitHub Release Assets
+
+* Creates attestations for each uploaded tarball
+* Uses the actual artifact's SHA256 digest
+* Links appear in the GitHub Release notes
+* Can be verified with `gh attestation verify`
+
+### Verifying Attestations
+
+Users can verify attestations using the GitHub CLI:
+
+```bash
+# Verify a package from GitHub Packages
+gh attestation verify pkg:npm/@scope/package@version -o organization
+
+# Verify a downloaded release asset
+gh attestation verify path/to/package.tgz -o organization
+```
+
+### Required Workflow Permissions
+
+Your workflow must have these permissions for attestations:
+
+```yaml
+permissions:
+  id-token: write      # Required for OIDC signing
+  contents: write      # Required for creating releases
+  attestations: write  # Required for storing attestations
+  packages: write      # Required for GitHub Packages
+```
 
 ## Development
 
