@@ -14,7 +14,11 @@ import { detectReleasedPackagesFromCommit, detectReleasedPackagesFromPR } from "
 import { detectRepoType } from "./utils/detect-repo-type.js";
 import { determineReleaseType, determineTagStrategy } from "./utils/determine-tag-strategy.js";
 import { generatePRDescriptionDirect } from "./utils/generate-pr-description.js";
-import { generateBuildFailureSummary, generatePublishResultsSummary } from "./utils/generate-publish-summary.js";
+import {
+	generateBuildFailureSummary,
+	generatePreValidationFailureSummary,
+	generatePublishResultsSummary,
+} from "./utils/generate-publish-summary.js";
 import { generateReleaseNotesPreview } from "./utils/generate-release-notes-preview.js";
 import { getChangesetStatus } from "./utils/get-changeset-status.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
@@ -870,18 +874,27 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 		core.setOutput("publish_results", JSON.stringify(publishResult.packages));
 		core.setOutput("success", publishResult.success);
 
-		// Check if this was a build failure (no packages published)
-		const isBuildFailure = publishResult.buildError !== undefined;
+		// Check failure type to determine appropriate summary
+		const isPreValidationFailure = publishResult.preValidationDetails !== undefined;
+		const isBuildFailure = !isPreValidationFailure && publishResult.buildError !== undefined;
 
-		// Generate appropriate summary
-		const publishSummary = isBuildFailure
-			? generateBuildFailureSummary(publishResult, inputs.dryRun)
-			: generatePublishResultsSummary(publishResult.packages, inputs.dryRun);
+		// Generate appropriate summary based on failure type
+		let publishSummary: string;
+		if (isPreValidationFailure && publishResult.preValidationDetails) {
+			publishSummary = generatePreValidationFailureSummary(publishResult.preValidationDetails, inputs.dryRun);
+		} else if (isBuildFailure) {
+			publishSummary = generateBuildFailureSummary(publishResult, inputs.dryRun);
+		} else {
+			publishSummary = generatePublishResultsSummary(publishResult.packages, inputs.dryRun);
+		}
 
 		// Determine check title based on failure type
 		let checkTitle: string;
 		if (publishResult.success) {
 			checkTitle = `Published ${publishResult.successfulPackages}/${publishResult.totalPackages} package(s)`;
+		} else if (isPreValidationFailure) {
+			const errorCount = publishResult.preValidationDetails?.errorTargets.length ?? 0;
+			checkTitle = `Pre-validation failed: ${errorCount} target(s) have errors`;
 		} else if (isBuildFailure) {
 			checkTitle = "Build failed - publishing aborted";
 		} else {
@@ -904,7 +917,11 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 
 		// If publishing failed, don't continue with tags/releases
 		if (!publishResult.success) {
-			const failureReason = isBuildFailure ? "Build failed" : "Publishing failed";
+			const failureReason = isPreValidationFailure
+				? "Pre-validation failed"
+				: isBuildFailure
+					? "Build failed"
+					: "Publishing failed";
 			logger.error(`${failureReason}, skipping tag and release creation`);
 
 			// Mark remaining checks as skipped

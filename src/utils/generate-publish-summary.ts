@@ -701,3 +701,311 @@ export function generateBuildFailureSummary(publishResult: PublishPackagesResult
 
 	return sections.join("\n");
 }
+
+/**
+ * Pre-validation status for a single target
+ */
+export type PreValidationStatus =
+	| "ready" // Can publish - version doesn't exist
+	| "skip" // Version exists with identical content - safe to skip
+	| "error"; // Auth error, network error, or content mismatch
+
+/**
+ * Pre-validation result for a single target
+ */
+export interface PreValidationTarget {
+	/** Target registry display name */
+	registryName: string;
+	/** Target protocol (npm, jsr) */
+	protocol: string;
+	/** Package name */
+	packageName: string;
+	/** Package version */
+	version: string;
+	/** Validation status */
+	status: PreValidationStatus;
+	/** Error message if status is 'error' */
+	error?: string;
+	/** Local tarball shasum */
+	localIntegrity?: string;
+	/** Remote tarball shasum */
+	remoteIntegrity?: string;
+	/** Original registry URL */
+	registryUrl?: string | null;
+}
+
+/**
+ * Full pre-validation result
+ */
+export interface PreValidationDetails {
+	/** All validated targets */
+	targets: PreValidationTarget[];
+	/** Targets ready to publish */
+	readyTargets: PreValidationTarget[];
+	/** Targets that would be skipped */
+	skipTargets: PreValidationTarget[];
+	/** Targets with errors */
+	errorTargets: PreValidationTarget[];
+}
+
+/**
+ * Categorize pre-validation errors for better diagnostics
+ */
+function categorizePreValidationError(
+	error: string,
+	registryUrl?: string | null,
+): { category: string; icon: string; hint: string } {
+	const lowerError = error.toLowerCase();
+	const isGitHubPackages = registryUrl?.includes("pkg.github.com");
+	const isCustomRegistry = registryUrl && !registryUrl.includes("npmjs.org") && !isGitHubPackages;
+
+	// Content mismatch
+	if (lowerError.includes("content mismatch") || lowerError.includes("differs")) {
+		return {
+			icon: "\u{1F4A5}",
+			category: "Content Mismatch",
+			hint: "The same version was published with different content. You need to bump the version number.",
+		};
+	}
+
+	// GitHub Packages specific
+	if (isGitHubPackages) {
+		if (lowerError.includes("401") || lowerError.includes("unauthorized")) {
+			return {
+				icon: "\u{1F512}",
+				category: "GitHub Packages Auth Error",
+				hint: "Ensure the GitHub App token is being passed. Add `permission-packages: write` to your create-github-app-token step.",
+			};
+		}
+		if (lowerError.includes("403") || lowerError.includes("forbidden")) {
+			return {
+				icon: "\u{1F6AB}",
+				category: "GitHub Packages Permission",
+				hint: "The GitHub App token needs `packages:write` permission. For org packages, also add `permission-organization_packages: write`.",
+			};
+		}
+	}
+
+	// Custom registry errors
+	if (isCustomRegistry) {
+		if (lowerError.includes("401") || lowerError.includes("unauthorized")) {
+			return {
+				icon: "\u{1F512}",
+				category: "Custom Registry Auth Error",
+				hint:
+					"Check that the registry token is provided in `registry-tokens` input:\n```yaml\nregistry-tokens: |\n  " +
+					(registryUrl || "https://your-registry.example.com/") +
+					"=$" +
+					"{{ secrets.YOUR_TOKEN }}\n```",
+			};
+		}
+		if (lowerError.includes("403") || lowerError.includes("forbidden")) {
+			return {
+				icon: "\u{1F6AB}",
+				category: "Custom Registry Permission",
+				hint: "The token may lack publish permissions. Verify your credentials have write access to the registry.",
+			};
+		}
+	}
+
+	// npm errors
+	if (lowerError.includes("401") || lowerError.includes("unauthorized")) {
+		return {
+			icon: "\u{1F512}",
+			category: "npm Auth Error",
+			hint: "For npm, configure trusted publishing at https://www.npmjs.com/settings/packages. Ensure `id-token: write` permission is set.",
+		};
+	}
+
+	// Network errors
+	if (
+		lowerError.includes("network") ||
+		lowerError.includes("timeout") ||
+		lowerError.includes("econnrefused") ||
+		lowerError.includes("enotfound")
+	) {
+		return {
+			icon: "\u{1F4F6}",
+			category: "Network Error",
+			hint: "Registry is unreachable. Check network connectivity and registry URL.",
+		};
+	}
+
+	// Generic errors
+	return {
+		icon: "\u274C",
+		category: "Pre-Validation Error",
+		hint: "Review the error details below.",
+	};
+}
+
+/**
+ * Generate a markdown summary for pre-validation failures
+ *
+ * This is shown when pre-validation fails to help users diagnose
+ * authentication, permission, or content mismatch issues BEFORE
+ * any publishing is attempted.
+ *
+ * @param details - Pre-validation details
+ * @param dryRun - Whether this is a dry-run
+ * @returns Markdown summary string
+ */
+export function generatePreValidationFailureSummary(details: PreValidationDetails, dryRun: boolean): string {
+	const sections: string[] = [];
+
+	// Header
+	sections.push(`## \u{1F6D1} Pre-Validation Failed ${dryRun ? "\u{1F9EA} (Dry Run)" : ""}\n`);
+
+	// Explainer
+	sections.push("> **Publishing was aborted** before any packages were published.");
+	sections.push("> This prevents partial releases where some registries succeed and others fail.\n");
+
+	// Summary counts
+	const totalTargets = details.targets.length;
+	const errorCount = details.errorTargets.length;
+	const readyCount = details.readyTargets.length;
+	const skipCount = details.skipTargets.length;
+
+	sections.push(
+		`**Summary:** ${errorCount} error(s), ${readyCount} ready, ${skipCount} already published out of ${totalTargets} target(s)\n`,
+	);
+
+	// Summary table
+	sections.push("### Target Status\n");
+	sections.push("|   | Package | Version | Registry | Status |");
+	sections.push("|---|---------|---------|----------|--------|");
+
+	for (const target of details.targets) {
+		let statusIcon: string;
+		let statusText: string;
+
+		switch (target.status) {
+			case "ready":
+				statusIcon = "\u2705";
+				statusText = "Ready";
+				break;
+			case "skip":
+				statusIcon = "\u23ED\uFE0F";
+				statusText = "Skip (identical)";
+				break;
+			case "error":
+				statusIcon = "\u274C";
+				statusText = "Error";
+				break;
+		}
+
+		const icon = target.protocol === "jsr" ? "\u{1F995}" : "\u{1F4E6}";
+		sections.push(
+			`| ${statusIcon} | ${target.packageName} | ${target.version} | ${icon} ${target.registryName} | ${statusText} |`,
+		);
+	}
+	sections.push("");
+
+	// Error details
+	if (details.errorTargets.length > 0) {
+		sections.push("### \u{1F6A8} Error Details\n");
+
+		for (const target of details.errorTargets) {
+			const { icon, category, hint } = categorizePreValidationError(target.error || "", target.registryUrl);
+
+			sections.push(`<details open>`);
+			sections.push(
+				`<summary><strong>${icon} ${target.packageName}@${target.version} \u2192 ${target.registryName}</strong></summary>\n`,
+			);
+
+			sections.push(`**${category}**\n`);
+			sections.push(`> \u{1F4A1} ${hint}\n`);
+
+			if (target.error) {
+				sections.push("**Error:**");
+				sections.push("```");
+				sections.push(target.error);
+				sections.push("```\n");
+			}
+
+			// Show integrity comparison for content mismatch
+			if (target.localIntegrity && target.remoteIntegrity && target.localIntegrity !== target.remoteIntegrity) {
+				sections.push("**Integrity Comparison:**");
+				sections.push(`- Local shasum:  \`${target.localIntegrity}\``);
+				sections.push(`- Remote shasum: \`${target.remoteIntegrity}\`\n`);
+			}
+
+			sections.push("</details>\n");
+		}
+	}
+
+	// Ready targets
+	if (details.readyTargets.length > 0) {
+		sections.push("### \u2705 Ready Targets\n");
+		sections.push("These targets would be published once errors are resolved:\n");
+		for (const target of details.readyTargets) {
+			const icon = target.protocol === "jsr" ? "\u{1F995}" : "\u{1F4E6}";
+			sections.push(`- ${target.packageName}@${target.version} \u2192 ${icon} ${target.registryName}`);
+		}
+		sections.push("");
+	}
+
+	// Skip targets
+	if (details.skipTargets.length > 0) {
+		sections.push("### \u23ED\uFE0F Already Published\n");
+		sections.push("These targets have identical content already published and would be skipped:\n");
+		for (const target of details.skipTargets) {
+			const icon = target.protocol === "jsr" ? "\u{1F995}" : "\u{1F4E6}";
+			sections.push(`- ${target.packageName}@${target.version} \u2192 ${icon} ${target.registryName}`);
+		}
+		sections.push("");
+	}
+
+	// Configuration help
+	sections.push("---\n");
+	sections.push("### \u{1F527} Configuration\n");
+
+	// Check if any errors are from custom registries
+	const hasCustomRegistryErrors = details.errorTargets.some((t) => {
+		const url = t.registryUrl || "";
+		return url && !url.includes("npmjs.org") && !url.includes("pkg.github.com");
+	});
+
+	if (hasCustomRegistryErrors) {
+		sections.push("**For custom registries**, add tokens to `registry-tokens`:\n");
+		sections.push("```yaml");
+		sections.push("- uses: savvy-web/workflow-release-action@main");
+		sections.push("  with:");
+		sections.push("    registry-tokens: |");
+		// Show unique custom registries from errors
+		const customRegistries = new Set(
+			details.errorTargets
+				.filter(
+					(t) => t.registryUrl && !t.registryUrl.includes("npmjs.org") && !t.registryUrl.includes("pkg.github.com"),
+				)
+				.map((t) => t.registryUrl),
+		);
+		for (const registry of customRegistries) {
+			sections.push(`      ${registry}=$` + "{{ secrets.YOUR_TOKEN }}");
+		}
+		sections.push("```\n");
+	}
+
+	// GitHub Packages help
+	const hasGitHubPackagesErrors = details.errorTargets.some((t) => t.registryUrl?.includes("pkg.github.com"));
+	if (hasGitHubPackagesErrors) {
+		sections.push("**For GitHub Packages**, ensure GitHub App permissions:\n");
+		sections.push("```yaml");
+		sections.push("- uses: actions/create-github-app-token@v2");
+		sections.push("  with:");
+		sections.push("    permission-packages: write");
+		sections.push("    permission-organization_packages: write  # For org packages");
+		sections.push("```\n");
+	}
+
+	// npm help
+	const hasNpmErrors = details.errorTargets.some((t) => t.registryUrl?.includes("npmjs.org"));
+	if (hasNpmErrors) {
+		sections.push("**For npm**, configure trusted publishing:\n");
+		sections.push("1. Go to https://www.npmjs.com/settings/packages");
+		sections.push("2. Add your GitHub repository as a trusted publisher");
+		sections.push("3. Ensure workflow has `id-token: write` permission\n");
+	}
+
+	return sections.join("\n");
+}

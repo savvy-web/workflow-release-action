@@ -5,7 +5,12 @@ import * as exec from "@actions/exec";
 import type { PackageJson, ResolvedTarget, VersionCheckResult } from "../types/publish-config.js";
 import { createPackageAttestation } from "./create-attestation.js";
 import { findPackagePath } from "./find-package-path.js";
-import type { PackagePublishResult, TargetPublishResult } from "./generate-publish-summary.js";
+import type {
+	PackagePublishResult,
+	PreValidationDetails,
+	PreValidationTarget,
+	TargetPublishResult,
+} from "./generate-publish-summary.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
 import { checkVersionExists, getLocalTarballIntegrity, publishToTarget } from "./publish-target.js";
 import { setupRegistryAuth } from "./registry-auth.js";
@@ -31,6 +36,8 @@ export interface PublishPackagesResult {
 	buildError?: string;
 	/** Build stdout output */
 	buildOutput?: string;
+	/** Pre-validation details when pre-validation fails */
+	preValidationDetails?: PreValidationDetails;
 }
 
 /**
@@ -245,6 +252,30 @@ async function preValidateAllTargets(
 }
 
 /**
+ * Convert internal validation results to summary-compatible format
+ */
+function toPreValidationDetails(result: PreValidationResult): PreValidationDetails {
+	const convert = (v: TargetPreValidation): PreValidationTarget => ({
+		registryName: getRegistryDisplayName(v.target.registry),
+		protocol: v.target.protocol,
+		packageName: v.packageName,
+		version: v.version,
+		status: v.status,
+		error: v.error,
+		localIntegrity: v.localIntegrity,
+		remoteIntegrity: v.remoteIntegrity,
+		registryUrl: v.target.registry,
+	});
+
+	return {
+		targets: result.validations.map(convert),
+		readyTargets: result.readyTargets.map(convert),
+		skipTargets: result.skipTargets.map(convert),
+		errorTargets: result.errorTargets.map(convert),
+	};
+}
+
+/**
  * Publish all packages to their configured targets
  *
  * @remarks
@@ -420,6 +451,7 @@ export async function publishPackages(
 			totalTargets: allTargets.length,
 			successfulTargets: 0,
 			buildError: `Pre-validation failed: ${preValidation.errorTargets.length} target(s) have errors`,
+			preValidationDetails: toPreValidationDetails(preValidation),
 		};
 	}
 

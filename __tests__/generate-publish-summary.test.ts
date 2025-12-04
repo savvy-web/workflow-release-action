@@ -1,9 +1,14 @@
 import { context } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PackagePublishValidation, ResolvedTarget, TargetValidationResult } from "../src/types/publish-config.js";
-import type { PackagePublishResult } from "../src/utils/generate-publish-summary.js";
+import type {
+	PackagePublishResult,
+	PreValidationDetails,
+	PreValidationTarget,
+} from "../src/utils/generate-publish-summary.js";
 import {
 	generateBuildFailureSummary,
+	generatePreValidationFailureSummary,
 	generatePublishResultsSummary,
 	generatePublishSummary,
 } from "../src/utils/generate-publish-summary.js";
@@ -1682,6 +1687,447 @@ describe("generate-publish-summary", () => {
 			const summary = generateBuildFailureSummary(result, false);
 
 			expect(summary).toContain("... (20 more lines)");
+		});
+	});
+
+	describe("generatePreValidationFailureSummary", () => {
+		const createTarget = (overrides: Partial<PreValidationTarget> = {}): PreValidationTarget => ({
+			registryName: "npm",
+			protocol: "npm",
+			packageName: "@test/package",
+			version: "1.0.0",
+			status: "error",
+			...overrides,
+		});
+
+		it("generates header without dry-run indicator", () => {
+			const details: PreValidationDetails = {
+				targets: [],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Pre-Validation Failed");
+			expect(summary).not.toContain("Dry Run");
+		});
+
+		it("generates header with dry-run indicator", () => {
+			const details: PreValidationDetails = {
+				targets: [],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, true);
+
+			expect(summary).toContain("Pre-Validation Failed");
+			expect(summary).toContain("Dry Run");
+		});
+
+		it("shows summary counts", () => {
+			const errorTarget = createTarget({ status: "error" });
+			const readyTarget = createTarget({ status: "ready", packageName: "@test/ready" });
+			const skipTarget = createTarget({ status: "skip", packageName: "@test/skip" });
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget, readyTarget, skipTarget],
+				readyTargets: [readyTarget],
+				skipTargets: [skipTarget],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("1 error(s)");
+			expect(summary).toContain("1 ready");
+			expect(summary).toContain("1 already published");
+			expect(summary).toContain("3 target(s)");
+		});
+
+		it("shows target status table with icons", () => {
+			const errorTarget = createTarget({ status: "error", registryName: "npm" });
+			const readyTarget = createTarget({
+				status: "ready",
+				registryName: "GitHub Packages",
+				packageName: "@test/ready",
+			});
+			const skipTarget = createTarget({
+				status: "skip",
+				registryName: "jsr.io",
+				protocol: "jsr",
+				packageName: "@test/skip",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget, readyTarget, skipTarget],
+				readyTargets: [readyTarget],
+				skipTargets: [skipTarget],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			// Check table headers
+			expect(summary).toContain("| Package | Version | Registry | Status |");
+
+			// Check status icons
+			expect(summary).toContain("\u274C"); // Error
+			expect(summary).toContain("\u2705"); // Ready
+			expect(summary).toContain("\u23ED\uFE0F"); // Skip
+
+			// Check protocol icons
+			expect(summary).toContain("\u{1F4E6} npm"); // npm box icon
+			expect(summary).toContain("\u{1F995}"); // jsr deno icon
+		});
+
+		it("shows error details section with categorized errors", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "401 Unauthorized",
+				registryUrl: "https://registry.npmjs.org/",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Error Details");
+			expect(summary).toContain("<details open>");
+			expect(summary).toContain("@test/package@1.0.0");
+			expect(summary).toContain("npm Auth Error");
+			expect(summary).toContain("401 Unauthorized");
+		});
+
+		it("shows content mismatch error with integrity comparison", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "Content mismatch: local differs from published",
+				localIntegrity: "sha512-abc123",
+				remoteIntegrity: "sha512-def456",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Content Mismatch");
+			expect(summary).toContain("bump the version");
+			expect(summary).toContain("Integrity Comparison");
+			expect(summary).toContain("sha512-abc123");
+			expect(summary).toContain("sha512-def456");
+		});
+
+		it("shows GitHub Packages auth error hints", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "401 Unauthorized",
+				registryUrl: "https://npm.pkg.github.com/",
+				registryName: "GitHub Packages",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("GitHub Packages Auth Error");
+			expect(summary).toContain("permission-packages: write");
+		});
+
+		it("shows GitHub Packages permission error hints", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "403 Forbidden",
+				registryUrl: "https://npm.pkg.github.com/",
+				registryName: "GitHub Packages",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("GitHub Packages Permission");
+			expect(summary).toContain("packages:write");
+		});
+
+		it("shows custom registry auth error hints", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "401 Unauthorized",
+				registryUrl: "https://npm.savvyweb.dev/",
+				registryName: "npm.savvyweb.dev",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Custom Registry Auth Error");
+			expect(summary).toContain("registry-tokens");
+			expect(summary).toContain("npm.savvyweb.dev");
+		});
+
+		it("shows custom registry permission error hints", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "403 Forbidden",
+				registryUrl: "https://npm.savvyweb.dev/",
+				registryName: "npm.savvyweb.dev",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Custom Registry Permission");
+			expect(summary).toContain("write access");
+		});
+
+		it("shows network error hints", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "ECONNREFUSED: connection refused",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Network Error");
+			expect(summary).toContain("unreachable");
+		});
+
+		it("shows generic error for unrecognized errors", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "Something unexpected happened",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Pre-Validation Error");
+			expect(summary).toContain("Review the error details");
+		});
+
+		it("shows ready targets section", () => {
+			const readyTarget = createTarget({
+				status: "ready",
+				packageName: "@test/ready-pkg",
+				registryName: "npm",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [readyTarget],
+				readyTargets: [readyTarget],
+				skipTargets: [],
+				errorTargets: [],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Ready Targets");
+			expect(summary).toContain("@test/ready-pkg@1.0.0");
+			expect(summary).toContain("would be published once errors are resolved");
+		});
+
+		it("shows skip targets section", () => {
+			const skipTarget = createTarget({
+				status: "skip",
+				packageName: "@test/skip-pkg",
+				registryName: "GitHub Packages",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [skipTarget],
+				readyTargets: [],
+				skipTargets: [skipTarget],
+				errorTargets: [],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Already Published");
+			expect(summary).toContain("@test/skip-pkg@1.0.0");
+			expect(summary).toContain("identical content");
+		});
+
+		it("shows custom registry configuration help", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "401 Unauthorized",
+				registryUrl: "https://npm.savvyweb.dev/",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Configuration");
+			expect(summary).toContain("custom registries");
+			expect(summary).toContain("registry-tokens:");
+			expect(summary).toContain("npm.savvyweb.dev");
+		});
+
+		it("shows GitHub Packages configuration help", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "403 Forbidden",
+				registryUrl: "https://npm.pkg.github.com/",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("GitHub Packages");
+			expect(summary).toContain("create-github-app-token");
+			expect(summary).toContain("permission-packages: write");
+		});
+
+		it("shows npm configuration help", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "401 Unauthorized",
+				registryUrl: "https://registry.npmjs.org/",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("npm");
+			expect(summary).toContain("trusted publishing");
+			expect(summary).toContain("id-token: write");
+		});
+
+		it("shows JSR protocol icon for jsr targets", () => {
+			const jsrTarget = createTarget({
+				status: "ready",
+				protocol: "jsr",
+				registryName: "jsr.io",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [jsrTarget],
+				readyTargets: [jsrTarget],
+				skipTargets: [],
+				errorTargets: [],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			// JSR uses the deno dinosaur icon
+			expect(summary).toContain("\u{1F995}");
+		});
+
+		it("includes explainer about preventing partial releases", () => {
+			const details: PreValidationDetails = {
+				targets: [],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Publishing was aborted");
+			expect(summary).toContain("partial releases");
+		});
+
+		it("handles timeout network errors", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "Request timeout after 30000ms",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Network Error");
+		});
+
+		it("handles ENOTFOUND network errors", () => {
+			const errorTarget = createTarget({
+				status: "error",
+				error: "ENOTFOUND: DNS lookup failed",
+			});
+
+			const details: PreValidationDetails = {
+				targets: [errorTarget],
+				readyTargets: [],
+				skipTargets: [],
+				errorTargets: [errorTarget],
+			};
+
+			const summary = generatePreValidationFailureSummary(details, false);
+
+			expect(summary).toContain("Network Error");
 		});
 	});
 });
