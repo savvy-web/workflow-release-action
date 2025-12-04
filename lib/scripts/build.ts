@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 
@@ -48,7 +48,7 @@ async function buildEntry({ entry, output }: BuildEntry): Promise<void> {
 
 	console.log(`Building ${entry} -> ${output}...`);
 
-	const { code, map } = await ncc(entryPath, {
+	const { code, map, assets } = await ncc(entryPath, {
 		minify: true,
 		target: "es2022",
 		externals: [],
@@ -60,6 +60,14 @@ async function buildEntry({ entry, output }: BuildEntry): Promise<void> {
 
 	if (map) {
 		await writeFile(`${output}.map`, map);
+	}
+
+	// Write any additional asset files (e.g., dynamic import chunks)
+	for (const [assetPath, assetData] of Object.entries(assets)) {
+		const fullAssetPath = `${outputDir}/${assetPath}`;
+		await mkdir(fullAssetPath.replace(/\/[^/]+$/, ""), { recursive: true });
+		await writeFile(fullAssetPath, assetData.source);
+		console.log(`  ✓ Wrote asset: ${assetPath}`);
 	}
 
 	console.log(`✓ Built ${entry}`);
@@ -111,10 +119,13 @@ async function build(): Promise<void> {
 		console.log("✓ Copied action.yml (without pre script)");
 
 		// Copy dist files (omit pre.js for runtime action)
-		await copyFile("dist/main.js", `${releaseDir}/dist/main.js`);
-		await copyFile("dist/post.js", `${releaseDir}/dist/post.js`);
-		await copyFile("dist/package.json", `${releaseDir}/dist/package.json`);
-		console.log("✓ Copied dist files (omitted pre.js)");
+		// Also copy any chunk files (e.g., from dynamic imports)
+		const distFiles = await readdir("dist");
+		for (const file of distFiles) {
+			if (file === "pre.js") continue; // Skip pre.js for runtime action
+			await copyFile(`dist/${file}`, `${releaseDir}/dist/${file}`);
+		}
+		console.log(`✓ Copied ${distFiles.length - 1} dist files (omitted pre.js)`);
 
 		console.log("\n✓ All builds completed successfully.");
 	} catch (error) {

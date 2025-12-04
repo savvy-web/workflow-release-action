@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { attestProvenance } from "@actions/attest";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context } from "@actions/github";
@@ -187,9 +188,6 @@ export async function createPackageAttestation(
 		// Compute digest
 		const digest = computeFileDigest(tarballPath);
 		core.debug(`Tarball digest: ${digest}`);
-
-		// Import attestProvenance dynamically to handle potential import issues
-		const { attestProvenance } = await import("@actions/attest");
 
 		// Create the attestation
 		const attestation = await attestProvenance({
