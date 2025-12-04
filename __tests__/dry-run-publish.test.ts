@@ -496,4 +496,106 @@ npm notice Publishing to https://registry.npmjs.org/ with tag latest and public 
 			await expect(dryRunPublish(target, "pnpm")).rejects.toThrow("Unknown protocol: unknown");
 		});
 	});
+
+	describe("package manager variations", () => {
+		it("uses bunx for bun package manager with npm protocol", async () => {
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			await dryRunPublish(target, "bun");
+
+			expect(exec.exec).toHaveBeenCalledWith(
+				"bunx",
+				expect.arrayContaining(["npm", "publish", "--dry-run"]),
+				expect.anything(),
+			);
+		});
+
+		it("uses npx for npm package manager (default case)", async () => {
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "https://registry.npmjs.org/",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			await dryRunPublish(target, "npm");
+
+			expect(exec.exec).toHaveBeenCalledWith(
+				"npx",
+				expect.arrayContaining(["npm", "publish", "--dry-run"]),
+				expect.anything(),
+			);
+		});
+
+		it("uses bunx for bun package manager with jsr protocol", async () => {
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			const target: ResolvedTarget = {
+				protocol: "jsr",
+				registry: null,
+				directory: "/test/dist/jsr",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "JSR_TOKEN",
+			};
+
+			await dryRunPublish(target, "bun");
+
+			expect(exec.exec).toHaveBeenCalledWith("bunx", ["jsr", "publish", "--dry-run"], expect.anything());
+		});
+
+		it("uses npx for npm package manager with jsr protocol", async () => {
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			const target: ResolvedTarget = {
+				protocol: "jsr",
+				registry: null,
+				directory: "/test/dist/jsr",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "JSR_TOKEN",
+			};
+
+			await dryRunPublish(target, "npm");
+
+			expect(exec.exec).toHaveBeenCalledWith("npx", ["jsr", "publish", "--dry-run"], expect.anything());
+		});
+
+		it("handles malformed registry URL gracefully", async () => {
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			const target: ResolvedTarget = {
+				protocol: "npm",
+				registry: "not-a-valid-url",
+				directory: "/test/dist",
+				access: "public",
+				provenance: false,
+				tag: "latest",
+				tokenEnv: "NPM_TOKEN",
+			};
+
+			const result = await dryRunPublish(target, "npm");
+
+			expect(result.success).toBe(true);
+			// Should use the raw registry string when URL parsing fails
+			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("not-a-valid-url"));
+		});
+	});
 });

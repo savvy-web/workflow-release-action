@@ -143,7 +143,7 @@ function getNpxCommand(packageManager: string): { cmd: string; args: string[] } 
 /**
  * Get local tarball integrity by running npm pack --json --dry-run
  */
-async function getLocalTarballIntegrity(directory: string, packageManager: string): Promise<string | undefined> {
+export async function getLocalTarballIntegrity(directory: string, packageManager: string): Promise<string | undefined> {
 	let output = "";
 	const npmCmd = getNpmCommand(packageManager);
 	try {

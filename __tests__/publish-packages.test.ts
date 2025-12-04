@@ -32,13 +32,20 @@ vi.mock("../src/utils/registry-auth.js", () => ({
 
 vi.mock("../src/utils/publish-target.js", () => ({
 	publishToTarget: vi.fn(),
+	checkVersionExists: vi.fn(),
+	getLocalTarballIntegrity: vi.fn(),
+}));
+
+vi.mock("../src/utils/create-attestation.js", () => ({
+	createPackageAttestation: vi.fn(),
 }));
 
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
+import { createPackageAttestation } from "../src/utils/create-attestation.js";
 import { findPackagePath } from "../src/utils/find-package-path.js";
 import { getChangesetStatus } from "../src/utils/get-changeset-status.js";
-import { publishToTarget } from "../src/utils/publish-target.js";
+import { checkVersionExists, getLocalTarballIntegrity, publishToTarget } from "../src/utils/publish-target.js";
 import { setupRegistryAuth } from "../src/utils/registry-auth.js";
 
 describe("publish-packages", () => {
@@ -50,6 +57,17 @@ describe("publish-packages", () => {
 			configuredRegistries: [],
 			missingTokens: [],
 			unreachableRegistries: [],
+		});
+		// Default: version doesn't exist (ready to publish)
+		vi.mocked(checkVersionExists).mockResolvedValue({
+			success: true,
+			versionExists: false,
+		});
+		// Default: return a shasum for local tarball
+		vi.mocked(getLocalTarballIntegrity).mockResolvedValue("abc123def456");
+		// Default: attestation succeeds but no URL
+		vi.mocked(createPackageAttestation).mockResolvedValue({
+			success: true,
 		});
 	});
 
@@ -348,7 +366,7 @@ describe("publish-packages", () => {
 		expect(core.warning).toHaveBeenCalledWith("  - https://registry.npmjs.org/: NPM_TOKEN not set");
 	});
 
-	it("logs error for unreachable registries", async () => {
+	it("fails pre-validation when registry is unreachable", async () => {
 		vi.mocked(getChangesetStatus).mockResolvedValue({
 			releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
 			changesets: [],
@@ -362,23 +380,21 @@ describe("publish-packages", () => {
 				publishConfig: { access: "public" },
 			}),
 		);
-		vi.mocked(setupRegistryAuth).mockResolvedValue({
+		vi.mocked(exec.exec).mockResolvedValue(0); // Build succeeds
+		// Pre-validation fails due to auth/network error
+		vi.mocked(checkVersionExists).mockResolvedValue({
 			success: false,
-			configuredRegistries: [],
-			missingTokens: [],
-			unreachableRegistries: [{ registry: "https://invalid.registry.com/", error: "ENOTFOUND" }],
-		});
-		vi.mocked(exec.exec).mockResolvedValue(0);
-		vi.mocked(publishToTarget).mockResolvedValue({
-			success: true,
-			output: "",
-			error: "",
+			versionExists: false,
+			error: "npm error code E401\nnpm error Unable to authenticate",
 		});
 
-		await publishPackages("pnpm", "main", false);
+		const result = await publishPackages("pnpm", "main", false);
 
-		expect(core.error).toHaveBeenCalledWith("Some registries are unreachable (will skip publishing):");
-		expect(core.error).toHaveBeenCalledWith("  - https://invalid.registry.com/: ENOTFOUND");
+		// Should fail during pre-validation
+		expect(result.success).toBe(false);
+		expect(result.buildError).toContain("Pre-validation failed");
+		// publishToTarget should NOT be called - we fail early
+		expect(publishToTarget).not.toHaveBeenCalled();
 	});
 
 	it("handles publish target throwing an error", async () => {
@@ -452,7 +468,7 @@ describe("publish-packages", () => {
 		expect(core.error).not.toHaveBeenCalledWith(expect.stringContaining("Failed to publish"));
 	});
 
-	it("skips publishing to unreachable registries", async () => {
+	it("skips already-published versions with identical content", async () => {
 		vi.mocked(getChangesetStatus).mockResolvedValue({
 			releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
 			changesets: [],
@@ -463,36 +479,106 @@ describe("publish-packages", () => {
 			JSON.stringify({
 				name: "@org/pkg-a",
 				version: "1.0.0",
-				publishConfig: {
-					access: "public",
-					targets: ["https://unreachable.registry.com/"],
-				},
+				publishConfig: { access: "public" },
 			}),
 		);
-		vi.mocked(setupRegistryAuth).mockResolvedValue({
-			success: false,
-			configuredRegistries: [],
-			missingTokens: [],
-			unreachableRegistries: [{ registry: "https://unreachable.registry.com/", error: "Connection refused" }],
-		});
 		vi.mocked(exec.exec).mockResolvedValue(0);
-		// publishToTarget should NOT be called for unreachable registries
-		vi.mocked(publishToTarget).mockResolvedValue({
+		// Pre-validation detects version already exists with identical content
+		vi.mocked(checkVersionExists).mockResolvedValue({
 			success: true,
-			output: "",
-			error: "",
+			versionExists: true,
+			versionInfo: {
+				name: "@org/pkg-a",
+				version: "1.0.0",
+				versions: ["1.0.0"],
+				distTags: { latest: "1.0.0" },
+				dist: { shasum: "abc123def456" }, // Matches getLocalTarballIntegrity default
+			},
 		});
 
 		const result = await publishPackages("pnpm", "main", false);
 
-		// Should fail because target is unreachable
-		expect(result.success).toBe(false);
-		expect(result.packages[0].targets[0].success).toBe(false);
-		expect(result.packages[0].targets[0].error).toContain("Registry unreachable");
-		// publishToTarget should NOT have been called - we skip unreachable registries
+		// Should succeed because version already published with identical content
+		expect(result.success).toBe(true);
+		expect(result.successfulTargets).toBe(1);
+		expect(result.packages[0].targets[0].success).toBe(true);
+		expect(result.packages[0].targets[0].alreadyPublished).toBe(true);
+		// publishToTarget should NOT be called - we skip during pre-validation
 		expect(publishToTarget).not.toHaveBeenCalled();
-		// Should log warning about skipping
-		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Registry unreachable"));
+	});
+
+	it("fails pre-validation when version exists with different content", async () => {
+		vi.mocked(getChangesetStatus).mockResolvedValue({
+			releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+			changesets: [],
+		});
+		vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+		vi.mocked(fs.existsSync).mockReturnValue(true);
+		vi.mocked(fs.readFileSync).mockReturnValue(
+			JSON.stringify({
+				name: "@org/pkg-a",
+				version: "1.0.0",
+				publishConfig: { access: "public" },
+			}),
+		);
+		vi.mocked(exec.exec).mockResolvedValue(0);
+		// Pre-validation detects version exists with DIFFERENT content
+		vi.mocked(checkVersionExists).mockResolvedValue({
+			success: true,
+			versionExists: true,
+			versionInfo: {
+				name: "@org/pkg-a",
+				version: "1.0.0",
+				versions: ["1.0.0"],
+				distTags: { latest: "1.0.0" },
+				dist: { shasum: "different_shasum_xyz" }, // Different from getLocalTarballIntegrity default
+			},
+		});
+
+		const result = await publishPackages("pnpm", "main", false);
+
+		// Should fail because content mismatch
+		expect(result.success).toBe(false);
+		expect(result.buildError).toContain("Pre-validation failed");
+		// publishToTarget should NOT be called - we fail early
+		expect(publishToTarget).not.toHaveBeenCalled();
+	});
+
+	it("skips version check when local integrity unavailable but treats as skip", async () => {
+		vi.mocked(getChangesetStatus).mockResolvedValue({
+			releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+			changesets: [],
+		});
+		vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+		vi.mocked(fs.existsSync).mockReturnValue(true);
+		vi.mocked(fs.readFileSync).mockReturnValue(
+			JSON.stringify({
+				name: "@org/pkg-a",
+				version: "1.0.0",
+				publishConfig: { access: "public" },
+			}),
+		);
+		vi.mocked(exec.exec).mockResolvedValue(0);
+		// Version exists but we can't get local integrity
+		vi.mocked(checkVersionExists).mockResolvedValue({
+			success: true,
+			versionExists: true,
+			versionInfo: {
+				name: "@org/pkg-a",
+				version: "1.0.0",
+				versions: ["1.0.0"],
+				distTags: { latest: "1.0.0" },
+				dist: { shasum: "remote_shasum" },
+			},
+		});
+		vi.mocked(getLocalTarballIntegrity).mockResolvedValue(undefined); // Can't get local integrity
+
+		const result = await publishPackages("pnpm", "main", false);
+
+		// Should succeed (skip with warning) since we can't compare
+		expect(result.success).toBe(true);
+		expect(result.packages[0].targets[0].alreadyPublished).toBe(true);
+		expect(publishToTarget).not.toHaveBeenCalled();
 	});
 
 	describe("pre-detected releases", () => {
@@ -620,6 +706,122 @@ describe("publish-packages", () => {
 			expect(result.success).toBe(true);
 			expect(result.packages).toHaveLength(0);
 			expect(getChangesetStatus).toHaveBeenCalled();
+		});
+	});
+
+	describe("post-publish result handling", () => {
+		it("handles publish returning alreadyPublished with identical content", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					publishConfig: { access: "public" },
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			// Pre-validation passes (version doesn't exist)
+			vi.mocked(checkVersionExists).mockResolvedValue({
+				success: true,
+				versionExists: false,
+			});
+			// But publish returns already published with identical content (race condition)
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: false,
+				output: "",
+				error: "You cannot publish over the previously published versions",
+				exitCode: 1,
+				alreadyPublished: true,
+				alreadyPublishedReason: "identical",
+				localIntegrity: "abc123",
+				remoteIntegrity: "abc123",
+			});
+
+			const result = await publishPackages("pnpm", "main", false);
+
+			expect(result.success).toBe(true);
+			expect(result.successfulTargets).toBe(1);
+			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("already published"));
+			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("identical content"));
+		});
+
+		it("handles publish returning alreadyPublished with different content as error", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					publishConfig: { access: "public" },
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			// Pre-validation passes (version doesn't exist)
+			vi.mocked(checkVersionExists).mockResolvedValue({
+				success: true,
+				versionExists: false,
+			});
+			// But publish returns already published with DIFFERENT content (content mismatch)
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: false,
+				output: "",
+				error: "You cannot publish over the previously published versions",
+				exitCode: 1,
+				alreadyPublished: true,
+				alreadyPublishedReason: "different",
+				localIntegrity: "abc123",
+				remoteIntegrity: "xyz789",
+			});
+
+			const result = await publishPackages("pnpm", "main", false);
+
+			expect(result.success).toBe(false);
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("DIFFERENT content"));
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("Local shasum"));
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("Remote shasum"));
+		});
+
+		it("includes GitHub attestation URL when attestation succeeds", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					publishConfig: { access: "public" },
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: true,
+				output: "Published successfully",
+				error: "",
+				registryUrl: "https://www.npmjs.com/package/@org/pkg-a",
+			});
+			// Mock attestation to return a URL
+			vi.mocked(createPackageAttestation).mockResolvedValue({
+				success: true,
+				attestationUrl: "https://github.com/attestations/12345",
+			});
+
+			const result = await publishPackages("pnpm", "main", false);
+
+			expect(result.success).toBe(true);
+			expect(result.packages[0].githubAttestationUrl).toBe("https://github.com/attestations/12345");
+			expect(createPackageAttestation).toHaveBeenCalledWith("@org/pkg-a", "1.0.0", "/path/to/pkg-a", false, "pnpm");
 		});
 	});
 });

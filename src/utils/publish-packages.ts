@@ -2,12 +2,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
-import type { PackageJson, ResolvedTarget } from "../types/publish-config.js";
+import type { PackageJson, ResolvedTarget, VersionCheckResult } from "../types/publish-config.js";
 import { createPackageAttestation } from "./create-attestation.js";
 import { findPackagePath } from "./find-package-path.js";
 import type { PackagePublishResult, TargetPublishResult } from "./generate-publish-summary.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
-import { publishToTarget } from "./publish-target.js";
+import { checkVersionExists, getLocalTarballIntegrity, publishToTarget } from "./publish-target.js";
 import { setupRegistryAuth } from "./registry-auth.js";
 import { getRegistryDisplayName, resolveTargets } from "./resolve-targets.js";
 
@@ -43,6 +43,205 @@ export interface PreDetectedRelease {
 	version: string;
 	/** Path to the package directory */
 	path: string;
+}
+
+/**
+ * Status of a single target during pre-validation
+ */
+type PreValidationStatus =
+	| "ready" // Can publish - version doesn't exist
+	| "skip" // Version exists with identical content - safe to skip
+	| "error"; // Auth error, network error, or content mismatch
+
+/**
+ * Result of pre-validating a single target
+ */
+interface TargetPreValidation {
+	target: ResolvedTarget;
+	packageName: string;
+	version: string;
+	status: PreValidationStatus;
+	versionCheck?: VersionCheckResult;
+	localIntegrity?: string;
+	remoteIntegrity?: string;
+	error?: string;
+}
+
+/**
+ * Result of pre-validating all targets
+ */
+interface PreValidationResult {
+	/** Whether all targets passed validation */
+	success: boolean;
+	/** All target validations */
+	validations: TargetPreValidation[];
+	/** Targets that are ready to publish */
+	readyTargets: TargetPreValidation[];
+	/** Targets that will be skipped (already published with identical content) */
+	skipTargets: TargetPreValidation[];
+	/** Targets with errors (auth, network, content mismatch) */
+	errorTargets: TargetPreValidation[];
+}
+
+/**
+ * Pre-validate all targets before publishing
+ *
+ * This function checks all targets across all packages to ensure:
+ * 1. Authentication is valid (no E401 errors)
+ * 2. Registry is reachable (no network errors)
+ * 3. If version exists, content is identical (no content mismatch)
+ *
+ * If ANY target has an error, we fail early to prevent partial publishes.
+ *
+ * @param packageTargetsMap - Map of package name to targets
+ * @param packageManager - Package manager to use
+ * @returns Pre-validation result
+ */
+async function preValidateAllTargets(
+	packageTargetsMap: Map<string, { path: string; version: string; targets: ResolvedTarget[] }>,
+	packageManager: string,
+): Promise<PreValidationResult> {
+	core.startGroup("Pre-validating all publish targets");
+
+	const validations: TargetPreValidation[] = [];
+	const readyTargets: TargetPreValidation[] = [];
+	const skipTargets: TargetPreValidation[] = [];
+	const errorTargets: TargetPreValidation[] = [];
+
+	for (const [packageName, packageInfo] of packageTargetsMap) {
+		for (const target of packageInfo.targets) {
+			const registryName = getRegistryDisplayName(target.registry);
+			core.info(`Checking ${packageName}@${packageInfo.version} on ${registryName}...`);
+
+			// Skip JSR targets for now - they have different validation
+			if (target.protocol === "jsr") {
+				core.info(`  ✓ JSR target - will validate during publish`);
+				const validation: TargetPreValidation = {
+					target,
+					packageName,
+					version: packageInfo.version,
+					status: "ready",
+				};
+				validations.push(validation);
+				readyTargets.push(validation);
+				continue;
+			}
+
+			// Check if version exists on this registry
+			const versionCheck = await checkVersionExists(packageName, packageInfo.version, target.registry, packageManager);
+
+			if (!versionCheck.success) {
+				// Registry check failed - auth error, network error, etc.
+				const errorMsg = versionCheck.error || "Unknown error checking registry";
+				core.error(`  ✗ ${registryName}: ${errorMsg}`);
+
+				const validation: TargetPreValidation = {
+					target,
+					packageName,
+					version: packageInfo.version,
+					status: "error",
+					versionCheck,
+					error: errorMsg,
+				};
+				validations.push(validation);
+				errorTargets.push(validation);
+				continue;
+			}
+
+			if (versionCheck.versionExists) {
+				// Version exists - check if content is identical
+				const localIntegrity = await getLocalTarballIntegrity(target.directory, packageManager);
+				const remoteIntegrity = versionCheck.versionInfo?.dist?.shasum;
+
+				if (localIntegrity && remoteIntegrity) {
+					if (localIntegrity === remoteIntegrity) {
+						// Identical content - safe to skip
+						core.info(`  ✓ Version exists with identical content - will skip`);
+						const validation: TargetPreValidation = {
+							target,
+							packageName,
+							version: packageInfo.version,
+							status: "skip",
+							versionCheck,
+							localIntegrity,
+							remoteIntegrity,
+						};
+						validations.push(validation);
+						skipTargets.push(validation);
+					} else {
+						// Content mismatch - error
+						core.error(`  ✗ Version exists with DIFFERENT content!`);
+						core.error(`    Local shasum:  ${localIntegrity}`);
+						core.error(`    Remote shasum: ${remoteIntegrity}`);
+
+						const validation: TargetPreValidation = {
+							target,
+							packageName,
+							version: packageInfo.version,
+							status: "error",
+							versionCheck,
+							localIntegrity,
+							remoteIntegrity,
+							error: `Content mismatch: local=${localIntegrity}, remote=${remoteIntegrity}`,
+						};
+						validations.push(validation);
+						errorTargets.push(validation);
+					}
+				} else {
+					// Cannot compare integrity - treat as skip with warning
+					core.warning(`  ⚠ Version exists but could not verify integrity - will skip`);
+					const validation: TargetPreValidation = {
+						target,
+						packageName,
+						version: packageInfo.version,
+						status: "skip",
+						versionCheck,
+						localIntegrity,
+						remoteIntegrity,
+					};
+					validations.push(validation);
+					skipTargets.push(validation);
+				}
+			} else {
+				// Version doesn't exist - ready to publish
+				core.info(`  ✓ Version not found - ready to publish`);
+				const validation: TargetPreValidation = {
+					target,
+					packageName,
+					version: packageInfo.version,
+					status: "ready",
+					versionCheck,
+				};
+				validations.push(validation);
+				readyTargets.push(validation);
+			}
+		}
+	}
+
+	const success = errorTargets.length === 0;
+
+	if (success) {
+		core.info("");
+		core.info(`Pre-validation passed: ${readyTargets.length} to publish, ${skipTargets.length} to skip`);
+	} else {
+		core.error("");
+		core.error(`Pre-validation FAILED: ${errorTargets.length} target(s) have errors`);
+		core.error("Fix these issues before publishing:");
+		for (const error of errorTargets) {
+			const registryName = getRegistryDisplayName(error.target.registry);
+			core.error(`  - ${error.packageName}@${error.version} → ${registryName}: ${error.error}`);
+		}
+	}
+
+	core.endGroup();
+
+	return {
+		success,
+		validations,
+		readyTargets,
+		skipTargets,
+		errorTargets,
+	};
 }
 
 /**
@@ -150,9 +349,6 @@ export async function publishPackages(
 	core.info("Setting up registry authentication...");
 	const authResult = await setupRegistryAuth(allTargets, packageManager);
 
-	// Track unreachable registries to skip them during publish
-	const unreachableRegistrySet = new Set(authResult.unreachableRegistries.map((r) => r.registry));
-
 	if (!authResult.success) {
 		if (authResult.missingTokens.length > 0) {
 			core.warning("Some registry tokens are missing:");
@@ -160,14 +356,9 @@ export async function publishPackages(
 				core.warning(`  - ${missing.registry}: ${missing.tokenEnv} not set`);
 			}
 		}
-		if (authResult.unreachableRegistries.length > 0) {
-			core.error("Some registries are unreachable (will skip publishing):");
-			for (const unreachable of authResult.unreachableRegistries) {
-				core.error(`  - ${unreachable.registry}: ${unreachable.error}`);
-			}
-		}
 	}
 
+	// Run build BEFORE pre-validation so we can compare tarball integrity
 	// Run build before publishing
 	core.info("Running build...");
 	const buildCmd = packageManager === "npm" ? "npm" : packageManager;
@@ -212,6 +403,31 @@ export async function publishPackages(
 
 	core.info("Build completed successfully");
 
+	// Pre-validate ALL targets before publishing ANY
+	// This prevents partial publishes where some registries succeed and others fail
+	const preValidation = await preValidateAllTargets(packageTargetsMap, packageManager);
+
+	if (!preValidation.success) {
+		core.error("");
+		core.error("🔴 Pre-validation failed - aborting publish to prevent partial releases");
+		core.endGroup();
+
+		return {
+			success: false,
+			packages: [],
+			totalPackages: packageTargetsMap.size,
+			successfulPackages: 0,
+			totalTargets: allTargets.length,
+			successfulTargets: 0,
+			buildError: `Pre-validation failed: ${preValidation.errorTargets.length} target(s) have errors`,
+		};
+	}
+
+	// Build a set of targets that should be skipped (already published with identical content)
+	const skipTargetKeys = new Set(
+		preValidation.skipTargets.map((v) => `${v.packageName}:${v.target.registry || "jsr"}`),
+	);
+
 	// Publish each package to each target
 	const results: PackagePublishResult[] = [];
 	let successfulPackages = 0;
@@ -226,20 +442,19 @@ export async function publishPackages(
 
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
+			const targetKey = `${name}:${target.registry || "jsr"}`;
 
-			// Skip targets with unreachable registries - avoid long timeouts
-			if (target.registry && unreachableRegistrySet.has(target.registry)) {
-				const unreachableInfo = authResult.unreachableRegistries.find((r) => r.registry === target.registry);
-				const errorMsg = `Registry unreachable: ${unreachableInfo?.error || "unknown error"}`;
-				core.warning(`Skipping ${registryName} - ${errorMsg}`);
+			// Skip targets that were pre-validated as "skip" (already published with identical content)
+			if (skipTargetKeys.has(targetKey)) {
+				core.info(`✓ Skipping ${registryName} - already published with identical content`);
+				successfulTargets++;
 
 				targetResults.push({
 					target,
-					success: false,
-					error: errorMsg,
-					exitCode: 1,
+					success: true,
+					alreadyPublished: true,
+					alreadyPublishedReason: "identical",
 				});
-				allTargetsSuccess = false;
 				continue;
 			}
 
