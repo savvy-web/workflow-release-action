@@ -363,5 +363,38 @@ describe("create-attestation", () => {
 				"  Transparency log: https://search.sigstore.dev/?logIndex=67890",
 			);
 		});
+
+		it("uses PURL format for subject name to link with GitHub Packages", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			// Test scoped package
+			await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+
+			expect(attestProvenance).toHaveBeenCalledWith(
+				expect.objectContaining({
+					subjectName: "pkg:npm/@org/pkg@1.0.0",
+				}),
+			);
+
+			vi.mocked(attestProvenance).mockClear();
+
+			// Test unscoped package
+			await createPackageAttestation("my-package", "2.0.0", "/path/to/pkg", false);
+
+			expect(attestProvenance).toHaveBeenCalledWith(
+				expect.objectContaining({
+					subjectName: "pkg:npm/my-package@2.0.0",
+				}),
+			);
+		});
 	});
 });

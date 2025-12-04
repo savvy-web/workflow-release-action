@@ -182,16 +182,20 @@ export async function createPackageAttestation(
 	}
 
 	const tarballName = path.basename(tarballPath);
-	core.info(`Creating attestation for ${tarballName}...`);
+	// Use PURL format for npm packages to link with GitHub Packages
+	// Format: pkg:npm/@scope/name@version or pkg:npm/name@version
+	const purlName = `pkg:npm/${packageName}@${version}`;
+	core.info(`Creating attestation for ${purlName}...`);
 
 	try {
 		// Compute digest
 		const digest = computeFileDigest(tarballPath);
 		core.debug(`Tarball digest: ${digest}`);
+		core.debug(`Subject name (PURL): ${purlName}`);
 
 		// Create the attestation
 		const attestation = await attestProvenance({
-			subjectName: tarballName,
+			subjectName: purlName,
 			subjectDigest: { sha256: digest.replace("sha256:", "") },
 			token,
 		});
