@@ -19,6 +19,9 @@ export default defineConfig({
 				"src/utils/generate-pr-description.ts",
 				// API commit utility needs GitHub API mocking
 				"src/utils/create-api-commit.ts",
+				// Publish target is tested indirectly via publish-packages tests (mocked)
+				// Direct testing requires complex fs/exec mocking for all code paths
+				"src/utils/publish-target.ts",
 			],
 			enabled: true,
 			thresholds: {

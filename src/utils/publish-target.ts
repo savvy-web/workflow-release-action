@@ -2,7 +2,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
-import type { AlreadyPublishedReason, PublishResult, ResolvedTarget } from "../types/publish-config.js";
+import type {
+	AlreadyPublishedReason,
+	NpmVersionInfo,
+	PublishResult,
+	ResolvedTarget,
+	VersionCheckResult,
+} from "../types/publish-config.js";
 
 /**
  * Get a display name for a registry URL
@@ -199,6 +205,157 @@ async function getRemoteTarballIntegrity(
 }
 
 /**
+ * Raw response from npm view --json for a specific version
+ */
+interface NpmViewResponse {
+	name?: string;
+	version?: string;
+	versions?: string[];
+	"dist-tags"?: Record<string, string>;
+	dist?: {
+		integrity?: string;
+		shasum?: string;
+		tarball?: string;
+	};
+	time?: Record<string, string>;
+	error?: {
+		code?: string;
+		summary?: string;
+	};
+}
+
+/**
+ * Check if a specific version exists on a registry
+ *
+ * Uses `npm view <package>@<version> --json --registry <url>` to check
+ * if a version already exists before attempting to publish.
+ *
+ * @param packageName - Package name (e.g., "@savvy-web/my-package")
+ * @param version - Version to check (e.g., "1.0.0")
+ * @param registry - Registry URL (e.g., "https://registry.npmjs.org/")
+ * @param packageManager - Package manager to use for the npm command
+ * @returns Version check result with existence status and version info
+ */
+export async function checkVersionExists(
+	packageName: string,
+	version: string,
+	registry: string | null,
+	packageManager: string,
+): Promise<VersionCheckResult> {
+	let output = "";
+	let errorOutput = "";
+	const npmCmd = getNpmCommand(packageManager);
+	const args = [...npmCmd.baseArgs, "view", `${packageName}@${version}`, "--json"];
+
+	if (registry) {
+		args.push("--registry", registry);
+	}
+
+	const registryName = getRegistryDisplayName(registry);
+	core.debug(`Checking if ${packageName}@${version} exists on ${registryName}`);
+
+	let exitCode = 0;
+	try {
+		exitCode = await exec.exec(npmCmd.cmd, args, {
+			silent: true,
+			listeners: {
+				stdout: (data: Buffer) => {
+					output += data.toString();
+				},
+				stderr: (data: Buffer) => {
+					errorOutput += data.toString();
+				},
+			},
+			ignoreReturnCode: true,
+		});
+	} catch (e) {
+		return {
+			success: false,
+			versionExists: false,
+			error: e instanceof Error ? e.message : String(e),
+			rawOutput: output || errorOutput,
+		};
+	}
+
+	// Try to parse the JSON output
+	const trimmedOutput = output.trim();
+
+	// If no output or exit code indicates error, check for specific cases
+	if (!trimmedOutput || exitCode !== 0) {
+		// Check if this is a "not found" error (package or version doesn't exist)
+		// npm view returns exit code 1 and E404 for missing packages
+		if (errorOutput.includes("E404") || errorOutput.includes("is not in this registry")) {
+			core.debug(`Package ${packageName}@${version} not found on ${registryName}`);
+			return {
+				success: true,
+				versionExists: false,
+				rawOutput: errorOutput,
+			};
+		}
+
+		// Try to parse error JSON
+		try {
+			const errorJson = JSON.parse(trimmedOutput || errorOutput) as NpmViewResponse;
+			if (errorJson.error?.code === "E404") {
+				return {
+					success: true,
+					versionExists: false,
+					rawOutput: trimmedOutput || errorOutput,
+				};
+			}
+		} catch {
+			// Not JSON, continue with error handling
+		}
+
+		// Other errors (network, auth, etc.)
+		return {
+			success: false,
+			versionExists: false,
+			error: errorOutput || `npm view failed with exit code ${exitCode}`,
+			rawOutput: trimmedOutput || errorOutput,
+		};
+	}
+
+	// Parse successful response
+	try {
+		const data = JSON.parse(trimmedOutput) as NpmViewResponse;
+
+		// npm view returns the version info if it exists
+		if (data.name && data.version) {
+			const versionInfo: NpmVersionInfo = {
+				name: data.name,
+				version: data.version,
+				versions: data.versions || [data.version],
+				distTags: data["dist-tags"] || {},
+				dist: data.dist,
+				time: data.time,
+			};
+
+			return {
+				success: true,
+				versionExists: true,
+				versionInfo,
+				rawOutput: trimmedOutput,
+			};
+		}
+
+		// Empty response means version doesn't exist
+		return {
+			success: true,
+			versionExists: false,
+			rawOutput: trimmedOutput,
+		};
+	} catch (e) {
+		return {
+			success: false,
+			versionExists: false,
+			error: `Failed to parse npm view output: ${e instanceof Error ? e.message : String(e)}`,
+			rawOutput: trimmedOutput,
+		};
+	}
+}
+
+/**
  * Compare local and remote tarball integrity to determine if skip is safe
  */
 async function compareTarballIntegrity(
@@ -238,8 +395,125 @@ async function compareTarballIntegrity(
 
 /**
  * Publish to any npm-compatible registry
+ *
+ * This function implements a pre-check strategy:
+ * 1. Read package.json to get name and version
+ * 2. Check if the version already exists on the registry
+ * 3. If exists with identical content, skip publishing
+ * 4. If exists with different content, fail with clear error
+ * 5. If doesn't exist, proceed with publish
  */
 async function publishToNpmCompatible(target: ResolvedTarget, packageManager: string): Promise<PublishResult> {
+	const registryName = getRegistryDisplayName(target.registry);
+
+	// Read package.json to get name and version
+	const pkgJsonPath = path.join(target.directory, "package.json");
+	if (!fs.existsSync(pkgJsonPath)) {
+		return {
+			success: false,
+			output: "",
+			error: `package.json not found at ${pkgJsonPath}`,
+			exitCode: 1,
+		};
+	}
+
+	const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as { name?: string; version?: string };
+	if (!pkg.name || !pkg.version) {
+		return {
+			success: false,
+			output: "",
+			error: "package.json missing name or version",
+			exitCode: 1,
+		};
+	}
+
+	const packageName = pkg.name;
+	const version = pkg.version;
+
+	// Pre-check: Does this version already exist on the registry?
+	core.info(`Checking ${packageName}@${version} on ${registryName}...`);
+	const versionCheck = await checkVersionExists(packageName, version, target.registry, packageManager);
+
+	if (!versionCheck.success) {
+		// Registry check failed - could be auth issue, network issue, etc.
+		core.warning(`⚠ Could not verify version on ${registryName}: ${versionCheck.error}`);
+		core.info("Proceeding with publish attempt...");
+	} else if (versionCheck.versionExists) {
+		// Version already exists - compare integrity
+		core.info(`Version ${version} already exists on ${registryName}`);
+
+		// Get local tarball integrity for comparison
+		const localIntegrity = await getLocalTarballIntegrity(target.directory, packageManager);
+		const remoteIntegrity = versionCheck.versionInfo?.dist?.shasum;
+
+		if (localIntegrity && remoteIntegrity) {
+			if (localIntegrity === remoteIntegrity) {
+				core.info(`✓ Local tarball matches remote (shasum: ${localIntegrity.substring(0, 12)}...)`);
+				core.info(`✓ Skipping publish - identical content already published`);
+
+				// Show dist-tags info
+				const distTags = versionCheck.versionInfo?.distTags;
+				if (distTags && Object.keys(distTags).length > 0) {
+					const tagsList = Object.entries(distTags)
+						.map(([tag, ver]) => `${tag}=${ver}`)
+						.join(", ");
+					core.info(`  Current dist-tags: ${tagsList}`);
+				}
+
+				return {
+					success: true,
+					output: `Version ${version} already published with identical content`,
+					error: "",
+					exitCode: 0,
+					registryUrl: generatePackageUrl(target),
+					alreadyPublished: true,
+					alreadyPublishedReason: "identical",
+					localIntegrity,
+					remoteIntegrity,
+				};
+			}
+
+			// Content differs - this is an error condition
+			core.error(`✗ Local tarball differs from published version!`);
+			core.error(`  Local shasum:  ${localIntegrity}`);
+			core.error(`  Remote shasum: ${remoteIntegrity}`);
+			core.error(`  This indicates the package content changed without a version bump.`);
+
+			return {
+				success: false,
+				output: "",
+				error: `Version ${version} already published with different content (local: ${localIntegrity}, remote: ${remoteIntegrity})`,
+				exitCode: 1,
+				alreadyPublished: true,
+				alreadyPublishedReason: "different",
+				localIntegrity,
+				remoteIntegrity,
+			};
+		}
+
+		// Could not compare integrity - proceed with warning
+		core.warning(
+			`⚠ Could not compare tarball integrity (local: ${localIntegrity || "unavailable"}, remote: ${remoteIntegrity || "unavailable"})`,
+		);
+		core.info(`✓ Skipping publish - version already exists`);
+
+		return {
+			success: true,
+			output: `Version ${version} already published (integrity comparison unavailable)`,
+			error: "",
+			exitCode: 0,
+			registryUrl: generatePackageUrl(target),
+			alreadyPublished: true,
+			alreadyPublishedReason: "unknown",
+			localIntegrity,
+			remoteIntegrity,
+		};
+	} else {
+		// Version doesn't exist - show available versions for context
+		core.info(`✓ Version ${version} not found on ${registryName} - proceeding with publish`);
+	}
+
+	// Build publish command
 	let output = "";
 	let error = "";
 	let exitCode = 0;
@@ -266,9 +540,7 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 
 	const publishCmd = getPublishCommand(packageManager);
 	const fullArgs = [...publishCmd.baseArgs, ...args];
-	const registryName = getRegistryDisplayName(target.registry);
-	core.info(`Publishing to ${registryName}: ${publishCmd.cmd} ${fullArgs.join(" ")}`);
-	core.info(`  Directory: ${target.directory}`);
+	core.info(`Running: ${publishCmd.cmd} ${fullArgs.join(" ")}`);
 
 	try {
 		exitCode = await exec.exec(publishCmd.cmd, fullArgs, {
@@ -290,19 +562,33 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 
 	const registryUrl = generatePackageUrl(target);
 	const attestationUrl = target.provenance ? extractProvenanceUrl(output) : undefined;
-	const alreadyPublished = isVersionAlreadyPublished(output, error);
 
-	// If version already published, compare tarballs to determine if safe to skip
-	let alreadyPublishedReason: AlreadyPublishedReason | undefined;
-	let localIntegrity: string | undefined;
-	let remoteIntegrity: string | undefined;
+	if (exitCode === 0) {
+		core.info(`✓ Successfully published ${packageName}@${version} to ${registryName}`);
+		if (attestationUrl) {
+			core.info(`  Provenance: ${attestationUrl}`);
+		}
+	} else {
+		// Check if this is a "version already published" error (race condition)
+		const alreadyPublished = isVersionAlreadyPublished(output, error);
+		if (alreadyPublished) {
+			core.info("Version was published by another process - verifying integrity...");
+			const comparison = await compareTarballIntegrity(target, packageManager);
 
-	if (alreadyPublished) {
-		core.info("Version already published - comparing tarball integrity...");
-		const comparison = await compareTarballIntegrity(target, packageManager);
-		alreadyPublishedReason = comparison.reason;
-		localIntegrity = comparison.localIntegrity;
-		remoteIntegrity = comparison.remoteIntegrity;
+			return {
+				success: comparison.reason !== "different",
+				output,
+				error,
+				exitCode,
+				registryUrl,
+				alreadyPublished: true,
+				alreadyPublishedReason: comparison.reason,
+				localIntegrity: comparison.localIntegrity,
+				remoteIntegrity: comparison.remoteIntegrity,
+			};
+		}
+
+		core.error(`✗ Failed to publish ${packageName}@${version} to ${registryName}`);
 	}
 
 	return {
@@ -312,10 +598,6 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 		exitCode,
 		registryUrl,
 		attestationUrl,
-		alreadyPublished,
-		alreadyPublishedReason,
-		localIntegrity,
-		remoteIntegrity,
 	};
 }
 

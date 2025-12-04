@@ -249,3 +249,41 @@ export interface AuthSetupResult {
 	missingTokens: Array<{ registry: string; tokenEnv: string }>;
 	unreachableRegistries: Array<{ registry: string; error: string }>;
 }
+
+/**
+ * Version info from npm view command
+ */
+export interface NpmVersionInfo {
+	/** Package name */
+	name: string;
+	/** Specific version that was queried */
+	version: string;
+	/** All available versions */
+	versions: string[];
+	/** Dist-tags (latest, next, etc.) */
+	distTags: Record<string, string>;
+	/** Distribution info for the specific version */
+	dist?: {
+		integrity?: string;
+		shasum?: string;
+		tarball?: string;
+	};
+	/** Timestamps for when each version was published */
+	time?: Record<string, string>;
+}
+
+/**
+ * Result of checking if a version exists on a registry
+ */
+export interface VersionCheckResult {
+	/** Whether the check succeeded (registry was reachable) */
+	success: boolean;
+	/** Whether this specific version exists */
+	versionExists: boolean;
+	/** Version info if it exists */
+	versionInfo?: NpmVersionInfo;
+	/** Error message if check failed */
+	error?: string;
+	/** Raw output from npm view */
+	rawOutput?: string;
+}
