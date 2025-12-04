@@ -4,6 +4,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import * as github from "@actions/github";
 import { context } from "@actions/github";
+import { createReleaseAssetAttestation } from "./create-attestation.js";
 import type { TagInfo } from "./determine-tag-strategy.js";
 import { findPackagePath } from "./find-package-path.js";
 import type { PackagePublishResult } from "./generate-publish-summary.js";
@@ -46,6 +47,8 @@ export interface AssetInfo {
 	downloadUrl: string;
 	/** Asset size in bytes */
 	size: number;
+	/** Attestation URL if attestation was created */
+	attestationUrl?: string;
 }
 
 /**
@@ -413,17 +416,51 @@ export async function createGitHubReleases(
 							data: fileContent as unknown as string,
 						});
 
-						releaseInfo.assets.push({
+						core.info(`Uploaded: ${asset.data.browser_download_url}`);
+
+						// Create attestation for the uploaded release asset
+						const attestationResult = await createReleaseAssetAttestation(artifactPath, pkg.name, pkg.version, dryRun);
+
+						const assetInfo: AssetInfo = {
 							name: fileName,
 							downloadUrl: asset.data.browser_download_url,
 							size: asset.data.size,
-						});
+							attestationUrl: attestationResult.success ? attestationResult.attestationUrl : undefined,
+						};
 
-						core.info(`Uploaded: ${asset.data.browser_download_url}`);
+						releaseInfo.assets.push(assetInfo);
+
+						if (attestationResult.success && attestationResult.attestationUrl) {
+							core.info(`  ✓ Created attestation: ${attestationResult.attestationUrl}`);
+						}
 					} catch (error) {
 						core.warning(
 							`Failed to upload artifact ${artifactPath}: ${error instanceof Error ? error.message : String(error)}`,
 						);
+					}
+				}
+			}
+
+			// Update release notes to include asset attestations
+			if (releaseInfo.assets.length > 0) {
+				const assetAttestations = releaseInfo.assets.filter((a) => a.attestationUrl);
+				if (assetAttestations.length > 0) {
+					releaseNotes += "\n\n### Release Asset Attestations:\n\n";
+					for (const asset of assetAttestations) {
+						releaseNotes += `- **${asset.name}**: [Attestation](${asset.attestationUrl})\n`;
+					}
+
+					// Update the release body with asset attestations
+					try {
+						await octokit.rest.repos.updateRelease({
+							owner: context.repo.owner,
+							repo: context.repo.repo,
+							release_id: release.data.id,
+							body: releaseNotes.trim(),
+						});
+						core.info(`Updated release notes with asset attestations`);
+					} catch (error) {
+						core.warning(`Failed to update release notes: ${error instanceof Error ? error.message : String(error)}`);
 					}
 				}
 			}

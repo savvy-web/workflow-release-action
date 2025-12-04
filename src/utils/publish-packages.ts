@@ -560,22 +560,34 @@ export async function publishPackages(
 			}
 		}
 
-		// Create GitHub attestation for successfully published packages
-		// Use the directory from the first successful target (where the tarball was created by npm publish)
+		// Create GitHub attestation for successfully published packages ONLY if:
+		// 1. All targets succeeded
+		// 2. No target already has a provenance attestation URL (from npm --provenance)
+		//
+		// This avoids duplicate attestations when npm's built-in provenance is used.
+		// The npm provenance attestation is preferred because it's integrated with the registry.
 		let githubAttestationUrl: string | undefined;
-		const firstSuccessfulTarget = targetResults.find((t) => t.success);
-		if (allTargetsSuccess && firstSuccessfulTarget) {
-			const attestationDir = firstSuccessfulTarget.target.directory;
-			const attestationResult = await createPackageAttestation(
-				name,
-				packageInfo.version,
-				attestationDir,
-				dryRun,
-				packageManager,
-			);
-			if (attestationResult.success && attestationResult.attestationUrl) {
-				githubAttestationUrl = attestationResult.attestationUrl;
+		const hasProvenanceAttestation = targetResults.some((t) => t.success && t.attestationUrl);
+
+		if (allTargetsSuccess && !hasProvenanceAttestation) {
+			const firstSuccessfulTarget = targetResults.find((t) => t.success);
+			if (firstSuccessfulTarget) {
+				core.info("Creating GitHub attestation for package (no npm provenance available)...");
+				const attestationDir = firstSuccessfulTarget.target.directory;
+				const attestationResult = await createPackageAttestation(
+					name,
+					packageInfo.version,
+					attestationDir,
+					dryRun,
+					packageManager,
+				);
+				if (attestationResult.success && attestationResult.attestationUrl) {
+					githubAttestationUrl = attestationResult.attestationUrl;
+					core.info(`  ✓ Created GitHub attestation: ${githubAttestationUrl}`);
+				}
 			}
+		} else if (hasProvenanceAttestation) {
+			core.info("✓ Package attestation already created via npm provenance");
 		}
 
 		results.push({
