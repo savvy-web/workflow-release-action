@@ -718,20 +718,42 @@ describe("registry-auth", () => {
 			expect(process.env.JSR_TOKEN).toBeUndefined();
 		});
 
-		it("parses custom-registries input", async () => {
+		it("parses custom-registries input with _authToken format", async () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "app-token";
 				return "";
 			});
 			vi.mocked(core.getInput).mockImplementation((name: string) => {
-				if (name === "custom-registries") return "https://custom.registry.com/=custom-token";
+				if (name === "custom-registries") return "https://custom.registry.com/_authToken=custom-token";
 				return "";
 			});
 
 			const targets: ResolvedTarget[] = [];
 			await setupRegistryAuth(targets, "npm");
 
-			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("custom-token");
+			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("_authToken=custom-token");
+			// Verify secrets are masked (both full auth string and token value)
+			expect(core.setSecret).toHaveBeenCalledWith("_authToken=custom-token");
+			expect(core.setSecret).toHaveBeenCalledWith("custom-token");
+		});
+
+		it("parses custom-registries input with _auth format (htpasswd)", async () => {
+			vi.mocked(core.getState).mockImplementation((name: string) => {
+				if (name === "token") return "app-token";
+				return "";
+			});
+			vi.mocked(core.getInput).mockImplementation((name: string) => {
+				if (name === "custom-registries") return "https://custom.registry.com/_auth=base64encoded";
+				return "";
+			});
+
+			const targets: ResolvedTarget[] = [];
+			await setupRegistryAuth(targets, "npm");
+
+			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("_auth=base64encoded");
+			// Verify secrets are masked (both full auth string and base64 value)
+			expect(core.setSecret).toHaveBeenCalledWith("_auth=base64encoded");
+			expect(core.setSecret).toHaveBeenCalledWith("base64encoded");
 		});
 
 		it("uses GitHub App token for custom-registries without explicit token", async () => {
@@ -747,28 +769,34 @@ describe("registry-auth", () => {
 			const targets: ResolvedTarget[] = [];
 			await setupRegistryAuth(targets, "npm");
 
-			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
+			// Now stores as full auth string format
+			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("_authToken=github-app-token");
 			expect(core.info).toHaveBeenCalledWith(
 				"Set NPM_SAVVYWEB_DEV_TOKEN for custom registry: https://npm.savvyweb.dev/ (using GitHub App token)",
 			);
+			// Verify secrets are masked (both formats)
+			expect(core.setSecret).toHaveBeenCalledWith("_authToken=github-app-token");
+			expect(core.setSecret).toHaveBeenCalledWith("github-app-token");
 		});
 
-		it("uses GitHub App token for custom-registries with trailing = but no token", async () => {
+		it("normalizes registry URL trailing slash", async () => {
 			vi.mocked(core.getState).mockImplementation((name: string) => {
 				if (name === "token") return "github-app-token";
 				return "";
 			});
 			vi.mocked(core.getInput).mockImplementation((name: string) => {
-				if (name === "custom-registries") return "https://npm.savvyweb.dev/=";
+				// URL without trailing slash should still work
+				if (name === "custom-registries") return "https://npm.savvyweb.dev/_authToken=test-token";
 				return "";
 			});
 
 			const targets: ResolvedTarget[] = [];
 			await setupRegistryAuth(targets, "npm");
 
-			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
+			// Registry URL gets normalized with trailing slash
+			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("_authToken=test-token");
 			expect(core.info).toHaveBeenCalledWith(
-				"Set NPM_SAVVYWEB_DEV_TOKEN for custom registry: https://npm.savvyweb.dev/ (using GitHub App token)",
+				"Set NPM_SAVVYWEB_DEV_TOKEN for custom registry: https://npm.savvyweb.dev/",
 			);
 		});
 
@@ -779,7 +807,9 @@ describe("registry-auth", () => {
 			});
 			vi.mocked(core.getInput).mockImplementation((name: string) => {
 				if (name === "custom-registries") {
-					return "https://npm.savvyweb.dev/\nhttps://custom.registry.com/=explicit-token";
+					// First line: URL only (uses GitHub App token)
+					// Second line: URL with explicit auth token
+					return "https://npm.savvyweb.dev/\nhttps://custom.registry.com/_authToken=explicit-token";
 				}
 				return "";
 			});
@@ -787,8 +817,10 @@ describe("registry-auth", () => {
 			const targets: ResolvedTarget[] = [];
 			await setupRegistryAuth(targets, "npm");
 
-			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("github-app-token");
-			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("explicit-token");
+			// First registry uses GitHub App token wrapped in auth string format
+			expect(process.env.NPM_SAVVYWEB_DEV_TOKEN).toBe("_authToken=github-app-token");
+			// Second registry uses explicit auth string
+			expect(process.env.CUSTOM_REGISTRY_COM_TOKEN).toBe("_authToken=explicit-token");
 		});
 
 		it("warns when no GitHub token and custom-registries without explicit value", async () => {

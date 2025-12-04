@@ -291,8 +291,8 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
 			continue;
 		}
 
-		const token = process.env[target.tokenEnv];
-		if (!token) {
+		const authValue = process.env[target.tokenEnv];
+		if (!authValue) {
 			core.warning(`Token env var ${target.tokenEnv} is not set for registry: ${target.registry}`);
 			continue;
 		}
@@ -301,7 +301,15 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
 		// https://npm.pkg.github.com/ -> //npm.pkg.github.com/:_authToken=TOKEN
 		const registryPath = target.registry.replace(/^https?:/, "");
 
-		lines.push(`${registryPath}:_authToken=${token}`);
+		// Check if authValue is already a full auth string (_authToken=... or _auth=...)
+		// or if it's just a raw token that needs wrapping
+		if (authValue.startsWith("_authToken=") || authValue.startsWith("_auth=")) {
+			// Full auth string - use as-is
+			lines.push(`${registryPath}:${authValue}`);
+		} else {
+			// Raw token - wrap with _authToken=
+			lines.push(`${registryPath}:_authToken=${authValue}`);
+		}
 		core.info(`Configured auth for: ${target.registry}`);
 	}
 
@@ -371,37 +379,59 @@ export async function setupRegistryAuth(targets: ResolvedTarget[], packageManage
 	const customRegistryToken = appToken;
 
 	// Parse custom registries input
-	// Format: "https://registry.example.com/" (uses GitHub App token) or "https://registry.example.com/=TOKEN"
+	// Format: "https://registry.example.com/" (uses GitHub App token)
+	// Format: "https://registry.example.com/_authToken=TOKEN" (npmrc auth string appended)
+	// Format: "https://registry.example.com/_auth=BASE64" (htpasswd auth string appended)
 	const customRegistriesInput = core.getInput("custom-registries");
 	if (customRegistriesInput) {
 		const inputLines = customRegistriesInput.split("\n").filter((line) => line.trim());
 		for (const line of inputLines) {
-			const equalIndex = line.indexOf("=");
+			const trimmedLine = line.trim();
 
-			if (equalIndex === -1) {
-				// No "=" found - registry URL only, use GitHub App token
-				const registry = line.trim();
+			// Look for npmrc auth string patterns (_authToken= or _auth=)
+			const authTokenMatch = trimmedLine.match(/^(.+?)(_authToken=.+)$/);
+			const authMatch = trimmedLine.match(/^(.+?)(_auth=.+)$/);
+
+			if (authTokenMatch) {
+				// Format: URL_authToken=TOKEN (npmrc auth string appended directly)
+				const registry = authTokenMatch[1].replace(/\/$/, "") + "/"; // Normalize trailing slash
+				const authString = authTokenMatch[2]; // Full auth string: _authToken=TOKEN
+				const envVarName = registryToEnvName(registry);
+
+				// Mask both the full auth string and the token value to prevent leaks
+				core.setSecret(authString);
+				const tokenValue = authString.replace(/^_authToken=/, "");
+				if (tokenValue) core.setSecret(tokenValue);
+
+				process.env[envVarName] = authString;
+				core.info(`Set ${envVarName} for custom registry: ${registry}`);
+			} else if (authMatch) {
+				// Format: URL_auth=BASE64 (htpasswd auth string appended directly)
+				const registry = authMatch[1].replace(/\/$/, "") + "/"; // Normalize trailing slash
+				const authString = authMatch[2]; // Full auth string: _auth=BASE64
+				const envVarName = registryToEnvName(registry);
+
+				// Mask both the full auth string and the base64 value to prevent leaks
+				core.setSecret(authString);
+				const authValue = authString.replace(/^_auth=/, "");
+				if (authValue) core.setSecret(authValue);
+
+				process.env[envVarName] = authString;
+				core.info(`Set ${envVarName} for custom registry: ${registry}`);
+			} else {
+				// No auth string found - registry URL only, use GitHub App token
+				const registry = trimmedLine;
 				if (registry && customRegistryToken) {
 					const envVarName = registryToEnvName(registry);
-					process.env[envVarName] = customRegistryToken;
-					core.info(`Set ${envVarName} for custom registry: ${registry} (using GitHub App token)`);
-				}
-			} else {
-				// Has "=" - could be explicit token or trailing "=" with no token
-				const registry = line.slice(0, equalIndex).trim();
-				const token = line.slice(equalIndex + 1).trim();
+					// Store as _authToken= format for consistency
+					const authString = `_authToken=${customRegistryToken}`;
 
-				if (registry) {
-					const envVarName = registryToEnvName(registry);
-					if (token) {
-						// Explicit token provided
-						process.env[envVarName] = token;
-						core.info(`Set ${envVarName} for custom registry: ${registry}`);
-					} else if (customRegistryToken) {
-						// No token after "=" - use GitHub App token
-						process.env[envVarName] = customRegistryToken;
-						core.info(`Set ${envVarName} for custom registry: ${registry} (using GitHub App token)`);
-					}
+					// Mask both formats (token is already masked by GitHub, but be safe)
+					core.setSecret(authString);
+					core.setSecret(customRegistryToken);
+
+					process.env[envVarName] = authString;
+					core.info(`Set ${envVarName} for custom registry: ${registry} (using GitHub App token)`);
 				}
 			}
 		}
