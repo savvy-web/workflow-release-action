@@ -1,7 +1,7 @@
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
+import { readFile, stat } from "node:fs/promises";
+import { resolve } from "node:path";
+import { debug, endGroup, info, startGroup } from "@actions/core";
+import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 
 type Octokit = ReturnType<typeof getOctokit>;
@@ -38,7 +38,7 @@ interface CreateApiCommitResult {
  */
 async function getChangedFiles(): Promise<Array<{ path: string; status: string }>> {
 	let output = "";
-	await exec.exec("git", ["status", "--porcelain", "-z"], {
+	await exec("git", ["status", "--porcelain", "-z"], {
 		listeners: {
 			stdout: (data: Buffer) => {
 				output += data.toString();
@@ -76,8 +76,8 @@ async function getChangedFiles(): Promise<Array<{ path: string; status: string }
  * @returns Blob SHA
  */
 async function createBlob(octokit: Octokit, filePath: string): Promise<string> {
-	const absolutePath = path.resolve(process.cwd(), filePath);
-	const content = await fs.readFile(absolutePath);
+	const absolutePath = resolve(process.cwd(), filePath);
+	const content = await readFile(absolutePath);
 	const base64Content = content.toString("base64");
 
 	const { data: blob } = await octokit.rest.git.createBlob({
@@ -99,8 +99,8 @@ async function createBlob(octokit: Octokit, filePath: string): Promise<string> {
 async function getFileMode(filePath: string): Promise<GitFileMode> {
 	// Check if file is executable
 	try {
-		const absolutePath = path.resolve(process.cwd(), filePath);
-		const stats = await fs.stat(absolutePath);
+		const absolutePath = resolve(process.cwd(), filePath);
+		const stats = await stat(absolutePath);
 		// Check if any execute bit is set
 		if (stats.mode & 0o111) {
 			return "100755";
@@ -150,19 +150,19 @@ export async function createApiCommit(
 	const parentBranch = options.parentBranch || branch;
 	const force = options.force ?? parentBranch !== branch;
 
-	core.startGroup("Creating API commit");
+	startGroup("Creating API commit");
 
 	// Get changed files
 	const changedFiles = await getChangedFiles();
 
 	if (changedFiles.length === 0) {
-		core.info("No changes to commit");
-		core.endGroup();
+		info("No changes to commit");
+		endGroup();
 		return { sha: "", created: false };
 	}
 
-	core.info(`Found ${changedFiles.length} changed file(s)`);
-	core.debug(`Changed files: ${JSON.stringify(changedFiles, null, 2)}`);
+	info(`Found ${changedFiles.length} changed file(s)`);
+	debug(`Changed files: ${JSON.stringify(changedFiles, null, 2)}`);
 
 	// Get the parent commit from the specified parent branch
 	const { data: refData } = await octokit.rest.git.getRef({
@@ -180,9 +180,9 @@ export async function createApiCommit(
 	});
 	const baseTreeSha = parentCommit.tree.sha;
 
-	core.info(`Parent branch: ${parentBranch}`);
-	core.info(`Parent commit: ${parentCommitSha}`);
-	core.info(`Base tree: ${baseTreeSha}`);
+	info(`Parent branch: ${parentBranch}`);
+	info(`Parent commit: ${parentCommitSha}`);
+	info(`Base tree: ${baseTreeSha}`);
 
 	// Create tree objects for all changed files
 	const treeObjects: TreeObject[] = [];
@@ -196,7 +196,7 @@ export async function createApiCommit(
 				type: "blob",
 				sha: null,
 			});
-			core.debug(`Delete: ${file.path}`);
+			debug(`Delete: ${file.path}`);
 		} else {
 			// Added or modified file - create blob
 			const blobSha = await createBlob(octokit, file.path);
@@ -207,22 +207,22 @@ export async function createApiCommit(
 				type: "blob",
 				sha: blobSha,
 			});
-			core.debug(`${file.status === "A" || file.status === "?" ? "Add" : "Modify"}: ${file.path} (${blobSha})`);
+			debug(`${file.status === "A" || file.status === "?" ? "Add" : "Modify"}: ${file.path} (${blobSha})`);
 		}
 	}
 
 	// Create the new tree
-	core.info("Creating tree...");
+	info("Creating tree...");
 	const { data: newTree } = await octokit.rest.git.createTree({
 		owner,
 		repo,
 		base_tree: baseTreeSha,
 		tree: treeObjects,
 	});
-	core.info(`Created tree: ${newTree.sha}`);
+	info(`Created tree: ${newTree.sha}`);
 
 	// Create the commit
-	core.info("Creating commit...");
+	info("Creating commit...");
 	const { data: newCommit } = await octokit.rest.git.createCommit({
 		owner,
 		repo,
@@ -230,10 +230,10 @@ export async function createApiCommit(
 		tree: newTree.sha,
 		parents: [parentCommitSha],
 	});
-	core.info(`Created commit: ${newCommit.sha}`);
+	info(`Created commit: ${newCommit.sha}`);
 
 	// Update the branch ref
-	core.info(`Updating ref heads/${branch}${force ? " (force)" : ""}...`);
+	info(`Updating ref heads/${branch}${force ? " (force)" : ""}...`);
 	await octokit.rest.git.updateRef({
 		owner,
 		repo,
@@ -241,9 +241,9 @@ export async function createApiCommit(
 		sha: newCommit.sha,
 		force,
 	});
-	core.info(`✓ Updated branch ${branch} to ${newCommit.sha}`);
+	info(`✓ Updated branch ${branch} to ${newCommit.sha}`);
 
-	core.endGroup();
+	endGroup();
 
 	return {
 		sha: newCommit.sha,
@@ -279,7 +279,7 @@ export async function updateBranchToRef(
 	});
 	const sourceSha = sourceRef.object.sha;
 
-	core.info(`Updating ${targetBranch} to ${sourceBranch} (${sourceSha})${force ? " (force)" : ""}`);
+	info(`Updating ${targetBranch} to ${sourceBranch} (${sourceSha})${force ? " (force)" : ""}`);
 
 	// Update the target branch ref
 	await octokit.rest.git.updateRef({
@@ -290,6 +290,6 @@ export async function updateBranchToRef(
 		force,
 	});
 
-	core.info(`✓ Updated ${targetBranch} to ${sourceSha}`);
+	info(`✓ Updated ${targetBranch} to ${sourceSha}`);
 	return sourceSha;
 }

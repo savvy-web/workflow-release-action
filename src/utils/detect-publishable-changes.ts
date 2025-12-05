@@ -1,7 +1,7 @@
 import { readFile, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
+import { debug, error, getState, info, warning } from "@actions/core";
+import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { findProjectRoot, getWorkspaces } from "workspace-tools";
 import { summaryWriter } from "./summary-writer.js";
@@ -87,7 +87,7 @@ export async function detectPublishableChanges(
 	packages: ChangesetPackage[];
 	checkId: number;
 }> {
-	const token = core.getState("token");
+	const token = getState("token");
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
@@ -111,9 +111,9 @@ export async function detectPublishableChanges(
 	let statusError = "";
 	let statusStdout = "";
 
-	core.info(`Running: ${changesetCommand} ${changesetArgs.join(" ")}`);
+	info(`Running: ${changesetCommand} ${changesetArgs.join(" ")}`);
 
-	const exitCode = await exec.exec(changesetCommand, changesetArgs, {
+	const exitCode = await exec(changesetCommand, changesetArgs, {
 		listeners: {
 			stdout: (data: Buffer) => {
 				statusStdout += data.toString();
@@ -126,12 +126,12 @@ export async function detectPublishableChanges(
 		silent: true,
 	});
 
-	core.info(`Changeset status exit code: ${exitCode}`);
+	info(`Changeset status exit code: ${exitCode}`);
 	if (statusStdout) {
-		core.info(`Changeset stdout: ${statusStdout.trim()}`);
+		info(`Changeset stdout: ${statusStdout.trim()}`);
 	}
 	if (statusError) {
-		core.info(`Changeset stderr: ${statusError.trim()}`);
+		info(`Changeset stderr: ${statusError.trim()}`);
 	}
 
 	// Check for changeset validation errors (exit code 1 with specific error patterns)
@@ -151,7 +151,7 @@ export async function detectPublishableChanges(
 
 			const errorSummary = errorLines.length > 0 ? errorLines.join("\n") : "Changeset configuration validation failed";
 
-			core.error(`Changeset validation error:\n${errorSummary}`);
+			error(`Changeset validation error:\n${errorSummary}`);
 			throw new Error(`Changeset configuration is invalid:\n${errorSummary}`);
 		}
 	}
@@ -162,22 +162,22 @@ export async function detectPublishableChanges(
 	try {
 		const statusContent = await readFile(statusFile, "utf-8");
 		const trimmedOutput = statusContent.trim();
-		core.info(`Changeset status file contents (${statusContent.length} bytes): ${trimmedOutput.slice(0, 500)}`);
+		info(`Changeset status file contents (${statusContent.length} bytes): ${trimmedOutput.slice(0, 500)}`);
 
 		if (!trimmedOutput || trimmedOutput === "") {
-			core.info("Changeset status file is empty (no changesets present)");
+			info("Changeset status file is empty (no changesets present)");
 			changesetStatus = { releases: [], changesets: [] };
 		} else {
 			changesetStatus = JSON.parse(trimmedOutput) as ChangesetStatus;
-			core.info(`Parsed ${changesetStatus.changesets.length} changesets, ${changesetStatus.releases.length} releases`);
+			info(`Parsed ${changesetStatus.changesets.length} changesets, ${changesetStatus.releases.length} releases`);
 		}
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") {
 			// File not created means no changesets or command failed
-			core.info(`Changeset status file not created at ${statusFile}`);
+			info(`Changeset status file not created at ${statusFile}`);
 			changesetStatus = { releases: [], changesets: [] };
 		} else {
-			core.warning(`Failed to read/parse changeset status: ${error instanceof Error ? error.message : String(error)}`);
+			warning(`Failed to read/parse changeset status: ${err instanceof Error ? err.message : String(err)}`);
 			changesetStatus = { releases: [], changesets: [] };
 		}
 	} finally {
@@ -189,16 +189,16 @@ export async function detectPublishableChanges(
 		}
 	}
 
-	core.debug(`Changeset status: ${JSON.stringify(changesetStatus, null, 2)}`);
+	debug(`Changeset status: ${JSON.stringify(changesetStatus, null, 2)}`);
 
 	// Log what changesets found
 	if (changesetStatus.changesets.length > 0) {
-		core.info(`Found ${changesetStatus.changesets.length} changeset(s)`);
+		info(`Found ${changesetStatus.changesets.length} changeset(s)`);
 	}
 	if (changesetStatus.releases.length > 0) {
-		core.info(`Found ${changesetStatus.releases.length} package(s) with pending releases`);
+		info(`Found ${changesetStatus.releases.length} package(s) with pending releases`);
 	} else {
-		core.info("No packages with pending releases found");
+		info("No packages with pending releases found");
 	}
 
 	// Build a map of package name -> package info using workspace-tools
@@ -230,19 +230,19 @@ export async function detectPublishableChanges(
 
 	// Log discovered packages and their publish configurations
 	if (packageMap.size > 0) {
-		core.info(`📦 Discovered ${packageMap.size} package(s) in workspace:`);
-		for (const [name, info] of packageMap) {
-			const access = info.packageJson.publishConfig?.access;
-			const isPrivate = info.packageJson.private;
+		info(`📦 Discovered ${packageMap.size} package(s) in workspace:`);
+		for (const [name, pkgInfo] of packageMap) {
+			const access = pkgInfo.packageJson.publishConfig?.access;
+			const isPrivate = pkgInfo.packageJson.private;
 			const strategy = access
 				? `publishConfig.access: ${access}`
 				: isPrivate
 					? "private (no publish)"
 					: "no publishConfig";
-			core.info(`   • ${name} (${strategy})`);
+			info(`   • ${name} (${strategy})`);
 		}
 	} else {
-		core.info("📦 No packages found in workspace");
+		info("📦 No packages found in workspace");
 	}
 
 	// Filter for publishable packages
@@ -251,7 +251,7 @@ export async function detectPublishableChanges(
 	for (const release of changesetStatus.releases) {
 		// Skip if no version bump
 		if (release.type === "none") {
-			core.debug(`Skipping ${release.name}: no version bump`);
+			debug(`Skipping ${release.name}: no version bump`);
 			continue;
 		}
 
@@ -259,14 +259,14 @@ export async function detectPublishableChanges(
 		const pkgInfo = packageMap.get(release.name);
 
 		if (!pkgInfo) {
-			core.warning(`Could not find package.json for ${release.name}, skipping`);
+			warning(`Could not find package.json for ${release.name}, skipping`);
 			continue;
 		}
 
 		const { path: packagePath, packageJson } = pkgInfo;
 
-		core.debug(`Found package.json for ${release.name} at ${packagePath}`);
-		core.debug(`Package config: ${JSON.stringify(packageJson, null, 2)}`);
+		debug(`Found package.json for ${release.name} at ${packagePath}`);
+		debug(`Package config: ${JSON.stringify(packageJson, null, 2)}`);
 
 		// Check if package is publishable
 		const hasPublishConfig = packageJson.publishConfig?.access !== undefined;
@@ -274,7 +274,7 @@ export async function detectPublishableChanges(
 			packageJson.publishConfig?.access === "public" || packageJson.publishConfig?.access === "restricted";
 
 		if (hasPublishConfig && isPublicOrRestricted) {
-			core.info(`✓ ${release.name} is publishable (access: ${packageJson.publishConfig?.access})`);
+			info(`✓ ${release.name} is publishable (access: ${packageJson.publishConfig?.access})`);
 			publishablePackages.push(release);
 		} else {
 			// Log at info level so users can see why packages are skipped
@@ -282,7 +282,7 @@ export async function detectPublishableChanges(
 				packageJson.private && !hasPublishConfig
 					? "package is private without publishConfig.access"
 					: "missing publishConfig.access (public or restricted)";
-			core.info(`⚪ Skipping ${release.name}: ${reason}`);
+			info(`⚪ Skipping ${release.name}: ${reason}`);
 		}
 	}
 
@@ -336,7 +336,7 @@ export async function detectPublishableChanges(
 		},
 	});
 
-	core.info(`Created check run: ${checkRun.html_url}`);
+	info(`Created check run: ${checkRun.html_url}`);
 
 	// Write job summary using summaryWriter
 	const jobSummarySections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [

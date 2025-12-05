@@ -1,8 +1,7 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as core from "@actions/core";
-import * as github from "@actions/github";
-import { context } from "@actions/github";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { debug, error, info, warning } from "@actions/core";
+import { context, getOctokit } from "@actions/github";
 import type { PackageJson } from "../types/publish-config.js";
 
 /**
@@ -79,11 +78,11 @@ export async function detectReleasedPackagesFromPR(
 	token: string,
 	prNumber: number,
 ): Promise<DetectReleasedPackagesResult> {
-	const octokit = github.getOctokit(token);
+	const octokit = getOctokit(token);
 	const packages: ReleasedPackageInfo[] = [];
 
 	try {
-		core.info(`Detecting released packages from PR #${prNumber}...`);
+		info(`Detecting released packages from PR #${prNumber}...`);
 
 		// Get files changed in the PR
 		const { data: files } = await octokit.rest.pulls.listFiles({
@@ -102,7 +101,7 @@ export async function detectReleasedPackagesFromPR(
 				file.filename !== "package.json",
 		);
 
-		core.info(`Found ${packageJsonFiles.length} modified package.json file(s)`);
+		info(`Found ${packageJsonFiles.length} modified package.json file(s)`);
 
 		// Also check root package.json for single-package repos
 		const rootPackageJson = files.find((file) => file.filename === "package.json" && file.status === "modified");
@@ -115,12 +114,12 @@ export async function detectReleasedPackagesFromPR(
 		for (const file of packageJsonFiles) {
 			try {
 				// Get the file content at the merge commit (current HEAD)
-				const currentContent = fs.readFileSync(path.join(process.cwd(), file.filename), "utf-8");
+				const currentContent = readFileSync(join(process.cwd(), file.filename), "utf-8");
 				const currentPkg = JSON.parse(currentContent) as PackageJson;
 
 				// Skip private packages without publishConfig
 				if (currentPkg.private && !currentPkg.publishConfig) {
-					core.debug(`Skipping private package: ${currentPkg.name}`);
+					debug(`Skipping private package: ${currentPkg.name}`);
 					continue;
 				}
 
@@ -147,7 +146,7 @@ export async function detectReleasedPackagesFromPR(
 					}
 				} catch {
 					// File might not exist in base (new package)
-					core.debug(`Could not get old version for ${file.filename}, assuming new package`);
+					debug(`Could not get old version for ${file.filename}, assuming new package`);
 				}
 
 				const newVersion = currentPkg.version || "0.0.0";
@@ -155,31 +154,31 @@ export async function detectReleasedPackagesFromPR(
 				// Only include if version actually changed
 				if (oldVersion !== newVersion) {
 					const bumpType = inferBumpType(oldVersion, newVersion);
-					const packageDir = path.dirname(file.filename);
+					const packageDir = dirname(file.filename);
 
 					packages.push({
 						name: currentPkg.name || packageDir,
 						version: newVersion,
-						path: packageDir === "." ? process.cwd() : path.join(process.cwd(), packageDir),
+						path: packageDir === "." ? process.cwd() : join(process.cwd(), packageDir),
 						bumpType,
 					});
 
-					core.info(`  ${currentPkg.name}: ${oldVersion} → ${newVersion} (${bumpType})`);
+					info(`  ${currentPkg.name}: ${oldVersion} → ${newVersion} (${bumpType})`);
 				}
-			} catch (error) {
-				core.warning(`Failed to process ${file.filename}: ${error instanceof Error ? error.message : String(error)}`);
+			} catch (err) {
+				warning(`Failed to process ${file.filename}: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		}
 
-		core.info(`Detected ${packages.length} released package(s)`);
+		info(`Detected ${packages.length} released package(s)`);
 
 		return {
 			success: true,
 			packages,
 		};
-	} catch (error) {
-		const errorMessage = error instanceof Error ? error.message : String(error);
-		core.error(`Failed to detect released packages: ${errorMessage}`);
+	} catch (err) {
+		const errorMessage = err instanceof Error ? err.message : String(err);
+		error(`Failed to detect released packages: ${errorMessage}`);
 		return {
 			success: false,
 			packages: [],
@@ -199,11 +198,11 @@ export async function detectReleasedPackagesFromPR(
  * @returns Promise resolving to detected packages
  */
 export async function detectReleasedPackagesFromCommit(token: string): Promise<DetectReleasedPackagesResult> {
-	const octokit = github.getOctokit(token);
+	const octokit = getOctokit(token);
 	const packages: ReleasedPackageInfo[] = [];
 
 	try {
-		core.info("Detecting released packages from merge commit...");
+		info("Detecting released packages from merge commit...");
 
 		// Get the commit to find parent SHAs
 		const { data: commit } = await octokit.rest.repos.getCommit({
@@ -221,7 +220,7 @@ export async function detectReleasedPackagesFromCommit(token: string): Promise<D
 		}
 
 		const baseSha = commit.parents[0].sha;
-		core.info(`Comparing ${context.sha.substring(0, 8)} with parent ${baseSha.substring(0, 8)}`);
+		info(`Comparing ${context.sha.substring(0, 8)} with parent ${baseSha.substring(0, 8)}`);
 
 		// Compare the commits to get changed files
 		const { data: comparison } = await octokit.rest.repos.compareCommits({
@@ -237,24 +236,24 @@ export async function detectReleasedPackagesFromCommit(token: string): Promise<D
 				(file) => file.filename.endsWith("package.json") && (file.status === "modified" || file.status === "changed"),
 			) || [];
 
-		core.info(`Found ${packageJsonFiles.length} modified package.json file(s)`);
+		info(`Found ${packageJsonFiles.length} modified package.json file(s)`);
 
 		// For each modified package.json, get the old and new versions
 		for (const file of packageJsonFiles) {
 			try {
 				// Get current content from the filesystem
-				const fullPath = path.join(process.cwd(), file.filename);
-				if (!fs.existsSync(fullPath)) {
-					core.debug(`File not found: ${fullPath}`);
+				const fullPath = join(process.cwd(), file.filename);
+				if (!existsSync(fullPath)) {
+					debug(`File not found: ${fullPath}`);
 					continue;
 				}
 
-				const currentContent = fs.readFileSync(fullPath, "utf-8");
+				const currentContent = readFileSync(fullPath, "utf-8");
 				const currentPkg = JSON.parse(currentContent) as PackageJson;
 
 				// Skip private packages without publishConfig
 				if (currentPkg.private && !currentPkg.publishConfig) {
-					core.debug(`Skipping private package: ${currentPkg.name}`);
+					debug(`Skipping private package: ${currentPkg.name}`);
 					continue;
 				}
 
@@ -274,7 +273,7 @@ export async function detectReleasedPackagesFromCommit(token: string): Promise<D
 						oldVersion = oldPkg.version || "0.0.0";
 					}
 				} catch {
-					core.debug(`Could not get old version for ${file.filename}`);
+					debug(`Could not get old version for ${file.filename}`);
 				}
 
 				const newVersion = currentPkg.version || "0.0.0";
@@ -282,31 +281,31 @@ export async function detectReleasedPackagesFromCommit(token: string): Promise<D
 				// Only include if version actually changed
 				if (oldVersion !== newVersion) {
 					const bumpType = inferBumpType(oldVersion, newVersion);
-					const packageDir = path.dirname(file.filename);
+					const packageDir = dirname(file.filename);
 
 					packages.push({
 						name: currentPkg.name || packageDir,
 						version: newVersion,
-						path: packageDir === "." ? process.cwd() : path.join(process.cwd(), packageDir),
+						path: packageDir === "." ? process.cwd() : join(process.cwd(), packageDir),
 						bumpType,
 					});
 
-					core.info(`  ${currentPkg.name}: ${oldVersion} → ${newVersion} (${bumpType})`);
+					info(`  ${currentPkg.name}: ${oldVersion} → ${newVersion} (${bumpType})`);
 				}
-			} catch (error) {
-				core.warning(`Failed to process ${file.filename}: ${error instanceof Error ? error.message : String(error)}`);
+			} catch (err) {
+				warning(`Failed to process ${file.filename}: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		}
 
-		core.info(`Detected ${packages.length} released package(s)`);
+		info(`Detected ${packages.length} released package(s)`);
 
 		return {
 			success: true,
 			packages,
 		};
-	} catch (error) {
-		const errorMessage = error instanceof Error ? error.message : String(error);
-		core.error(`Failed to detect released packages: ${errorMessage}`);
+	} catch (err) {
+		const errorMessage = err instanceof Error ? err.message : String(err);
+		error(`Failed to detect released packages: ${errorMessage}`);
 		return {
 			success: false,
 			packages: [],

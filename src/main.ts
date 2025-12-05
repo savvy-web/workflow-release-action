@@ -1,7 +1,19 @@
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
-import * as github from "@actions/github";
-import { context } from "@actions/github";
+import {
+	debug,
+	endGroup,
+	getBooleanInput,
+	getInput,
+	getState,
+	info,
+	saveState,
+	setFailed,
+	setOutput,
+	startGroup,
+	summary,
+	warning,
+} from "@actions/core";
+import { exec } from "@actions/exec";
+import { context, getOctokit } from "@actions/github";
 
 import { checkReleaseBranch } from "./utils/check-release-branch.js";
 import { cleanupValidationChecks } from "./utils/cleanup-validation-checks.js";
@@ -76,17 +88,17 @@ async function run(): Promise<void> {
 		logger.start();
 
 		// Get token from state (set by pre.ts)
-		const token = core.getState("token");
+		const token = getState("token");
 
 		if (!token) {
 			throw new Error("No token available. The pre-action should have generated a token from app-id/private-key.");
 		}
 
 		// Auto-detect package manager from package.json (repo is checked out by now)
-		core.info("Detecting package manager...");
+		info("Detecting package manager...");
 		const repoType = await detectRepoType();
-		core.saveState("packageManager", repoType.packageManager);
-		core.info(`Detected package manager: ${repoType.packageManager}`);
+		saveState("packageManager", repoType.packageManager);
+		info(`Detected package manager: ${repoType.packageManager}`);
 
 		// Read inputs
 		const inputs = {
@@ -94,39 +106,39 @@ async function run(): Promise<void> {
 			token,
 
 			// Repository configuration
-			releaseBranch: core.getInput("release-branch") || "changeset-release/main",
-			targetBranch: core.getInput("target-branch") || "main",
+			releaseBranch: getInput("release-branch") || "changeset-release/main",
+			targetBranch: getInput("target-branch") || "main",
 
 			// Package manager (auto-detected above)
 			packageManager: repoType.packageManager,
 
 			// Workflow mode
-			dryRun: core.getBooleanInput("dry-run") || false,
+			dryRun: getBooleanInput("dry-run") || false,
 
 			// Explicit phase (optional, skips automatic detection)
-			phase: (core.getInput("phase") as WorkflowPhase) || undefined,
+			phase: (getInput("phase") as WorkflowPhase) || undefined,
 
 			// Anthropic API key for Claude (optional, for PR description generation)
-			anthropicApiKey: core.getInput("anthropic-api-key"),
+			anthropicApiKey: getInput("anthropic-api-key"),
 
 			// GitHub PAT for operations requiring user context (optional)
-			claudeReviewPat: core.getInput("claude-review-pat"),
+			claudeReviewPat: getInput("claude-review-pat"),
 		};
 
-		core.debug(`Inputs: ${JSON.stringify({ ...inputs, token: "[REDACTED]" }, null, 2)}`);
+		debug(`Inputs: ${JSON.stringify({ ...inputs, token: "[REDACTED]" }, null, 2)}`);
 
 		// Token permissions were already validated in pre.ts
 		// Log token info from state for debugging
-		const tokenType = core.getState("tokenType");
-		const tokenLogin = core.getState("tokenLogin");
-		const appName = core.getState("appName");
+		const tokenType = getState("tokenType");
+		const tokenLogin = getState("tokenLogin");
+		const appName = getState("appName");
 		if (tokenType || tokenLogin || appName) {
-			core.info(
+			info(
 				`Using ${tokenType || "unknown"} token${appName ? ` (${appName})` : ""}${tokenLogin ? ` as ${tokenLogin}` : ""}`,
 			);
 		}
 
-		const octokit = github.getOctokit(inputs.token);
+		const octokit = getOctokit(inputs.token);
 
 		// Detect which workflow phase to run using the phase detection utility
 		const phaseResult = await detectWorkflowPhase({
@@ -186,7 +198,7 @@ async function run(): Promise<void> {
 				logger.noAction(phaseResult.reason);
 		}
 	} catch (error) {
-		core.setFailed(`Release workflow failed: ${error instanceof Error ? error.message : String(error)}`);
+		setFailed(`Release workflow failed: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 
@@ -213,9 +225,9 @@ async function runPhase1BranchManagement(inputs: {
 
 		const detectionResult = await detectPublishableChanges(inputs.packageManager, inputs.dryRun);
 
-		core.setOutput("has_changes", detectionResult.hasChanges);
-		core.setOutput("publishable_packages", JSON.stringify(detectionResult.packages));
-		core.setOutput("detection_check_id", detectionResult.checkId);
+		setOutput("has_changes", detectionResult.hasChanges);
+		setOutput("publishable_packages", JSON.stringify(detectionResult.packages));
+		setOutput("detection_check_id", detectionResult.checkId);
 
 		logger.endStep();
 
@@ -229,10 +241,10 @@ async function runPhase1BranchManagement(inputs: {
 
 		const branchCheckResult = await checkReleaseBranch(inputs.releaseBranch, inputs.targetBranch, inputs.dryRun);
 
-		core.setOutput("release_branch_exists", branchCheckResult.exists);
-		core.setOutput("release_branch_has_open_pr", branchCheckResult.hasOpenPr);
-		core.setOutput("release_pr_number", branchCheckResult.prNumber || "");
-		core.setOutput("branch_check_id", branchCheckResult.checkId);
+		setOutput("release_branch_exists", branchCheckResult.exists);
+		setOutput("release_branch_has_open_pr", branchCheckResult.hasOpenPr);
+		setOutput("release_pr_number", branchCheckResult.prNumber || "");
+		setOutput("branch_check_id", branchCheckResult.checkId);
 
 		logger.endStep();
 
@@ -242,9 +254,9 @@ async function runPhase1BranchManagement(inputs: {
 
 			const createResult = await createReleaseBranch();
 
-			core.setOutput("release_branch_created", createResult.created);
-			core.setOutput("release_pr_number", createResult.prNumber || "");
-			core.setOutput("create_check_id", createResult.checkId);
+			setOutput("release_branch_created", createResult.created);
+			setOutput("release_pr_number", createResult.prNumber || "");
+			setOutput("create_check_id", createResult.checkId);
 
 			logger.endStep();
 		} else {
@@ -252,16 +264,16 @@ async function runPhase1BranchManagement(inputs: {
 
 			const updateResult = await updateReleaseBranch();
 
-			core.setOutput("release_branch_updated", updateResult.success);
-			core.setOutput("has_conflicts", updateResult.hadConflicts);
-			core.setOutput("update_check_id", updateResult.checkId);
+			setOutput("release_branch_updated", updateResult.success);
+			setOutput("has_conflicts", updateResult.hadConflicts);
+			setOutput("update_check_id", updateResult.checkId);
 
 			logger.endStep();
 		}
 
 		logger.phaseComplete(1);
 	} catch (error) {
-		core.setFailed(`Phase 1 failed: ${error instanceof Error ? error.message : String(error)}`);
+		setFailed(`Phase 1 failed: ${error instanceof Error ? error.message : String(error)}`);
 		throw error;
 	}
 }
@@ -281,19 +293,19 @@ async function runPhase1BranchManagement(inputs: {
  * 8. Generate release notes preview
  */
 async function runPhase2Validation(inputs: Inputs): Promise<void> {
-	const octokit = github.getOctokit(inputs.token);
+	const octokit = getOctokit(inputs.token);
 
 	// Fetch full history for changeset comparisons
 	// Changesets needs to find the merge base between the release branch and target branch,
 	// which requires having enough commit history to find where they diverged.
 	// A shallow clone with depth=1 won't have the common ancestor.
-	core.startGroup("Fetching git history for changeset comparison");
+	startGroup("Fetching git history for changeset comparison");
 	try {
 		// First, unshallow the current branch if it's a shallow clone
 		let isShallow = false;
 		try {
 			let shallowCheck = "";
-			await exec.exec("git", ["rev-parse", "--is-shallow-repository"], {
+			await exec("git", ["rev-parse", "--is-shallow-repository"], {
 				listeners: {
 					stdout: (data: Buffer) => {
 						shallowCheck += data.toString();
@@ -306,21 +318,21 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		}
 
 		if (isShallow) {
-			core.info("Repository is shallow, fetching full history...");
-			await exec.exec("git", ["fetch", "--unshallow", "origin"]);
-			core.info("✓ Unshallowed repository");
+			info("Repository is shallow, fetching full history...");
+			await exec("git", ["fetch", "--unshallow", "origin"]);
+			info("✓ Unshallowed repository");
 		}
 
 		// Fetch the target branch and create a local ref
 		// Changesets needs a local branch ref, not just origin/main
-		await exec.exec("git", ["fetch", "origin", `${inputs.targetBranch}:${inputs.targetBranch}`]);
-		core.info(`✓ Fetched ${inputs.targetBranch} branch`);
+		await exec("git", ["fetch", "origin", `${inputs.targetBranch}:${inputs.targetBranch}`]);
+		info(`✓ Fetched ${inputs.targetBranch} branch`);
 	} catch (error) {
-		core.warning(
+		warning(
 			`Failed to fetch git history: ${error instanceof Error ? error.message : String(error)}. Changeset status may fail.`,
 		);
 	}
-	core.endGroup();
+	endGroup();
 
 	const checkIds: number[] = [];
 	const checkNames = [
@@ -364,8 +376,8 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		const issuesResult = await linkIssuesFromCommits();
 
-		core.setOutput("linked_issues", JSON.stringify(issuesResult.linkedIssues));
-		core.setOutput("issue_commits", JSON.stringify(issuesResult.commits));
+		setOutput("linked_issues", JSON.stringify(issuesResult.linkedIssues));
+		setOutput("issue_commits", JSON.stringify(issuesResult.commits));
 
 		logger.endStep();
 
@@ -418,7 +430,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 						inputs.dryRun,
 					);
 
-					core.setOutput("pr_description", descResult.description);
+					setOutput("pr_description", descResult.description);
 					logger.success(`Generated PR description (${descResult.description.length} characters)`);
 
 					await octokit.rest.checks.update({
@@ -490,8 +502,8 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		const buildResult = await validateBuilds();
 
-		core.setOutput("builds_passed", buildResult.success);
-		core.setOutput("build_results", JSON.stringify([]));
+		setOutput("builds_passed", buildResult.success);
+		setOutput("build_results", JSON.stringify([]));
 
 		// Complete the placeholder check
 		await octokit.rest.checks.update({
@@ -542,9 +554,9 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			publishResult = await validatePublish(inputs.packageManager, inputs.targetBranch, inputs.dryRun);
 
 			// Set outputs for backwards compatibility
-			core.setOutput("npm_publish_ready", publishResult.npmReady);
-			core.setOutput("github_packages_ready", publishResult.githubPackagesReady);
-			core.setOutput("publish_results", JSON.stringify(publishResult.validations));
+			setOutput("npm_publish_ready", publishResult.npmReady);
+			setOutput("github_packages_ready", publishResult.githubPackagesReady);
+			setOutput("publish_results", JSON.stringify(publishResult.validations));
 
 			// Determine check conclusion
 			const conclusion = publishResult.totalTargets === 0 ? "skipped" : publishResult.success ? "success" : "failure";
@@ -736,7 +748,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				logger.success("Updated sticky comment on PR");
 
 				// Write job summary with same content
-				await core.summary.addRaw(summaryContent).write();
+				await summary.addRaw(summaryContent).write();
 			} else {
 				logger.warn("No open PR found for release branch - skipping sticky comment update");
 			}
@@ -763,7 +775,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			);
 		}
 
-		core.setFailed(`Phase 2 failed: ${error instanceof Error ? error.message : String(error)}`);
+		setFailed(`Phase 2 failed: ${error instanceof Error ? error.message : String(error)}`);
 		throw error;
 	}
 }
@@ -781,7 +793,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
  * 6. Set comprehensive workflow outputs
  */
 async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Promise<void> {
-	const octokit = github.getOctokit(inputs.token);
+	const octokit = getOctokit(inputs.token);
 
 	// Create publishing checks upfront
 	const checkNames = ["Publish Packages", "Create Tags", "Create GitHub Releases"];
@@ -858,10 +870,10 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 		);
 
 		// Set outputs
-		core.setOutput("released_packages", JSON.stringify(publishResult.packages));
-		core.setOutput("package_count", publishResult.totalPackages);
-		core.setOutput("publish_results", JSON.stringify(publishResult.packages));
-		core.setOutput("success", publishResult.success);
+		setOutput("released_packages", JSON.stringify(publishResult.packages));
+		setOutput("package_count", publishResult.totalPackages);
+		setOutput("publish_results", JSON.stringify(publishResult.packages));
+		setOutput("success", publishResult.success);
 
 		// Check failure type to determine appropriate summary
 		const isPreValidationFailure = publishResult.preValidationDetails !== undefined;
@@ -929,13 +941,13 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 			}
 
 			// Write detailed job summary with error information
-			await core.summary
+			await summary
 				.addHeading(`❌ Release ${failureReason}`, 1)
 				.addRaw(inputs.dryRun ? "> 🧪 **DRY RUN MODE**\n\n" : "")
 				.addRaw(publishSummary)
 				.write();
 
-			core.setFailed(failureReason);
+			setFailed(failureReason);
 			return;
 		}
 
@@ -960,8 +972,8 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 
 		const releaseType = determineReleaseType(publishResult.packages, bumpTypes);
 
-		core.setOutput("release_type", releaseType);
-		core.setOutput("release_tags", JSON.stringify(tagStrategy.tags.map((t) => t.name)));
+		setOutput("release_type", releaseType);
+		setOutput("release_tags", JSON.stringify(tagStrategy.tags.map((t) => t.name)));
 
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
@@ -989,7 +1001,7 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 
 		const releasesResult = await createGitHubReleases(tagStrategy.tags, publishResult.packages, inputs.dryRun);
 
-		core.setOutput("release_urls", JSON.stringify(releasesResult.releases.map((r) => r.url)));
+		setOutput("release_urls", JSON.stringify(releasesResult.releases.map((r) => r.url)));
 
 		// Build releases summary
 		const releasesSummary = releasesResult.releases
@@ -1025,9 +1037,9 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 				const result = await closeLinkedIssues(inputs.token, mergedPRNumber, inputs.dryRun);
 
 				closedIssuesResult = { closedCount: result.closedCount, failedCount: result.failedCount };
-				core.setOutput("closed_issues_count", result.closedCount);
-				core.setOutput("failed_issues_count", result.failedCount);
-				core.setOutput("closed_issues", JSON.stringify(result.issues));
+				setOutput("closed_issues_count", result.closedCount);
+				setOutput("failed_issues_count", result.failedCount);
+				setOutput("closed_issues", JSON.stringify(result.issues));
 
 				if (result.closedCount > 0) {
 					logger.success(`Closed ${result.closedCount} linked issue(s)`);
@@ -1047,7 +1059,7 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 		}
 
 		// Write job summary
-		await core.summary
+		await summary
 			.addHeading("🚀 Release Published", 1)
 			.addRaw(inputs.dryRun ? "> 🧪 **DRY RUN MODE** - No actual changes were made\n\n" : "")
 			.addHeading("📦 Published Packages", 2)
@@ -1077,7 +1089,7 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 			);
 		}
 
-		core.setFailed(`Phase 3 failed: ${error instanceof Error ? error.message : String(error)}`);
+		setFailed(`Phase 3 failed: ${error instanceof Error ? error.message : String(error)}`);
 		throw error;
 	}
 }

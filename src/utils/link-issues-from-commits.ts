@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { debug, endGroup, getBooleanInput, getInput, getState, info, startGroup, warning } from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -84,19 +84,19 @@ function extractIssueReferences(message: string): number[] {
  */
 export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 	// Read all inputs
-	const token = core.getState("token");
+	const token = getState("token");
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
-	const releaseBranch = core.getInput("release-branch") || "changeset-release/main";
-	const targetBranch = core.getInput("target-branch") || "main";
-	const dryRun = core.getBooleanInput("dry-run") || false;
+	const releaseBranch = getInput("release-branch") || "changeset-release/main";
+	const targetBranch = getInput("target-branch") || "main";
+	const dryRun = getBooleanInput("dry-run") || false;
 
 	const github = getOctokit(token);
-	core.startGroup("Linking issues from commits");
+	startGroup("Linking issues from commits");
 
 	// Compare commits between release branch and target branch
-	core.info(`Comparing ${releaseBranch}...${targetBranch}`);
+	info(`Comparing ${releaseBranch}...${targetBranch}`);
 
 	const { data: comparison } = await github.rest.repos.compareCommits({
 		owner: context.repo.owner,
@@ -111,14 +111,14 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 		author: c.commit.author?.name || "Unknown",
 	}));
 
-	core.info(`Found ${commits.length} commit(s) in release branch`);
+	info(`Found ${commits.length} commit(s) in release branch`);
 
 	// Extract issue references from all commits
 	const issueMap = new Map<number, string[]>();
 
 	for (const commit of commits) {
 		const issues = extractIssueReferences(commit.message);
-		core.debug(`Commit ${commit.sha.slice(0, 7)}: found ${issues.length} issue reference(s)`);
+		debug(`Commit ${commit.sha.slice(0, 7)}: found ${issues.length} issue reference(s)`);
 
 		for (const issueNumber of issues) {
 			if (!issueMap.has(issueNumber)) {
@@ -128,7 +128,7 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 		}
 	}
 
-	core.info(`Found ${issueMap.size} unique issue reference(s)`);
+	info(`Found ${issueMap.size} unique issue reference(s)`);
 
 	// Fetch issue details for each referenced issue
 	const linkedIssues: LinkedIssue[] = [];
@@ -149,13 +149,13 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 				commits: commitShas,
 			});
 
-			core.info(`✓ Issue #${issueNumber}: ${issue.title} (${issue.state})`);
+			info(`✓ Issue #${issueNumber}: ${issue.title} (${issue.state})`);
 		} catch (error) {
-			core.warning(`Failed to fetch issue #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
+			warning(`Failed to fetch issue #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
-	core.endGroup();
+	endGroup();
 
 	// Create GitHub check run
 	const checkTitle = dryRun ? "🧪 Link Issues from Commits (Dry Run)" : "Link Issues from Commits";
@@ -207,7 +207,7 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 		},
 	});
 
-	core.info(`Created check run: ${checkRun.html_url}`);
+	info(`Created check run: ${checkRun.html_url}`);
 
 	return {
 		linkedIssues,

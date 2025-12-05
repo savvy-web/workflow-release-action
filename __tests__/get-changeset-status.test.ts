@@ -342,7 +342,7 @@ describe("get-changeset-status", () => {
 		const result = await getChangesetStatus("pnpm", "main");
 
 		expect(result.releases).toHaveLength(1);
-		expect(core.error).toHaveBeenCalledWith(expect.stringContaining("Failed to restore HEAD"));
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to restore HEAD"));
 		// Should have attempted fallback checkout
 		expect(checkoutCount).toBe(3);
 	});
@@ -696,6 +696,6 @@ describe("get-changeset-status", () => {
 		const result = await getChangesetStatus("pnpm", "main");
 
 		expect(result.releases).toHaveLength(1);
-		expect(core.error).toHaveBeenCalledWith(expect.stringContaining("Could not restore git state"));
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not restore git state"));
 	});
 });

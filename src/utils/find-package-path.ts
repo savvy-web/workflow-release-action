@@ -1,5 +1,5 @@
-import * as path from "node:path";
-import * as core from "@actions/core";
+import { join } from "node:path";
+import { debug, info, warning } from "@actions/core";
 import { getWorkspaces } from "workspace-tools";
 
 /**
@@ -23,10 +23,10 @@ function getWorkspaceMap(cwd: string = process.cwd()): Map<string, string> {
 
 	for (const workspace of workspaces) {
 		cachedWorkspaces.set(workspace.name, workspace.path);
-		core.debug(`Found workspace: ${workspace.name} at ${workspace.path}`);
+		debug(`Found workspace: ${workspace.name} at ${workspace.path}`);
 	}
 
-	core.info(`Found ${cachedWorkspaces.size} workspace package(s)`);
+	info(`Found ${cachedWorkspaces.size} workspace package(s)`);
 	return cachedWorkspaces;
 }
 
@@ -57,18 +57,18 @@ export function findPackagePath(packageName: string, publishSubdir?: string): st
 	const packagePath = workspaceMap.get(packageName);
 
 	if (!packagePath) {
-		core.warning(`Could not find workspace path for package: ${packageName}`);
+		warning(`Could not find workspace path for package: ${packageName}`);
 		return null;
 	}
 
 	// If a publish subdirectory is specified, append it to the path
 	if (publishSubdir) {
-		const publishPath = path.join(packagePath, publishSubdir);
-		core.debug(`Package ${packageName} publish path: ${publishPath}`);
+		const publishPath = join(packagePath, publishSubdir);
+		debug(`Package ${packageName} publish path: ${publishPath}`);
 		return publishPath;
 	}
 
-	core.debug(`Found package ${packageName} at: ${packagePath}`);
+	debug(`Found package ${packageName} at: ${packagePath}`);
 	return packagePath;
 }
 

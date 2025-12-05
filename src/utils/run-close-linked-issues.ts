@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { setFailed, setOutput } from "@actions/core";
 import { closeLinkedIssues } from "./close-linked-issues.js";
 import { logger } from "./logger.js";
 
@@ -25,9 +25,9 @@ export async function runCloseLinkedIssues(
 
 		const result = await closeLinkedIssues(inputs.token, prNumber, inputs.dryRun);
 
-		core.setOutput("closed_issues_count", result.closedCount);
-		core.setOutput("failed_issues_count", result.failedCount);
-		core.setOutput("closed_issues", JSON.stringify(result.issues));
+		setOutput("closed_issues_count", result.closedCount);
+		setOutput("failed_issues_count", result.failedCount);
+		setOutput("closed_issues", JSON.stringify(result.issues));
 
 		if (result.closedCount > 0) {
 			logger.success(`Closed ${result.closedCount} linked issue(s)`);
@@ -41,8 +41,8 @@ export async function runCloseLinkedIssues(
 
 		logger.endStep();
 		logger.phaseComplete(3);
-	} catch (error) {
-		core.setFailed(`Failed to close linked issues: ${error instanceof Error ? error.message : String(error)}`);
-		throw error;
+	} catch (err) {
+		setFailed(`Failed to close linked issues: ${err instanceof Error ? err.message : String(err)}`);
+		throw err;
 	}
 }

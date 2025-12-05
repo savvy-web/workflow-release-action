@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { getState, info, warning } from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -39,7 +39,7 @@ export async function checkReleaseBranch(
 	// Check if branch exists
 	let branchExists = false;
 
-	const token = core.getState("token");
+	const token = getState("token");
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
@@ -52,12 +52,12 @@ export async function checkReleaseBranch(
 			branch: releaseBranch,
 		});
 		branchExists = true;
-		core.info(`✓ Release branch '${releaseBranch}' exists`);
+		info(`✓ Release branch '${releaseBranch}' exists`);
 	} catch (error) {
 		if ((error as { status?: number }).status === 404) {
-			core.info(`Release branch '${releaseBranch}' does not exist`);
+			info(`Release branch '${releaseBranch}' does not exist`);
 		} else {
-			core.warning(
+			warning(
 				`Failed to check if branch '${releaseBranch}' exists: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
@@ -80,12 +80,12 @@ export async function checkReleaseBranch(
 			if (prs.length > 0) {
 				hasOpenPr = true;
 				prNumber = prs[0].number;
-				core.info(`✓ Open PR found: #${prNumber} (${prs[0].html_url})`);
+				info(`✓ Open PR found: #${prNumber} (${prs[0].html_url})`);
 			} else {
-				core.info(`No open PR found from '${releaseBranch}' to '${targetBranch}'`);
+				info(`No open PR found from '${releaseBranch}' to '${targetBranch}'`);
 			}
 		} catch (error) {
-			core.warning(`Failed to check for open PRs: ${error instanceof Error ? error.message : String(error)}`);
+			warning(`Failed to check for open PRs: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -132,7 +132,7 @@ export async function checkReleaseBranch(
 		},
 	});
 
-	core.info(`Created check run: ${checkRun.html_url}`);
+	info(`Created check run: ${checkRun.html_url}`);
 
 	// Write job summary using summaryWriter (markdown, not HTML)
 	const jobStatusTable = summaryWriter.keyValueTable([

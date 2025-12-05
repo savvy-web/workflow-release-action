@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { info, warning } from "@actions/core";
 import type { Context } from "@actions/github/lib/context.js";
 import type { GitHub } from "@actions/github/lib/utils.js";
 
@@ -238,13 +238,13 @@ async function detectReleaseCommit(
 		);
 
 		if (mergedReleasePR) {
-			core.info(`Detected merged release PR #${mergedReleasePR.number} from ${releaseBranch}`);
+			info(`Detected merged release PR #${mergedReleasePR.number} from ${releaseBranch}`);
 			return { isReleaseCommit: true, mergedPR: { number: mergedReleasePR.number } };
 		}
 
 		return { isReleaseCommit: false };
-	} catch (error) {
-		core.warning(`Failed to check for associated PRs: ${error instanceof Error ? error.message : String(error)}`);
+	} catch (err) {
+		warning(`Failed to check for associated PRs: ${err instanceof Error ? err.message : String(err)}`);
 
 		// Fallback: Check commit message patterns
 		return detectReleaseCommitFromMessage(commitMessage, releaseBranch, context.repo.owner);
@@ -279,7 +279,7 @@ function detectReleaseCommitFromMessage(
 	const isReleaseCommit = isMergeFromReleaseBranch || isVersionCommit;
 
 	if (isReleaseCommit) {
-		core.info(`Detected release commit from commit message pattern`);
+		info(`Detected release commit from commit message pattern`);
 	}
 
 	return { isReleaseCommit };

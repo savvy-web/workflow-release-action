@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { endGroup, getState, info, startGroup, warning } from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -58,7 +58,7 @@ export async function cleanupValidationChecks(
 	reason: string,
 	dryRun: boolean,
 ): Promise<CleanupResult> {
-	core.startGroup(`Cleaning up ${checkIds.length} validation check(s)`);
+	startGroup(`Cleaning up ${checkIds.length} validation check(s)`);
 
 	const result: CleanupResult = {
 		cleanedUp: 0,
@@ -66,7 +66,7 @@ export async function cleanupValidationChecks(
 		errors: [],
 	};
 
-	const token = core.getState("token");
+	const token = getState("token");
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
@@ -75,10 +75,10 @@ export async function cleanupValidationChecks(
 		const github = getOctokit(token);
 
 		try {
-			core.info(`Cleaning up check ID: ${checkId}`);
+			info(`Cleaning up check ID: ${checkId}`);
 
 			if (dryRun) {
-				core.info(`🧪 [Dry Run] Would mark check ${checkId} as cancelled`);
+				info(`🧪 [Dry Run] Would mark check ${checkId} as cancelled`);
 				result.cleanedUp++;
 				continue;
 			}
@@ -108,21 +108,21 @@ export async function cleanupValidationChecks(
 					});
 				});
 
-				core.info(`✓ Marked check ${checkId} (${currentCheck.name}) as cancelled`);
+				info(`✓ Marked check ${checkId} (${currentCheck.name}) as cancelled`);
 				result.cleanedUp++;
 			} else {
-				core.info(`⏭️ Skipped check ${checkId} (${currentCheck.name}) - already ${currentCheck.conclusion}`);
+				info(`⏭️ Skipped check ${checkId} (${currentCheck.name}) - already ${currentCheck.conclusion}`);
 			}
 		} catch (error) {
 			/* v8 ignore next -- @preserve - Defensive: handles non-Error throws (extremely rare) */
 			const errorMsg = error instanceof Error ? error.message : String(error);
-			core.warning(`Failed to cleanup check ${checkId}: ${errorMsg}`);
+			warning(`Failed to cleanup check ${checkId}: ${errorMsg}`);
 			result.failed++;
 			result.errors.push(`Check ${checkId}: ${errorMsg}`);
 		}
 	}
 
-	core.endGroup();
+	endGroup();
 
 	// Write job summary using summaryWriter (markdown, not HTML)
 	const resultsTable = summaryWriter.table(

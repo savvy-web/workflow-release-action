@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { endGroup, getState, info, startGroup } from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import type { ValidationResult } from "../types/shared-types.js";
 import { summaryWriter } from "./summary-writer.js";
@@ -34,21 +34,21 @@ export async function createValidationCheck(
 	validations: ValidationResult[],
 	dryRun: boolean,
 ): Promise<UnifiedValidationResult> {
-	const token = core.getState("token");
+	const token = getState("token");
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
 	const github = getOctokit(token);
-	core.startGroup("Creating unified validation check");
+	startGroup("Creating unified validation check");
 
 	// Determine overall success
 	const success = validations.every((v) => v.success);
 	const failedChecks = validations.filter((v) => !v.success);
 
-	core.info(`Processed ${validations.length} validation check(s)`);
-	core.info(`Passed: ${validations.length - failedChecks.length}, Failed: ${failedChecks.length}`);
+	info(`Processed ${validations.length} validation check(s)`);
+	info(`Passed: ${validations.length - failedChecks.length}, Failed: ${failedChecks.length}`);
 
-	core.endGroup();
+	endGroup();
 
 	// Create GitHub check run
 	const checkTitle = dryRun ? "🧪 Release Validation Summary (Dry Run)" : "Release Validation Summary";
@@ -93,7 +93,7 @@ export async function createValidationCheck(
 		},
 	});
 
-	core.info(`Created unified check run: ${checkRun.html_url}`);
+	info(`Created unified check run: ${checkRun.html_url}`);
 
 	// Write job summary using summaryWriter (markdown, not HTML)
 	const jobResultsTable = summaryWriter.table(

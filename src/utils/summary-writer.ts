@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { summary } from "@actions/core";
 import type { MarkdownEntryOrPrimitive } from "ts-markdown";
 import { codeblock, h2, h3, h4, table, tsMarkdown, ul } from "ts-markdown";
 
@@ -12,7 +12,7 @@ export const summaryWriter = {
 	 * Appends trailing newlines to separate from subsequent summaries.
 	 */
 	async write(markdown: string): Promise<void> {
-		await core.summary.addRaw(`${markdown}\n\n`).write();
+		await summary.addRaw(`${markdown}\n\n`).write();
 	},
 
 	/**

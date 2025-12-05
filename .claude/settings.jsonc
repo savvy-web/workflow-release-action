@@ -241,6 +241,6 @@
 	"model": "sonnet",
 	"enableAllProjectMcpServers": true,
 	"enabledPlugins": {
-		"workflow@savvy-web-bun-tools": true
+		"workflow@savvy-web-claude-tools": true
 	}
 }

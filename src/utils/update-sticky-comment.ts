@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { endGroup, getState, info, startGroup } from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 
 /**
@@ -53,12 +53,12 @@ export async function updateStickyComment(
 	commentBody: string,
 	commentIdentifier: string,
 ): Promise<StickyCommentResult> {
-	const token = core.getState("token");
+	const token = getState("token");
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
 	const github = getOctokit(token);
-	core.startGroup(`Updating sticky comment on PR #${prNumber}`);
+	startGroup(`Updating sticky comment on PR #${prNumber}`);
 
 	// Search for existing comment with identifier
 	const { data: comments } = await github.rest.issues.listComments({
@@ -78,7 +78,7 @@ export async function updateStickyComment(
 
 	if (existingComment) {
 		// Update existing comment
-		core.info(`Found existing comment #${existingComment.id}, updating...`);
+		info(`Found existing comment #${existingComment.id}, updating...`);
 
 		const { data: updatedComment } = await github.rest.issues.updateComment({
 			owner: context.repo.owner,
@@ -91,10 +91,10 @@ export async function updateStickyComment(
 		created = false;
 		url = updatedComment.html_url;
 
-		core.info(`Updated comment: ${url}`);
+		info(`Updated comment: ${url}`);
 	} else {
 		// Create new comment
-		core.info("No existing comment found, creating new comment...");
+		info("No existing comment found, creating new comment...");
 
 		const { data: newComment } = await github.rest.issues.createComment({
 			owner: context.repo.owner,
@@ -107,10 +107,10 @@ export async function updateStickyComment(
 		created = true;
 		url = newComment.html_url;
 
-		core.info(`Created comment: ${url}`);
+		info(`Created comment: ${url}`);
 	}
 
-	core.endGroup();
+	endGroup();
 
 	return {
 		commentId,

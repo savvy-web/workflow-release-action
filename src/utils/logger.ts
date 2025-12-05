@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { endGroup, error, info, startGroup, warning } from "@actions/core";
 
 /**
  * Informational state emojis for logging
@@ -30,22 +30,22 @@ export const logger = {
 	 * Log a phase header with emoji
 	 */
 	phase(number: number, emoji: string, name: string): void {
-		core.info("");
-		core.info(`${emoji} Phase ${number}: ${name}`);
+		info("");
+		info(`${emoji} Phase ${number}: ${name}`);
 	},
 
 	/**
 	 * Log a step within a phase
 	 */
 	step(number: number, name: string): void {
-		core.startGroup(`Step ${number}: ${name}`);
+		startGroup(`Step ${number}: ${name}`);
 	},
 
 	/**
 	 * End a step group
 	 */
 	endStep(): void {
-		core.endGroup();
+		endGroup();
 	},
 
 	/**
@@ -63,104 +63,100 @@ export const logger = {
 		isReleasePRMerged?: boolean;
 		dryRun: boolean;
 	}): void {
-		core.info("");
-		core.info("=== Workflow Context ===");
+		info("");
+		info("=== Workflow Context ===");
 
 		if (data.dryRun) {
-			core.info(`${PHASE.test} Running in dry-run mode (preview only)`);
+			info(`${PHASE.test} Running in dry-run mode (preview only)`);
 		}
 
-		core.info(`${STATE.neutral} Branch: ${data.branch}`);
+		info(`${STATE.neutral} Branch: ${data.branch}`);
 
 		if (data.commitMessage) {
 			// Truncate long commit messages
 			const truncated = data.commitMessage.split("\n")[0].slice(0, 80);
-			core.info(`${STATE.neutral} Commit: ${truncated}${data.commitMessage.length > 80 ? "..." : ""}`);
+			info(`${STATE.neutral} Commit: ${truncated}${data.commitMessage.length > 80 ? "..." : ""}`);
 		}
 
-		core.info("");
-		core.info("Branch detection:");
-		core.info(`  ${data.isReleaseBranch ? STATE.good : STATE.neutral} Release branch: ${data.isReleaseBranch}`);
-		core.info(`  ${data.isMainBranch ? STATE.good : STATE.neutral} Main branch: ${data.isMainBranch}`);
+		info("");
+		info("Branch detection:");
+		info(`  ${data.isReleaseBranch ? STATE.good : STATE.neutral} Release branch: ${data.isReleaseBranch}`);
+		info(`  ${data.isMainBranch ? STATE.good : STATE.neutral} Main branch: ${data.isMainBranch}`);
 
-		core.info("");
-		core.info("Release commit detection:");
-		core.info(
+		info("");
+		info("Release commit detection:");
+		info(
 			`  ${data.isReleaseCommit ? STATE.good : STATE.neutral} Release commit (triggers Phase 3): ${data.isReleaseCommit}`,
 		);
 		if (data.mergedReleasePR) {
-			core.info(`  ${STATE.good} Merged release PR: ${data.mergedReleasePR}`);
+			info(`  ${STATE.good} Merged release PR: ${data.mergedReleasePR}`);
 		}
 
 		if (data.isPullRequestEvent !== undefined) {
-			core.info("");
-			core.info("PR event detection:");
-			core.info(
-				`  ${data.isPullRequestEvent ? STATE.good : STATE.neutral} Pull request event: ${data.isPullRequestEvent}`,
-			);
-			core.info(`  ${data.isPRMerged ? STATE.good : STATE.neutral} PR merged: ${data.isPRMerged}`);
-			core.info(
-				`  ${data.isReleasePRMerged ? STATE.good : STATE.neutral} Release PR merged: ${data.isReleasePRMerged}`,
-			);
+			info("");
+			info("PR event detection:");
+			info(`  ${data.isPullRequestEvent ? STATE.good : STATE.neutral} Pull request event: ${data.isPullRequestEvent}`);
+			info(`  ${data.isPRMerged ? STATE.good : STATE.neutral} PR merged: ${data.isPRMerged}`);
+			info(`  ${data.isReleasePRMerged ? STATE.good : STATE.neutral} Release PR merged: ${data.isReleasePRMerged}`);
 		}
 
-		core.info("");
+		info("");
 	},
 
 	/**
 	 * Log a success message
 	 */
 	success(message: string): void {
-		core.info(`${STATE.good} ${message}`);
+		info(`${STATE.good} ${message}`);
 	},
 
 	/**
 	 * Log a neutral/informational message
 	 */
 	info(message: string): void {
-		core.info(`${STATE.neutral} ${message}`);
+		info(`${STATE.neutral} ${message}`);
 	},
 
 	/**
 	 * Log a warning message
 	 */
 	warn(message: string): void {
-		core.warning(`${STATE.warning} ${message}`);
+		warning(`${STATE.warning} ${message}`);
 	},
 
 	/**
 	 * Log an error message
 	 */
 	error(message: string): void {
-		core.error(`${STATE.issue} ${message}`);
+		error(`${STATE.issue} ${message}`);
 	},
 
 	/**
 	 * Log a skip message
 	 */
 	skip(message: string): void {
-		core.info(`${PHASE.skip} ${message}`);
+		info(`${PHASE.skip} ${message}`);
 	},
 
 	/**
 	 * Log phase completion
 	 */
 	phaseComplete(number: number): void {
-		core.info("");
-		core.info(`${STATE.good} Phase ${number} completed successfully`);
+		info("");
+		info(`${STATE.good} Phase ${number} completed successfully`);
 	},
 
 	/**
 	 * Log workflow start
 	 */
 	start(): void {
-		core.info(`${PHASE.rocket} Starting release workflow...`);
+		info(`${PHASE.rocket} Starting release workflow...`);
 	},
 
 	/**
 	 * Log no action needed
 	 */
 	noAction(reason: string): void {
-		core.info(`${PHASE.skip} No release action needed: ${reason}`);
+		info(`${PHASE.skip} No release action needed: ${reason}`);
 	},
 } as const;

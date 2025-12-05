@@ -1,6 +1,6 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as core from "@actions/core";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { debug } from "@actions/core";
 import { findProjectRoot, getWorkspaces } from "workspace-tools";
 
 /**
@@ -52,15 +52,15 @@ export type SkipReason = "private" | "no-publish-config" | "no-changes" | "ignor
  * @returns Changeset config or null if not found/readable
  */
 export function readChangesetConfig(): ChangesetConfig | null {
-	const configPath = path.join(process.cwd(), ".changeset", "config.json");
+	const configPath = join(process.cwd(), ".changeset", "config.json");
 
 	try {
-		if (fs.existsSync(configPath)) {
-			const content = fs.readFileSync(configPath, "utf8");
+		if (existsSync(configPath)) {
+			const content = readFileSync(configPath, "utf8");
 			return JSON.parse(content) as ChangesetConfig;
 		}
-	} catch (error) {
-		core.debug(`Failed to read changeset config: ${error instanceof Error ? error.message : String(error)}`);
+	} catch (err) {
+		debug(`Failed to read changeset config: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
 	return null;
@@ -115,7 +115,7 @@ export function getAllWorkspacePackages(): WorkspacePackageInfo[] {
 	const workspaceRoot = findProjectRoot(cwd);
 
 	if (!workspaceRoot) {
-		core.debug("No workspace root found");
+		debug("No workspace root found");
 		return [];
 	}
 

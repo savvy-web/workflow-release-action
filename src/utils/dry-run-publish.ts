@@ -1,5 +1,5 @@
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
+import { info } from "@actions/core";
+import { exec } from "@actions/exec";
 import type { DryRunResult, PackageStats, ResolvedTarget } from "../types/publish-config.js";
 
 /**
@@ -113,11 +113,11 @@ async function dryRunNpmCompatible(target: ResolvedTarget, packageManager: strin
 	const publishCmd = getPublishCommand(packageManager);
 	const fullArgs = [...publishCmd.baseArgs, ...args];
 	const registryName = getRegistryDisplayName(target.registry);
-	core.info(`[Dry Run] Publishing to ${registryName}: ${publishCmd.cmd} ${fullArgs.join(" ")}`);
-	core.info(`  Directory: ${target.directory}`);
+	info(`[Dry Run] Publishing to ${registryName}: ${publishCmd.cmd} ${fullArgs.join(" ")}`);
+	info(`  Directory: ${target.directory}`);
 
 	try {
-		exitCode = await exec.exec(publishCmd.cmd, fullArgs, {
+		exitCode = await exec(publishCmd.cmd, fullArgs, {
 			cwd: target.directory,
 			listeners: {
 				stdout: (data: Buffer) => {
@@ -176,11 +176,11 @@ async function dryRunJsr(target: ResolvedTarget, packageManager: string): Promis
 	const npx = getNpxCommand(packageManager);
 	const args = [...npx.args, "jsr", "publish", "--dry-run"];
 
-	core.info(`[Dry Run] Publishing to JSR: ${npx.cmd} ${args.join(" ")}`);
-	core.info(`  Directory: ${target.directory}`);
+	info(`[Dry Run] Publishing to JSR: ${npx.cmd} ${args.join(" ")}`);
+	info(`  Directory: ${target.directory}`);
 
 	try {
-		exitCode = await exec.exec(npx.cmd, args, {
+		exitCode = await exec(npx.cmd, args, {
 			cwd: target.directory,
 			listeners: {
 				stdout: (data: Buffer) => {

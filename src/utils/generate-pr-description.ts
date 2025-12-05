@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { debug, endGroup, info, startGroup, warning } from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import Anthropic from "@anthropic-ai/sdk";
 import { summaryWriter } from "./summary-writer.js";
@@ -110,7 +110,7 @@ async function generateDescriptionWithClaude(
 	commits: CommitInfo[],
 	apiKey: string,
 ): Promise<string> {
-	core.info("Calling Claude API to generate PR description");
+	info("Calling Claude API to generate PR description");
 
 	// Build prompt using summaryWriter
 	const promptSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
@@ -141,7 +141,7 @@ async function generateDescriptionWithClaude(
 
 	const prompt = summaryWriter.build(promptSections);
 
-	core.debug(`Prompt sent to Claude:\n${prompt}`);
+	debug(`Prompt sent to Claude:\n${prompt}`);
 
 	// Call Claude API with retry
 	const anthropic = new Anthropic({ apiKey });
@@ -167,8 +167,8 @@ async function generateDescriptionWithClaude(
 
 	const description = textContent.text.trim();
 
-	core.info(`Generated description (${description.length} characters)`);
-	core.debug(`Generated description:\n${description}`);
+	info(`Generated description (${description.length} characters)`);
+	debug(`Generated description:\n${description}`);
 
 	return description;
 }
@@ -194,22 +194,20 @@ export async function generatePRDescriptionDirect(
 ): Promise<PRDescriptionResult> {
 	const github = getOctokit(token);
 
-	core.startGroup("Generating PR description");
+	startGroup("Generating PR description");
 
 	let description = "";
 
 	// Handle empty inputs
 	if (linkedIssues.length === 0 && commits.length === 0) {
-		core.warning("No linked issues or commits provided");
+		warning("No linked issues or commits provided");
 		description = summaryWriter.build([{ heading: "Changes", content: "_No changes detected_" }]);
 	} else {
 		// Generate description with Claude
 		try {
 			description = await generateDescriptionWithClaude(linkedIssues, commits, apiKey);
-		} catch (error) {
-			core.warning(
-				`Failed to generate description with Claude: ${error instanceof Error ? error.message : String(error)}`,
-			);
+		} catch (err) {
+			warning(`Failed to generate description with Claude: ${err instanceof Error ? err.message : String(err)}`);
 
 			// Fallback to basic description
 			const fallbackSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
@@ -232,11 +230,11 @@ export async function generatePRDescriptionDirect(
 		}
 	}
 
-	core.endGroup();
+	endGroup();
 
 	// Update PR description (preserving any existing linked issues section)
 	if (!dryRun) {
-		core.info(`Updating PR #${prNumber} description`);
+		info(`Updating PR #${prNumber} description`);
 
 		// Get current PR body to preserve linked issues section
 		const { data: currentPR } = await github.rest.pulls.get({
@@ -253,7 +251,7 @@ export async function generatePRDescriptionDirect(
 		if (linkedIssuesMatch) {
 			// Prepend the linked issues section to the new description
 			finalBody = `${linkedIssuesMatch[0].trim()}\n\n${CLAUDE_DESCRIPTION_MARKER}\n\n${description}`;
-			core.info("Preserved existing linked issues section");
+			info("Preserved existing linked issues section");
 		}
 
 		await withRetry(async () => {
@@ -265,9 +263,9 @@ export async function generatePRDescriptionDirect(
 			});
 		});
 
-		core.info(`✓ Updated PR #${prNumber} description`);
+		info(`✓ Updated PR #${prNumber} description`);
 	} else {
-		core.info(`🧪 [Dry Run] Would update PR #${prNumber} description`);
+		info(`🧪 [Dry Run] Would update PR #${prNumber} description`);
 	}
 
 	// Create GitHub check run
@@ -309,7 +307,7 @@ export async function generatePRDescriptionDirect(
 		});
 	});
 
-	core.info(`Created check run: ${checkRun.html_url}`);
+	info(`Created check run: ${checkRun.html_url}`);
 
 	// Write job summary using summaryWriter (markdown, not HTML)
 	const jobSummary = summaryWriter.build([

@@ -1,7 +1,7 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import { debug, info, warning } from "@actions/core";
+import { exec } from "@actions/exec";
 
 /**
  * Changeset status result
@@ -45,7 +45,7 @@ export async function getChangesetStatus(
 	// Changeset's --output flag writes to a file relative to cwd
 	// Use just a filename (no path) to avoid path resolution issues
 	const tempFileName = `.changeset-status-${Date.now()}.json`;
-	const tempFile = path.join(process.cwd(), tempFileName);
+	const tempFile = join(process.cwd(), tempFileName);
 
 	const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
 	const statusArgs =
@@ -55,11 +55,11 @@ export async function getChangesetStatus(
 				? ["changeset", "status", `--output=${tempFileName}`]
 				: ["run", "changeset", "status", "--", `--output=${tempFileName}`];
 
-	const exitCode = await exec.exec(statusCmd, statusArgs, {
+	const exitCode = await exec(statusCmd, statusArgs, {
 		listeners: {
 			stderr: (data: Buffer) => {
 				stderrOutput += data.toString();
-				core.debug(`changeset status stderr: ${data.toString()}`);
+				debug(`changeset status stderr: ${data.toString()}`);
 			},
 		},
 		ignoreReturnCode: true,
@@ -68,12 +68,12 @@ export async function getChangesetStatus(
 	// Try to read the output file if it exists
 	let output = "";
 	try {
-		if (fs.existsSync(tempFile)) {
-			output = fs.readFileSync(tempFile, "utf8");
-			fs.unlinkSync(tempFile); // Clean up
+		if (existsSync(tempFile)) {
+			output = readFileSync(tempFile, "utf8");
+			unlinkSync(tempFile); // Clean up
 		}
-	} catch (error) {
-		core.debug(`Failed to read changeset output file: ${error instanceof Error ? error.message : String(error)}`);
+	} catch (err) {
+		debug(`Failed to read changeset output file: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
 	// If successful and has output, parse and return
@@ -87,7 +87,7 @@ export async function getChangesetStatus(
 		stderrOutput.includes("no changesets were found") || stderrOutput.includes("No changesets present");
 
 	if (noChangesetsError || (exitCode === 0 && !output.trim())) {
-		core.info("Changesets have been consumed, checking merge base for release info...");
+		info("Changesets have been consumed, checking merge base for release info...");
 
 		// Try to get release info from merge base
 		const result = await getChangesetStatusFromMergeBase(packageManager, targetBranch);
@@ -96,7 +96,7 @@ export async function getChangesetStatus(
 		}
 
 		// If we can't get merge base info, return empty
-		core.info("Could not determine releases from merge base, returning empty");
+		info("Could not determine releases from merge base, returning empty");
 		return { releases: [], changesets: [] };
 	}
 
@@ -119,7 +119,7 @@ async function getChangesetStatusFromMergeBase(
 	let currentHead = "";
 	try {
 		let headOutput = "";
-		await exec.exec("git", ["rev-parse", "HEAD"], {
+		await exec("git", ["rev-parse", "HEAD"], {
 			listeners: {
 				stdout: (data: Buffer) => {
 					headOutput += data.toString();
@@ -127,8 +127,8 @@ async function getChangesetStatusFromMergeBase(
 			},
 		});
 		currentHead = headOutput.trim();
-	} catch (error) {
-		core.warning(`Failed to get current HEAD: ${error instanceof Error ? error.message : String(error)}`);
+	} catch (err) {
+		warning(`Failed to get current HEAD: ${err instanceof Error ? err.message : String(err)}`);
 		return null;
 	}
 
@@ -136,7 +136,7 @@ async function getChangesetStatusFromMergeBase(
 	let mergeBase = "";
 	try {
 		let mergeBaseOutput = "";
-		await exec.exec("git", ["merge-base", "HEAD", targetBranch], {
+		await exec("git", ["merge-base", "HEAD", targetBranch], {
 			listeners: {
 				stdout: (data: Buffer) => {
 					mergeBaseOutput += data.toString();
@@ -144,18 +144,18 @@ async function getChangesetStatusFromMergeBase(
 			},
 		});
 		mergeBase = mergeBaseOutput.trim();
-		core.info(`Found merge base: ${mergeBase.substring(0, 8)}`);
-	} catch (error) {
-		core.warning(`Failed to find merge base: ${error instanceof Error ? error.message : String(error)}`);
+		info(`Found merge base: ${mergeBase.substring(0, 8)}`);
+	} catch (err) {
+		warning(`Failed to find merge base: ${err instanceof Error ? err.message : String(err)}`);
 		return null;
 	}
 
 	// Checkout merge base
 	try {
-		core.info(`Checking out merge base ${mergeBase.substring(0, 8)} to get changeset status...`);
-		await exec.exec("git", ["checkout", mergeBase], { silent: true });
-	} catch (error) {
-		core.warning(`Failed to checkout merge base: ${error instanceof Error ? error.message : String(error)}`);
+		info(`Checking out merge base ${mergeBase.substring(0, 8)} to get changeset status...`);
+		await exec("git", ["checkout", mergeBase], { silent: true });
+	} catch (err) {
+		warning(`Failed to checkout merge base: ${err instanceof Error ? err.message : String(err)}`);
 		return null;
 	}
 
@@ -164,7 +164,7 @@ async function getChangesetStatusFromMergeBase(
 	// but full path for fs operations
 	let result: ChangesetStatusResult | null = null;
 	const tempFileName = `.changeset-mergebase-${Date.now()}.json`;
-	const tempFile = path.join(process.cwd(), tempFileName);
+	const tempFile = join(process.cwd(), tempFileName);
 	try {
 		const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
 		const statusArgs =
@@ -174,27 +174,25 @@ async function getChangesetStatusFromMergeBase(
 					? ["changeset", "status", `--output=${tempFileName}`]
 					: ["run", "changeset", "status", "--", `--output=${tempFileName}`];
 
-		const exitCode = await exec.exec(statusCmd, statusArgs, {
+		const exitCode = await exec(statusCmd, statusArgs, {
 			ignoreReturnCode: true,
 		});
 
 		// Read output from temp file
-		if (exitCode === 0 && fs.existsSync(tempFile)) {
-			const output = fs.readFileSync(tempFile, "utf8");
+		if (exitCode === 0 && existsSync(tempFile)) {
+			const output = readFileSync(tempFile, "utf8");
 			if (output.trim()) {
 				result = JSON.parse(output.trim()) as ChangesetStatusResult;
-				core.info(`Found ${result.releases.length} package(s) to release from merge base`);
+				info(`Found ${result.releases.length} package(s) to release from merge base`);
 			}
 		}
-	} catch (error) {
-		core.warning(
-			`Failed to get changeset status at merge base: ${error instanceof Error ? error.message : String(error)}`,
-		);
+	} catch (err) {
+		warning(`Failed to get changeset status at merge base: ${err instanceof Error ? err.message : String(err)}`);
 	} finally {
 		// Clean up temp file
 		try {
-			if (fs.existsSync(tempFile)) {
-				fs.unlinkSync(tempFile);
+			if (existsSync(tempFile)) {
+				unlinkSync(tempFile);
 			}
 		} catch {
 			// Ignore cleanup errors
@@ -203,15 +201,15 @@ async function getChangesetStatusFromMergeBase(
 
 	// Always restore to original HEAD
 	try {
-		core.info(`Restoring to HEAD ${currentHead.substring(0, 8)}...`);
-		await exec.exec("git", ["checkout", currentHead], { silent: true });
-	} catch (error) {
-		core.error(`Failed to restore HEAD: ${error instanceof Error ? error.message : String(error)}`);
+		info(`Restoring to HEAD ${currentHead.substring(0, 8)}...`);
+		await exec("git", ["checkout", currentHead], { silent: true });
+	} catch (err) {
+		warning(`Failed to restore HEAD: ${err instanceof Error ? err.message : String(err)}`);
 		// This is critical - try harder to restore
 		try {
-			await exec.exec("git", ["checkout", "-"], { silent: true });
+			await exec("git", ["checkout", "-"], { silent: true });
 		} catch {
-			core.error("Could not restore git state - manual intervention may be required");
+			warning("Could not restore git state - manual intervention may be required");
 		}
 	}
 

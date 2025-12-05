@@ -1,5 +1,6 @@
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
+import { endGroup, getBooleanInput, getInput, getState, info, startGroup, warning } from "@actions/core";
+import type { ExecOptions } from "@actions/exec";
+import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { createApiCommit } from "./create-api-commit.js";
 import { summaryWriter } from "./summary-writer.js";
@@ -32,7 +33,7 @@ interface CreateReleaseBranchResult {
 async function execWithRetry(
 	command: string,
 	args: string[],
-	options: exec.ExecOptions = {},
+	options: ExecOptions = {},
 	maxRetries: number = 3,
 ): Promise<void> {
 	const retryableErrors = ["ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN"];
@@ -41,21 +42,21 @@ async function execWithRetry(
 
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		try {
-			await exec.exec(command, args, options);
+			await exec(command, args, options);
 			return;
-		} catch (error) {
+		} catch (err) {
 			const isLastAttempt = attempt === maxRetries;
 			/* v8 ignore next -- @preserve - Defensive: handles non-Error throws (extremely rare) */
-			const errorMessage = error instanceof Error ? error.message : String(error);
-			const isRetryable = retryableErrors.some((err) => errorMessage.includes(err));
+			const errorMessage = err instanceof Error ? err.message : String(err);
+			const isRetryable = retryableErrors.some((errType) => errorMessage.includes(errType));
 
 			if (isLastAttempt || !isRetryable) {
-				throw error;
+				throw err;
 			}
 
 			// Exponential backoff with jitter
 			const delay = Math.min(baseDelay * 2 ** attempt + Math.random() * 1000, maxDelay);
-			core.warning(`Attempt ${attempt + 1} failed: ${errorMessage}. Retrying in ${Math.round(delay)}ms...`);
+			warning(`Attempt ${attempt + 1} failed: ${errorMessage}. Retrying in ${Math.round(delay)}ms...`);
 
 			await new Promise((resolve) => setTimeout(resolve, delay));
 		}
@@ -79,31 +80,31 @@ async function execWithRetry(
  */
 export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> {
 	// Read all inputs
-	const token = core.getState("token");
+	const token = getState("token");
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
-	const releaseBranch = core.getInput("release-branch") || "changeset-release/main";
-	const targetBranch = core.getInput("target-branch") || "main";
-	const packageManager = core.getState("packageManager") || "pnpm";
-	const versionCommand = core.getInput("version-command") || "";
-	const prTitlePrefix = core.getInput("pr-title-prefix") || "chore: release";
-	const dryRun = core.getBooleanInput("dry-run") || false;
+	const releaseBranch = getInput("release-branch") || "changeset-release/main";
+	const targetBranch = getInput("target-branch") || "main";
+	const packageManager = getState("packageManager") || "pnpm";
+	const versionCommand = getInput("version-command") || "";
+	const prTitlePrefix = getInput("pr-title-prefix") || "chore: release";
+	const dryRun = getBooleanInput("dry-run") || false;
 
 	const github = getOctokit(token);
 
-	core.startGroup("Creating release branch");
+	startGroup("Creating release branch");
 
 	// Create and checkout release branch from target branch HEAD
-	core.info(`Creating branch '${releaseBranch}' from '${targetBranch}' HEAD`);
+	info(`Creating branch '${releaseBranch}' from '${targetBranch}' HEAD`);
 	if (!dryRun) {
-		await exec.exec("git", ["checkout", "-b", releaseBranch, `origin/${targetBranch}`]);
+		await exec("git", ["checkout", "-b", releaseBranch, `origin/${targetBranch}`]);
 	} else {
-		core.info(`[DRY RUN] Would create branch: ${releaseBranch} from origin/${targetBranch}`);
+		info(`[DRY RUN] Would create branch: ${releaseBranch} from origin/${targetBranch}`);
 	}
 
 	// Run changeset version
-	core.info("Running changeset version");
+	info("Running changeset version");
 	const versionCmd =
 		versionCommand || (packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm");
 	const versionArgs =
@@ -118,7 +119,7 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 	if (!dryRun) {
 		await execWithRetry(versionCmd, versionArgs);
 	} else {
-		core.info(`[DRY RUN] Would run: ${versionCmd} ${versionArgs.join(" ")}`);
+		info(`[DRY RUN] Would run: ${versionCmd} ${versionArgs.join(" ")}`);
 	}
 
 	// Check for changes
@@ -126,7 +127,7 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 	let changedFiles = "";
 
 	if (!dryRun) {
-		await exec.exec("git", ["status", "--porcelain"], {
+		await exec("git", ["status", "--porcelain"], {
 			listeners: {
 				stdout: (data: Buffer) => {
 					changedFiles += data.toString();
@@ -137,16 +138,16 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 	} else {
 		// In dry-run mode, assume changes exist
 		hasChanges = true;
-		core.info("[DRY RUN] Assuming changes exist for version bump");
+		info("[DRY RUN] Assuming changes exist for version bump");
 	}
 
 	if (!hasChanges) {
-		core.info("No changes generated by changeset version. Cleaning up and exiting.");
+		info("No changes generated by changeset version. Cleaning up and exiting.");
 		if (!dryRun) {
-			await exec.exec("git", ["checkout", targetBranch]);
-			await exec.exec("git", ["branch", "-D", releaseBranch]);
+			await exec("git", ["checkout", targetBranch]);
+			await exec("git", ["branch", "-D", releaseBranch]);
 		}
-		core.endGroup();
+		endGroup();
 
 		// Create check run for no changes
 		const { data: checkRun } = await github.rest.checks.create({
@@ -184,36 +185,36 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 		.filter((line) => line.includes("package.json") || line.includes("CHANGELOG.md"))
 		.join("\n");
 
-	core.info("Version changes:");
-	core.info(versionSummary);
+	info("Version changes:");
+	info(versionSummary);
 
 	// Push the branch first (with no commits yet) so the ref exists
-	core.info(`Pushing branch '${releaseBranch}' to origin`);
+	info(`Pushing branch '${releaseBranch}' to origin`);
 	if (!dryRun) {
 		// Push the branch to create the remote ref
 		await execWithRetry("git", ["push", "-u", "origin", releaseBranch]);
 	} else {
-		core.info(`[DRY RUN] Would push branch: ${releaseBranch}`);
+		info(`[DRY RUN] Would push branch: ${releaseBranch}`);
 	}
 
 	// Create commit via GitHub API (automatically signed and attributed to GitHub App)
 	const commitMessage = `${prTitlePrefix}\n\nVersion bump from changesets`;
 	if (!dryRun) {
-		core.info("Creating verified commit via GitHub API...");
+		info("Creating verified commit via GitHub API...");
 		const commitResult = await createApiCommit(token, releaseBranch, commitMessage);
 		if (!commitResult.created) {
-			core.warning("No changes to commit via API");
+			warning("No changes to commit via API");
 		} else {
-			core.info(`✓ Created verified commit: ${commitResult.sha}`);
+			info(`✓ Created verified commit: ${commitResult.sha}`);
 		}
 	} else {
-		core.info(`[DRY RUN] Would commit with message: ${commitMessage}`);
+		info(`[DRY RUN] Would commit with message: ${commitMessage}`);
 	}
 
-	core.endGroup();
+	endGroup();
 
 	// Create PR with retry
-	core.startGroup("Creating pull request");
+	startGroup("Creating pull request");
 
 	let prNumber: number | null = null;
 	let prUrl = "";
@@ -261,10 +262,10 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 				labels: ["automated", "release"],
 			});
 
-			core.info(`✓ Created PR #${prNumber}: ${prUrl}`);
+			info(`✓ Created PR #${prNumber}: ${prUrl}`);
 		} catch (error) {
 			// Retry PR creation once after brief delay
-			core.warning(`PR creation failed, retrying: ${error instanceof Error ? error.message : String(error)}`);
+			warning(`PR creation failed, retrying: ${error instanceof Error ? error.message : String(error)}`);
 			await new Promise((resolve) => setTimeout(resolve, 2000));
 
 			const { data: pr } = await github.rest.pulls.create({
@@ -286,14 +287,14 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 				labels: ["automated", "release"],
 			});
 
-			core.info(`✓ Created PR #${prNumber}: ${prUrl}`);
+			info(`✓ Created PR #${prNumber}: ${prUrl}`);
 		}
 	} else {
-		core.info(`[DRY RUN] Would create PR with title: ${prTitle}`);
-		core.info(`[DRY RUN] PR body:\n${prBody}`);
+		info(`[DRY RUN] Would create PR with title: ${prTitle}`);
+		info(`[DRY RUN] PR body:\n${prBody}`);
 	}
 
-	core.endGroup();
+	endGroup();
 
 	// Build check details using summaryWriter (markdown, not HTML)
 	const checkStatusTable = summaryWriter.keyValueTable([

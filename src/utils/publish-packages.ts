@@ -1,7 +1,7 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { endGroup, error, info, startGroup, warning } from "@actions/core";
+import { exec } from "@actions/exec";
 import type { PackageJson, ResolvedTarget, VersionCheckResult } from "../types/publish-config.js";
 import { createPackageAttestation } from "./create-attestation.js";
 import { findPackagePath } from "./find-package-path.js";
@@ -108,7 +108,7 @@ async function preValidateAllTargets(
 	packageTargetsMap: Map<string, { path: string; version: string; targets: ResolvedTarget[] }>,
 	packageManager: string,
 ): Promise<PreValidationResult> {
-	core.startGroup("Pre-validating all publish targets");
+	startGroup("Pre-validating all publish targets");
 
 	const validations: TargetPreValidation[] = [];
 	const readyTargets: TargetPreValidation[] = [];
@@ -118,11 +118,11 @@ async function preValidateAllTargets(
 	for (const [packageName, packageInfo] of packageTargetsMap) {
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
-			core.info(`Checking ${packageName}@${packageInfo.version} on ${registryName}...`);
+			info(`Checking ${packageName}@${packageInfo.version} on ${registryName}...`);
 
 			// Skip JSR targets for now - they have different validation
 			if (target.protocol === "jsr") {
-				core.info(`  ✓ JSR target - will validate during publish`);
+				info(`  ✓ JSR target - will validate during publish`);
 				const validation: TargetPreValidation = {
 					target,
 					packageName,
@@ -140,7 +140,7 @@ async function preValidateAllTargets(
 			if (!versionCheck.success) {
 				// Registry check failed - auth error, network error, etc.
 				const errorMsg = versionCheck.error || "Unknown error checking registry";
-				core.error(`  ✗ ${registryName}: ${errorMsg}`);
+				error(`  ✗ ${registryName}: ${errorMsg}`);
 
 				const validation: TargetPreValidation = {
 					target,
@@ -163,7 +163,7 @@ async function preValidateAllTargets(
 				if (localIntegrity && remoteIntegrity) {
 					if (localIntegrity === remoteIntegrity) {
 						// Identical content - safe to skip
-						core.info(`  ✓ Version exists with identical content - will skip`);
+						info(`  ✓ Version exists with identical content - will skip`);
 						const validation: TargetPreValidation = {
 							target,
 							packageName,
@@ -177,9 +177,9 @@ async function preValidateAllTargets(
 						skipTargets.push(validation);
 					} else {
 						// Content mismatch - error
-						core.error(`  ✗ Version exists with DIFFERENT content!`);
-						core.error(`    Local shasum:  ${localIntegrity}`);
-						core.error(`    Remote shasum: ${remoteIntegrity}`);
+						error(`  ✗ Version exists with DIFFERENT content!`);
+						error(`    Local shasum:  ${localIntegrity}`);
+						error(`    Remote shasum: ${remoteIntegrity}`);
 
 						const validation: TargetPreValidation = {
 							target,
@@ -196,7 +196,7 @@ async function preValidateAllTargets(
 					}
 				} else {
 					// Cannot compare integrity - treat as skip with warning
-					core.warning(`  ⚠ Version exists but could not verify integrity - will skip`);
+					warning(`  ⚠ Version exists but could not verify integrity - will skip`);
 					const validation: TargetPreValidation = {
 						target,
 						packageName,
@@ -211,7 +211,7 @@ async function preValidateAllTargets(
 				}
 			} else {
 				// Version doesn't exist - ready to publish
-				core.info(`  ✓ Version not found - ready to publish`);
+				info(`  ✓ Version not found - ready to publish`);
 				const validation: TargetPreValidation = {
 					target,
 					packageName,
@@ -228,19 +228,19 @@ async function preValidateAllTargets(
 	const success = errorTargets.length === 0;
 
 	if (success) {
-		core.info("");
-		core.info(`Pre-validation passed: ${readyTargets.length} to publish, ${skipTargets.length} to skip`);
+		info("");
+		info(`Pre-validation passed: ${readyTargets.length} to publish, ${skipTargets.length} to skip`);
 	} else {
-		core.error("");
-		core.error(`Pre-validation FAILED: ${errorTargets.length} target(s) have errors`);
-		core.error("Fix these issues before publishing:");
-		for (const error of errorTargets) {
-			const registryName = getRegistryDisplayName(error.target.registry);
-			core.error(`  - ${error.packageName}@${error.version} → ${registryName}: ${error.error}`);
+		error("");
+		error(`Pre-validation FAILED: ${errorTargets.length} target(s) have errors`);
+		error("Fix these issues before publishing:");
+		for (const errorItem of errorTargets) {
+			const registryName = getRegistryDisplayName(errorItem.target.registry);
+			error(`  - ${errorItem.packageName}@${errorItem.version} → ${registryName}: ${errorItem.error}`);
 		}
 	}
 
-	core.endGroup();
+	endGroup();
 
 	return {
 		success,
@@ -298,13 +298,13 @@ export async function publishPackages(
 	dryRun: boolean,
 	preDetectedReleases?: PreDetectedRelease[],
 ): Promise<PublishPackagesResult> {
-	core.startGroup("Publishing packages");
+	startGroup("Publishing packages");
 
 	// Use pre-detected releases if provided, otherwise get from changeset status
 	let releases: Array<{ name: string; newVersion: string; type: string; path?: string }>;
 
 	if (preDetectedReleases && preDetectedReleases.length > 0) {
-		core.info(`Using ${preDetectedReleases.length} pre-detected release(s)`);
+		info(`Using ${preDetectedReleases.length} pre-detected release(s)`);
 		releases = preDetectedReleases.map((r) => ({
 			name: r.name,
 			newVersion: r.version,
@@ -313,15 +313,15 @@ export async function publishPackages(
 		}));
 	} else {
 		// Get changeset status to find packages with version changes
-		core.info("Getting changeset status...");
+		info("Getting changeset status...");
 		const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
-		core.info(`Found ${changesetStatus.releases.length} package(s) with version changes`);
+		info(`Found ${changesetStatus.releases.length} package(s) with version changes`);
 		releases = changesetStatus.releases;
 	}
 
 	if (releases.length === 0) {
-		core.info("No packages to publish");
-		core.endGroup();
+		info("No packages to publish");
+		endGroup();
 
 		return {
 			success: true,
@@ -348,21 +348,21 @@ export async function publishPackages(
 		// Use pre-detected path if available, otherwise find it
 		const workspacePath = release.path || findPackagePath(release.name);
 		if (!workspacePath) {
-			core.error(`Could not find workspace path for package ${release.name}`);
+			error(`Could not find workspace path for package ${release.name}`);
 			continue;
 		}
 
-		const pkgJsonPath = path.join(workspacePath, "package.json");
-		if (!fs.existsSync(pkgJsonPath)) {
-			core.error(`package.json not found at ${pkgJsonPath}`);
+		const pkgJsonPath = join(workspacePath, "package.json");
+		if (!existsSync(pkgJsonPath)) {
+			error(`package.json not found at ${pkgJsonPath}`);
 			continue;
 		}
 
-		const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as PackageJson;
+		const pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as PackageJson;
 		const targets = resolveTargets(workspacePath, pkgJson);
 
 		if (targets.length === 0) {
-			core.info(`Package ${release.name} has no publish targets (private or no publishConfig)`);
+			info(`Package ${release.name} has no publish targets (private or no publishConfig)`);
 			continue;
 		}
 
@@ -373,25 +373,25 @@ export async function publishPackages(
 		});
 		allTargets.push(...targets);
 
-		core.info(`Package ${release.name}@${release.newVersion}: ${targets.length} target(s)`);
+		info(`Package ${release.name}@${release.newVersion}: ${targets.length} target(s)`);
 	}
 
 	// Setup authentication for all registries
-	core.info("Setting up registry authentication...");
+	info("Setting up registry authentication...");
 	const authResult = await setupRegistryAuth(allTargets, packageManager);
 
 	if (!authResult.success) {
 		if (authResult.missingTokens.length > 0) {
-			core.warning("Some registry tokens are missing:");
+			warning("Some registry tokens are missing:");
 			for (const missing of authResult.missingTokens) {
-				core.warning(`  - ${missing.registry}: ${missing.tokenEnv} not set`);
+				warning(`  - ${missing.registry}: ${missing.tokenEnv} not set`);
 			}
 		}
 	}
 
 	// Run build BEFORE pre-validation so we can compare tarball integrity
 	// Run build before publishing
-	core.info("Running build...");
+	info("Running build...");
 	const buildCmd = packageManager === "npm" ? "npm" : packageManager;
 	const buildArgs = packageManager === "npm" ? ["run", "ci:build"] : ["ci:build"];
 
@@ -399,7 +399,7 @@ export async function publishPackages(
 	let buildStdout = "";
 	let buildStderr = "";
 	try {
-		buildExitCode = await exec.exec(buildCmd, buildArgs, {
+		buildExitCode = await exec(buildCmd, buildArgs, {
 			ignoreReturnCode: true,
 			listeners: {
 				stdout: (data: Buffer) => {
@@ -410,15 +410,15 @@ export async function publishPackages(
 				},
 			},
 		});
-	} catch (error) {
-		core.error(`Build failed: ${error instanceof Error ? error.message : String(error)}`);
-		buildStderr = error instanceof Error ? error.message : String(error);
+	} catch (err) {
+		error(`Build failed: ${err instanceof Error ? err.message : String(err)}`);
+		buildStderr = err instanceof Error ? err.message : String(err);
 		buildExitCode = 1;
 	}
 
 	if (buildExitCode !== 0) {
-		core.error("Build failed, aborting publish");
-		core.endGroup();
+		error("Build failed, aborting publish");
+		endGroup();
 
 		return {
 			success: false,
@@ -432,16 +432,16 @@ export async function publishPackages(
 		};
 	}
 
-	core.info("Build completed successfully");
+	info("Build completed successfully");
 
 	// Pre-validate ALL targets before publishing ANY
 	// This prevents partial publishes where some registries succeed and others fail
 	const preValidation = await preValidateAllTargets(packageTargetsMap, packageManager);
 
 	if (!preValidation.success) {
-		core.error("");
-		core.error("🔴 Pre-validation failed - aborting publish to prevent partial releases");
-		core.endGroup();
+		error("");
+		error("🔴 Pre-validation failed - aborting publish to prevent partial releases");
+		endGroup();
 
 		return {
 			success: false,
@@ -467,7 +467,7 @@ export async function publishPackages(
 	const totalTargets = allTargets.length;
 
 	for (const [name, packageInfo] of packageTargetsMap) {
-		core.startGroup(`Publishing ${name}@${packageInfo.version}`);
+		startGroup(`Publishing ${name}@${packageInfo.version}`);
 
 		const targetResults: TargetPublishResult[] = [];
 		let allTargetsSuccess = true;
@@ -478,7 +478,7 @@ export async function publishPackages(
 
 			// Skip targets that were pre-validated as "skip" (already published with identical content)
 			if (skipTargetKeys.has(targetKey)) {
-				core.info(`✓ Skipping ${registryName} - already published with identical content`);
+				info(`✓ Skipping ${registryName} - already published with identical content`);
 				successfulTargets++;
 
 				targetResults.push({
@@ -490,7 +490,7 @@ export async function publishPackages(
 				continue;
 			}
 
-			core.info(`Publishing to ${registryName}...`);
+			info(`Publishing to ${registryName}...`);
 
 			try {
 				const publishResult = await publishToTarget(target, dryRun, packageManager);
@@ -518,38 +518,38 @@ export async function publishPackages(
 
 				if (publishResult.success) {
 					successfulTargets++;
-					core.info(`✓ Published to ${registryName}`);
+					info(`✓ Published to ${registryName}`);
 					if (publishResult.registryUrl) {
-						core.info(`  Package URL: ${publishResult.registryUrl}`);
+						info(`  Package URL: ${publishResult.registryUrl}`);
 					}
 					if (publishResult.attestationUrl) {
-						core.info(`  Provenance: ${publishResult.attestationUrl}`);
+						info(`  Provenance: ${publishResult.attestationUrl}`);
 					}
 				} else if (publishResult.alreadyPublished) {
 					if (isDifferentContent) {
 						// Content mismatch is an actual error
 						allTargetsSuccess = false;
-						core.error(`✗ Version already published to ${registryName} with DIFFERENT content!`);
-						core.error(`  Local shasum:  ${publishResult.localIntegrity}`);
-						core.error(`  Remote shasum: ${publishResult.remoteIntegrity}`);
-						core.error(`  This indicates the same version was published with different files.`);
+						error(`✗ Version already published to ${registryName} with DIFFERENT content!`);
+						error(`  Local shasum:  ${publishResult.localIntegrity}`);
+						error(`  Remote shasum: ${publishResult.remoteIntegrity}`);
+						error(`  This indicates the same version was published with different files.`);
 					} else if (publishResult.alreadyPublishedReason === "identical") {
 						// Identical content - safe to skip
 						successfulTargets++;
-						core.info(`✓ Version already published to ${registryName} with identical content - skipping`);
+						info(`✓ Version already published to ${registryName} with identical content - skipping`);
 					} else {
 						// Unknown - couldn't compare, treat as warning
 						successfulTargets++;
-						core.warning(`⚠ Version already published to ${registryName} - skipping (could not verify content)`);
+						warning(`⚠ Version already published to ${registryName} - skipping (could not verify content)`);
 					}
 				} else {
 					allTargetsSuccess = false;
-					core.error(`✗ Failed to publish to ${registryName}: ${publishResult.error}`);
+					error(`✗ Failed to publish to ${registryName}: ${publishResult.error}`);
 				}
-			} catch (error) {
+			} catch (err) {
 				allTargetsSuccess = false;
-				const errorMessage = error instanceof Error ? error.message : String(error);
-				core.error(`✗ Failed to publish to ${registryName}: ${errorMessage}`);
+				const errorMessage = err instanceof Error ? err.message : String(err);
+				error(`✗ Failed to publish to ${registryName}: ${errorMessage}`);
 
 				targetResults.push({
 					target,
@@ -572,7 +572,7 @@ export async function publishPackages(
 		if (allTargetsSuccess && !hasProvenanceAttestation) {
 			const firstSuccessfulTarget = targetResults.find((t) => t.success);
 			if (firstSuccessfulTarget) {
-				core.info("Creating GitHub attestation for package (no npm provenance available)...");
+				info("Creating GitHub attestation for package (no npm provenance available)...");
 				const attestationDir = firstSuccessfulTarget.target.directory;
 				const attestationResult = await createPackageAttestation(
 					name,
@@ -583,11 +583,11 @@ export async function publishPackages(
 				);
 				if (attestationResult.success && attestationResult.attestationUrl) {
 					githubAttestationUrl = attestationResult.attestationUrl;
-					core.info(`  ✓ Created GitHub attestation: ${githubAttestationUrl}`);
+					info(`  ✓ Created GitHub attestation: ${githubAttestationUrl}`);
 				}
 			}
 		} else if (hasProvenanceAttestation) {
-			core.info("✓ Package attestation already created via npm provenance");
+			info("✓ Package attestation already created via npm provenance");
 		}
 
 		results.push({
@@ -601,10 +601,10 @@ export async function publishPackages(
 			successfulPackages++;
 		}
 
-		core.endGroup();
+		endGroup();
 	}
 
-	core.endGroup();
+	endGroup();
 
 	const allSuccess = successfulPackages === packageTargetsMap.size;
 

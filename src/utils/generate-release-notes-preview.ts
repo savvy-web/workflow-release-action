@@ -1,6 +1,6 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as core from "@actions/core";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { debug, endGroup, getBooleanInput, getInput, getState, info, startGroup, warning } from "@actions/core";
 import { context } from "@actions/github";
 import type { PackagePublishValidation } from "../types/publish-config.js";
 import { findPackagePath } from "./find-package-path.js";
@@ -199,27 +199,27 @@ export async function generateReleaseNotesPreview(
 	publishValidations?: PackagePublishValidation[],
 ): Promise<ReleaseNotesPreviewResult> {
 	// Read all inputs
-	const packageManager = core.getState("packageManager") || "pnpm";
-	const targetBranch = core.getInput("target-branch") || "main";
-	const dryRun = core.getBooleanInput("dry-run") || false;
-	core.startGroup("Generating release notes preview");
+	const packageManager = getState("packageManager") || "pnpm";
+	const targetBranch = getInput("target-branch") || "main";
+	const dryRun = getBooleanInput("dry-run") || false;
+	startGroup("Generating release notes preview");
 
 	// Read changeset config to detect fixed/linked groups
 	const changesetConfig = readChangesetConfig();
 	if (changesetConfig?.fixed && changesetConfig.fixed.length > 0) {
-		core.debug(`Found ${changesetConfig.fixed.length} fixed group(s) in changeset config`);
+		debug(`Found ${changesetConfig.fixed.length} fixed group(s) in changeset config`);
 	}
 	if (changesetConfig?.linked && changesetConfig.linked.length > 0) {
-		core.debug(`Found ${changesetConfig.linked.length} linked group(s) in changeset config`);
+		debug(`Found ${changesetConfig.linked.length} linked group(s) in changeset config`);
 	}
 
 	// Get packages from changeset status (handles consumed changesets)
 	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
-	core.info(`Found ${changesetStatus.releases.length} package(s) to release`);
+	info(`Found ${changesetStatus.releases.length} package(s) to release`);
 
 	// Get all workspace packages (including non-releasing)
 	const allWorkspacePackages = getAllWorkspacePackages();
-	core.info(`Found ${allWorkspacePackages.length} total package(s) in workspace`);
+	info(`Found ${allWorkspacePackages.length} total package(s) in workspace`);
 
 	// Count changesets per package
 	const changesetCounts = countChangesetsPerPackage(changesetStatus.changesets);
@@ -242,13 +242,13 @@ export async function generateReleaseNotesPreview(
 
 	// Process each releasing package
 	for (const release of changesetStatus.releases) {
-		core.info(`Processing ${release.name}@${release.newVersion}`);
+		info(`Processing ${release.name}@${release.newVersion}`);
 
 		// Find package directory using workspace-tools
 		const packagePath = findPackagePath(release.name);
 
 		if (!packagePath) {
-			core.warning(`Could not find package directory for ${release.name}`);
+			warning(`Could not find package directory for ${release.name}`);
 			packageNotes.push({
 				name: release.name,
 				oldVersion: release.oldVersion || "0.0.0",
@@ -263,10 +263,10 @@ export async function generateReleaseNotesPreview(
 		}
 
 		// Check for CHANGELOG.md
-		const changelogPath = path.join(packagePath, "CHANGELOG.md");
+		const changelogPath = join(packagePath, "CHANGELOG.md");
 
-		if (!fs.existsSync(changelogPath)) {
-			core.warning(`No CHANGELOG.md found for ${release.name}`);
+		if (!existsSync(changelogPath)) {
+			warning(`No CHANGELOG.md found for ${release.name}`);
 			packageNotes.push({
 				name: release.name,
 				oldVersion: release.oldVersion || "0.0.0",
@@ -282,7 +282,7 @@ export async function generateReleaseNotesPreview(
 
 		// Read and extract version section
 		try {
-			const changelogContent = fs.readFileSync(changelogPath, "utf8");
+			const changelogContent = readFileSync(changelogPath, "utf8");
 			let notes = extractVersionSection(changelogContent, release.newVersion);
 			let extractionError: string | undefined;
 
@@ -303,7 +303,7 @@ export async function generateReleaseNotesPreview(
 					group.siblings,
 					changesetStatus.releases,
 				);
-				core.info(`✓ Generated ${group.type}-version notes for ${release.name}@${release.newVersion}`);
+				info(`✓ Generated ${group.type}-version notes for ${release.name}@${release.newVersion}`);
 				packageNotes.push({
 					name: release.name,
 					oldVersion: release.oldVersion || "0.0.0",
@@ -314,7 +314,7 @@ export async function generateReleaseNotesPreview(
 					notes: groupNotes,
 				});
 			} else if (extractionError) {
-				core.warning(`Could not extract version ${release.newVersion} from ${release.name} CHANGELOG`);
+				warning(`Could not extract version ${release.newVersion} from ${release.name} CHANGELOG`);
 				packageNotes.push({
 					name: release.name,
 					oldVersion: release.oldVersion || "0.0.0",
@@ -326,7 +326,7 @@ export async function generateReleaseNotesPreview(
 					error: extractionError,
 				});
 			} else {
-				core.info(`✓ Extracted release notes for ${release.name}@${release.newVersion}`);
+				info(`✓ Extracted release notes for ${release.name}@${release.newVersion}`);
 				packageNotes.push({
 					name: release.name,
 					oldVersion: release.oldVersion || "0.0.0",
@@ -340,7 +340,7 @@ export async function generateReleaseNotesPreview(
 		} catch (error) {
 			/* v8 ignore next -- @preserve - Defensive: handles non-Error throws (extremely rare) */
 			const errorMsg = error instanceof Error ? error.message : String(error);
-			core.warning(`Failed to read CHANGELOG for ${release.name}: ${errorMsg}`);
+			warning(`Failed to read CHANGELOG for ${release.name}: ${errorMsg}`);
 			packageNotes.push({
 				name: release.name,
 				oldVersion: release.oldVersion || "0.0.0",
@@ -354,7 +354,7 @@ export async function generateReleaseNotesPreview(
 		}
 	}
 
-	core.endGroup();
+	endGroup();
 
 	// Build the enhanced summary
 	const checkTitle = dryRun ? "📋 Release Notes Preview (Dry Run)" : "📋 Release Notes Preview";

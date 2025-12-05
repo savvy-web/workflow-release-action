@@ -1,5 +1,5 @@
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
+import { endGroup, error, getBooleanInput, getInput, getState, info, startGroup } from "@actions/core";
+import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -40,16 +40,16 @@ interface BuildValidationResult {
  */
 export async function validateBuilds(): Promise<BuildValidationResult> {
 	// Read all inputs
-	const token = core.getState("token");
+	const token = getState("token");
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
-	const packageManager = core.getState("packageManager") || "pnpm";
-	const buildCommand = core.getInput("build-command") || "";
-	const dryRun = core.getBooleanInput("dry-run") || false;
+	const packageManager = getState("packageManager") || "pnpm";
+	const buildCommand = getInput("build-command") || "";
+	const dryRun = getBooleanInput("dry-run") || false;
 
 	const github = getOctokit(token);
-	core.startGroup("Validating builds");
+	startGroup("Validating builds");
 
 	// Determine build command
 	const buildCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
@@ -62,14 +62,14 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 					: ["run", "ci:build"]
 			: ["run", buildCommand];
 
-	core.info(`Running build command: ${buildCmd} ${buildArgs.join(" ")}`);
+	info(`Running build command: ${buildCmd} ${buildArgs.join(" ")}`);
 
 	let buildError = "";
 	let buildExitCode = 0;
 
 	if (!dryRun) {
 		try {
-			await exec.exec(buildCmd, buildArgs, {
+			await exec(buildCmd, buildArgs, {
 				listeners: {
 					stdout: (data: Buffer) => {
 						const output = data.toString();
@@ -83,19 +83,19 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 				},
 				ignoreReturnCode: true,
 			});
-		} catch (error) {
+		} catch (err) {
 			buildExitCode = 1;
-			buildError = error instanceof Error ? error.message : String(error);
-			core.error(`Build command failed: ${buildError}`);
+			buildError = err instanceof Error ? err.message : String(err);
+			error(`Build command failed: ${buildError}`);
 		}
 	} else {
-		core.info(`[DRY RUN] Would run: ${buildCmd} ${buildArgs.join(" ")}`);
+		info(`[DRY RUN] Would run: ${buildCmd} ${buildArgs.join(" ")}`);
 		buildExitCode = 0; // Assume success in dry-run
 	}
 
 	const success = buildExitCode === 0 && !buildError.includes("error") && !buildError.includes("ERROR");
 
-	core.endGroup();
+	endGroup();
 
 	// Parse errors for annotations
 	const annotations: Array<{
@@ -140,7 +140,7 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 			match = genericErrorPattern.exec(buildError);
 		}
 
-		core.info(`Parsed ${annotations.length} error annotations`);
+		info(`Parsed ${annotations.length} error annotations`);
 	}
 
 	// Create GitHub check run
@@ -194,12 +194,12 @@ export async function validateBuilds(): Promise<BuildValidationResult> {
 		},
 	});
 
-	core.info(`Created check run: ${checkRun.html_url}`);
+	info(`Created check run: ${checkRun.html_url}`);
 
 	// Log error annotations
 	for (const annotation of annotations.slice(0, 10)) {
 		// Log first 10 to console
-		core.error(annotation.message, {
+		error(annotation.message, {
 			file: annotation.path,
 			startLine: annotation.start_line,
 			endLine: annotation.end_line,

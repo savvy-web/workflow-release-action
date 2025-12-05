@@ -1,6 +1,6 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as core from "@actions/core";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { debug, endGroup, error, info, startGroup, warning } from "@actions/core";
 import type {
 	PackageJson,
 	PackagePublishValidation,
@@ -52,16 +52,16 @@ export async function validatePublish(
 	targetBranch: string,
 	dryRun: boolean,
 ): Promise<PublishValidationResult> {
-	core.startGroup("Validating package publishing (multi-registry)");
+	startGroup("Validating package publishing (multi-registry)");
 
 	// Get changeset status to find packages with version changes
-	core.info("Getting changeset status");
+	info("Getting changeset status");
 	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
-	core.info(`Found ${changesetStatus.releases.length} package(s) with version changes`);
+	info(`Found ${changesetStatus.releases.length} package(s) with version changes`);
 
 	if (changesetStatus.releases.length === 0) {
-		core.info("No packages to validate");
-		core.endGroup();
+		info("No packages to validate");
+		endGroup();
 
 		return {
 			success: true,
@@ -84,34 +84,34 @@ export async function validatePublish(
 		const workspacePath = findPackagePath(release.name);
 		if (!workspacePath) {
 			const errorMsg = `Could not find workspace path for package ${release.name} - ensure package is configured in workspace`;
-			core.error(errorMsg);
+			error(errorMsg);
 			packageDiscoveryErrors.set(release.name, errorMsg);
 			continue;
 		}
 
 		// Read the source package.json to get publishConfig
-		const pkgJsonPath = path.join(workspacePath, "package.json");
-		if (!fs.existsSync(pkgJsonPath)) {
+		const pkgJsonPath = join(workspacePath, "package.json");
+		if (!existsSync(pkgJsonPath)) {
 			const errorMsg = `package.json not found at ${pkgJsonPath}`;
-			core.error(errorMsg);
+			error(errorMsg);
 			packageDiscoveryErrors.set(release.name, errorMsg);
 			continue;
 		}
 
-		const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as PackageJson;
+		const pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as PackageJson;
 		const targets = resolveTargets(workspacePath, pkgJson);
 
 		packageTargetsMap.set(release.name, { path: workspacePath, targets });
 		allTargets.push(...targets);
 
-		core.info(`Package ${release.name}: ${targets.length} publish target(s)`);
+		info(`Package ${release.name}: ${targets.length} publish target(s)`);
 		for (const target of targets) {
-			core.debug(`  - ${target.protocol} -> ${getRegistryDisplayName(target.registry)} (${target.directory})`);
+			debug(`  - ${target.protocol} -> ${getRegistryDisplayName(target.registry)} (${target.directory})`);
 		}
 	}
 
 	// Setup authentication for all registries
-	core.info("Setting up registry authentication");
+	info("Setting up registry authentication");
 	const authResult = await setupRegistryAuth(allTargets, packageManager);
 
 	// Track unreachable registries to skip them during validation
@@ -119,15 +119,15 @@ export async function validatePublish(
 
 	if (!authResult.success) {
 		if (authResult.missingTokens.length > 0) {
-			core.warning("Some registry tokens are missing:");
+			warning("Some registry tokens are missing:");
 			for (const missing of authResult.missingTokens) {
-				core.warning(`  - ${missing.registry}: ${missing.tokenEnv} not set`);
+				warning(`  - ${missing.registry}: ${missing.tokenEnv} not set`);
 			}
 		}
 		if (authResult.unreachableRegistries.length > 0) {
-			core.error("Some registries are unreachable (will skip validation):");
+			error("Some registries are unreachable (will skip validation):");
 			for (const unreachable of authResult.unreachableRegistries) {
-				core.error(`  - ${unreachable.registry}: ${unreachable.error}`);
+				error(`  - ${unreachable.registry}: ${unreachable.error}`);
 			}
 		}
 	}
@@ -139,7 +139,7 @@ export async function validatePublish(
 		// Check if package had discovery errors
 		const discoveryError = packageDiscoveryErrors.get(release.name);
 		if (discoveryError) {
-			core.error(`Package ${release.name}: ${discoveryError}`);
+			error(`Package ${release.name}: ${discoveryError}`);
 			validations.push({
 				name: release.name,
 				version: release.newVersion,
@@ -154,7 +154,7 @@ export async function validatePublish(
 
 		const packageInfo = packageTargetsMap.get(release.name);
 		if (!packageInfo || packageInfo.targets.length === 0) {
-			core.info(`Package ${release.name} has no publish targets (private or no publishConfig)`);
+			info(`Package ${release.name} has no publish targets (private or no publishConfig)`);
 			validations.push({
 				name: release.name,
 				version: release.newVersion,
@@ -166,17 +166,17 @@ export async function validatePublish(
 			continue;
 		}
 
-		core.info(`Validating ${release.name}@${release.newVersion}`);
+		info(`Validating ${release.name}@${release.newVersion}`);
 		const targetResults: TargetValidationResult[] = [];
 
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
-			core.startGroup(`Target: ${target.protocol} \u2192 ${registryName}`);
+			startGroup(`Target: ${target.protocol} \u2192 ${registryName}`);
 
 			// Skip targets with unreachable registries - no point in dry-run
 			if (target.registry && unreachableRegistrySet.has(target.registry)) {
 				const unreachableInfo = authResult.unreachableRegistries.find((r) => r.registry === target.registry);
-				core.warning(`Skipping ${registryName} - registry unreachable: ${unreachableInfo?.error || "unknown error"}`);
+				warning(`Skipping ${registryName} - registry unreachable: ${unreachableInfo?.error || "unknown error"}`);
 				targetResults.push({
 					target,
 					canPublish: false,
@@ -189,7 +189,7 @@ export async function validatePublish(
 					provenanceReady: false,
 					message: `Registry unreachable: ${unreachableInfo?.error || "unknown error"}`,
 				});
-				core.endGroup();
+				endGroup();
 				continue;
 			}
 
@@ -197,7 +197,7 @@ export async function validatePublish(
 			const preValidation = await preValidateTarget(target, release.name, release.newVersion);
 
 			if (!preValidation.valid) {
-				core.error(`Pre-validation failed: ${preValidation.errors.join(", ")}`);
+				error(`Pre-validation failed: ${preValidation.errors.join(", ")}`);
 				targetResults.push({
 					target,
 					canPublish: false,
@@ -210,13 +210,13 @@ export async function validatePublish(
 					provenanceReady: false,
 					message: preValidation.errors[0] || "Pre-validation failed",
 				});
-				core.endGroup();
+				endGroup();
 				continue;
 			}
 
 			// Log any warnings
-			for (const warning of preValidation.warnings) {
-				core.warning(warning);
+			for (const warningMsg of preValidation.warnings) {
+				warning(warningMsg);
 			}
 
 			// Dry-run publish
@@ -247,15 +247,15 @@ export async function validatePublish(
 			targetResults.push(result);
 
 			if (dryRunResult.success) {
-				core.info(`\u2713 Ready to publish to ${registryName}`);
+				info(`\u2713 Ready to publish to ${registryName}`);
 			} else if (dryRunResult.versionConflict) {
 				// Version conflict is a warning, not an error - package already published
-				core.warning(`\u26A0 ${result.message} - will skip`);
+				warning(`\u26A0 ${result.message} - will skip`);
 			} else {
-				core.error(`\u2717 ${result.message}`);
+				error(`\u2717 ${result.message}`);
 			}
 
-			core.endGroup();
+			endGroup();
 		}
 
 		const allTargetsValid = targetResults.every((t) => t.canPublish);
@@ -271,7 +271,7 @@ export async function validatePublish(
 		});
 	}
 
-	core.endGroup();
+	endGroup();
 
 	// Calculate overall success and backwards-compatible flags
 	const allValid = validations.every((v) => v.allTargetsValid);

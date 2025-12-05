@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { debug, error, info, setSecret, warning } from "@actions/core";
 import { context } from "@actions/github";
 import { createAppAuth } from "@octokit/auth-app";
 import { request } from "@octokit/request";
@@ -97,7 +97,7 @@ export async function createAppToken(options: CreateAppTokenOptions): Promise<Ap
 		throw new Error("private-key is required");
 	}
 
-	core.info(`Creating GitHub App token for ${owner}/${repository}`);
+	info(`Creating GitHub App token for ${owner}/${repository}`);
 
 	// Create the app auth instance
 	const auth = createAppAuth({
@@ -123,7 +123,7 @@ export async function createAppToken(options: CreateAppTokenOptions): Promise<Ap
 	const installationId = installationResponse.data.id;
 	const appSlug = installationResponse.data.app_slug;
 
-	core.debug(`Found installation ${installationId} for app ${appSlug}`);
+	debug(`Found installation ${installationId} for app ${appSlug}`);
 
 	// Get an installation access token with required permissions
 	let installationAuthentication: InstallationAuth;
@@ -133,13 +133,13 @@ export async function createAppToken(options: CreateAppTokenOptions): Promise<Ap
 			installationId,
 			permissions: RELEASE_WORKFLOW_PERMISSIONS,
 		})) as InstallationAuth;
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		core.error(`Failed to create installation token: ${message}`);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		error(`Failed to create installation token: ${message}`);
 
 		// Provide helpful error message for permission issues
 		if (message.includes("Resource not accessible") || message.includes("403")) {
-			core.error(
+			error(
 				"The GitHub App may not have the required permissions. " +
 					`Required: ${Object.entries(RELEASE_WORKFLOW_PERMISSIONS)
 						.map(([k, v]) => `${k}:${v}`)
@@ -147,19 +147,19 @@ export async function createAppToken(options: CreateAppTokenOptions): Promise<Ap
 			);
 		}
 
-		throw error;
+		throw err;
 	}
 
 	// Log granted permissions for debugging
 	const grantedPermissions = installationAuthentication.permissions;
 	if (grantedPermissions) {
-		core.info(`Granted permissions: ${JSON.stringify(grantedPermissions)}`);
+		info(`Granted permissions: ${JSON.stringify(grantedPermissions)}`);
 	}
 
-	core.info(`Created token for app "${appSlug}" (installation ${installationId})`);
+	info(`Created token for app "${appSlug}" (installation ${installationId})`);
 
 	// Mask the token in logs
-	core.setSecret(installationAuthentication.token);
+	setSecret(installationAuthentication.token);
 
 	return {
 		token: installationAuthentication.token,
@@ -181,7 +181,7 @@ export async function createAppToken(options: CreateAppTokenOptions): Promise<Ap
  */
 export async function revokeAppToken(token: string, apiUrl: string = "https://api.github.com"): Promise<void> {
 	if (!token) {
-		core.debug("No token to revoke");
+		debug("No token to revoke");
 		return;
 	}
 
@@ -192,10 +192,10 @@ export async function revokeAppToken(token: string, apiUrl: string = "https://ap
 			},
 			baseUrl: apiUrl,
 		});
-		core.info("Token revoked successfully");
-	} catch (error) {
+		info("Token revoked successfully");
+	} catch (err) {
 		// Don't fail the workflow if revocation fails - token will expire anyway
-		core.warning(`Token revocation failed: ${error instanceof Error ? error.message : String(error)}`);
+		warning(`Token revocation failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
 }
 

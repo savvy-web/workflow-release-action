@@ -1,4 +1,4 @@
-import * as path from "node:path";
+import { resolve } from "node:path";
 import type { PackageJson, PublishTarget, ResolvedTarget, Target } from "../types/publish-config.js";
 
 /**
@@ -164,7 +164,7 @@ export function resolveTargets(packagePath: string, packageJson: PackageJson): R
 			{
 				protocol: "npm",
 				registry,
-				directory: publishConfig.directory ? path.resolve(packagePath, publishConfig.directory) : packagePath,
+				directory: publishConfig.directory ? resolve(packagePath, publishConfig.directory) : packagePath,
 				access: publishConfig.access || defaults.access,
 				provenance: defaults.provenance,
 				tag: "latest",
@@ -184,9 +184,9 @@ export function resolveTargets(packagePath: string, packageJson: PackageJson): R
 
 		// Resolve directory: target > publishConfig > package root
 		const directory = expanded.directory
-			? path.resolve(packagePath, expanded.directory)
+			? resolve(packagePath, expanded.directory)
 			: publishConfig.directory
-				? path.resolve(packagePath, publishConfig.directory)
+				? resolve(packagePath, publishConfig.directory)
 				: packagePath;
 
 		// Resolve tokenEnv: target > registry default

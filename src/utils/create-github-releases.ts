@@ -1,9 +1,8 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
-import * as github from "@actions/github";
-import { context } from "@actions/github";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { basename, join } from "node:path";
+import { debug, endGroup, error, getState, info, startGroup, warning } from "@actions/core";
+import { exec } from "@actions/exec";
+import { context, getOctokit } from "@actions/github";
 import { createReleaseAssetAttestation } from "./create-attestation.js";
 import type { TagInfo } from "./determine-tag-strategy.js";
 import { findPackagePath } from "./find-package-path.js";
@@ -59,11 +58,11 @@ export interface AssetInfo {
  * @returns Release notes markdown or undefined
  */
 function extractReleaseNotes(changelogPath: string, version: string): string | undefined {
-	if (!fs.existsSync(changelogPath)) {
+	if (!existsSync(changelogPath)) {
 		return undefined;
 	}
 
-	const content = fs.readFileSync(changelogPath, "utf-8");
+	const content = readFileSync(changelogPath, "utf-8");
 	const lines = content.split("\n");
 
 	// Find the section for this version
@@ -109,7 +108,7 @@ function extractReleaseNotes(changelogPath: string, version: string): string | u
  * @returns Command and args for creating a package tarball
  */
 function getPackCommand(): { cmd: string; args: string[] } {
-	const packageManager = core.getState("packageManager") || "pnpm";
+	const packageManager = getState("packageManager") || "pnpm";
 
 	// Use each package manager's dlx/npx to run npm pack for consistent behavior
 	// This ensures we use a compatible npm version, not whatever the user has installed
@@ -147,10 +146,10 @@ async function findPackageArtifacts(packagePath: string): Promise<string[]> {
 	const artifacts: string[] = [];
 
 	// Check for .tgz files (from npm pack)
-	const files = fs.readdirSync(packagePath);
+	const files = readdirSync(packagePath);
 	for (const file of files) {
 		if (file.endsWith(".tgz")) {
-			artifacts.push(path.join(packagePath, file));
+			artifacts.push(join(packagePath, file));
 		}
 	}
 
@@ -159,7 +158,7 @@ async function findPackageArtifacts(packagePath: string): Promise<string[]> {
 		try {
 			const { cmd, args } = getPackCommand();
 			let output = "";
-			await exec.exec(cmd, args, {
+			await exec(cmd, args, {
 				cwd: packagePath,
 				listeners: {
 					stdout: (data: Buffer) => {
@@ -172,12 +171,12 @@ async function findPackageArtifacts(packagePath: string): Promise<string[]> {
 			const packResults = JSON.parse(output.trim()) as NpmPackResult[];
 			for (const result of packResults) {
 				if (result.filename) {
-					artifacts.push(path.join(packagePath, result.filename));
-					core.debug(`npm pack created: ${result.filename} (${result.name}@${result.version})`);
+					artifacts.push(join(packagePath, result.filename));
+					debug(`npm pack created: ${result.filename} (${result.name}@${result.version})`);
 				}
 			}
-		} catch (error) {
-			core.debug(`Failed to create package tarball: ${error instanceof Error ? error.message : String(error)}`);
+		} catch (err) {
+			debug(`Failed to create package tarball: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -192,7 +191,7 @@ async function findPackageArtifacts(packagePath: string): Promise<string[]> {
  * git user.name and user.email based on the GitHub App that created the token.
  */
 async function configureGitIdentity(): Promise<void> {
-	const appSlug = core.getState("appSlug");
+	const appSlug = getState("appSlug");
 
 	// Use app identity or fall back to github-actions bot
 	const userName = appSlug ? `${appSlug}[bot]` : "github-actions[bot]";
@@ -201,10 +200,10 @@ async function configureGitIdentity(): Promise<void> {
 		? `${appSlug}[bot]@users.noreply.github.com`
 		: "41898282+github-actions[bot]@users.noreply.github.com";
 
-	core.debug(`Configuring git identity: ${userName} <${userEmail}>`);
+	debug(`Configuring git identity: ${userName} <${userEmail}>`);
 
-	await exec.exec("git", ["config", "user.name", userName]);
-	await exec.exec("git", ["config", "user.email", userEmail]);
+	await exec("git", ["config", "user.name", userName]);
+	await exec("git", ["config", "user.email", userEmail]);
 }
 
 /**
@@ -217,21 +216,21 @@ async function configureGitIdentity(): Promise<void> {
  */
 async function createGitTag(tagName: string, message: string, dryRun: boolean): Promise<boolean> {
 	if (dryRun) {
-		core.info(`[DRY RUN] Would create tag: ${tagName}`);
+		info(`[DRY RUN] Would create tag: ${tagName}`);
 		return true;
 	}
 
 	try {
 		// Create annotated tag
-		await exec.exec("git", ["tag", "-a", tagName, "-m", message]);
+		await exec("git", ["tag", "-a", tagName, "-m", message]);
 
 		// Push the tag
-		await exec.exec("git", ["push", "origin", tagName]);
+		await exec("git", ["push", "origin", tagName]);
 
-		core.info(`Created and pushed tag: ${tagName}`);
+		info(`Created and pushed tag: ${tagName}`);
 		return true;
-	} catch (error) {
-		core.error(`Failed to create tag ${tagName}: ${error instanceof Error ? error.message : String(error)}`);
+	} catch (err) {
+		error(`Failed to create tag ${tagName}: ${err instanceof Error ? err.message : String(err)}`);
 		return false;
 	}
 }
@@ -255,17 +254,17 @@ export async function createGitHubReleases(
 	publishResults: PackagePublishResult[],
 	dryRun: boolean,
 ): Promise<CreateReleasesResult> {
-	const token = core.getState("token");
+	const token = getState("token");
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
-	const octokit = github.getOctokit(token);
+	const octokit = getOctokit(token);
 
 	const releases: ReleaseInfo[] = [];
 	const createdTags: string[] = [];
 	const errors: string[] = [];
 
-	core.startGroup("Creating GitHub releases");
+	startGroup("Creating GitHub releases");
 
 	// Configure git identity for creating annotated tags (required for non-dry-run)
 	if (!dryRun) {
@@ -273,7 +272,7 @@ export async function createGitHubReleases(
 	}
 
 	for (const tag of tags) {
-		core.info(`Processing release for ${tag.name}...`);
+		info(`Processing release for ${tag.name}...`);
 
 		// Find packages associated with this tag
 		const associatedPackages = publishResults.filter((pkg) => {
@@ -285,7 +284,7 @@ export async function createGitHubReleases(
 		});
 
 		if (associatedPackages.length === 0) {
-			core.warning(`No packages found for tag ${tag.name}`);
+			warning(`No packages found for tag ${tag.name}`);
 			continue;
 		}
 
@@ -298,17 +297,17 @@ export async function createGitHubReleases(
 			const changelogPaths: string[] = [];
 
 			if (pkgPath) {
-				changelogPaths.push(path.join(pkgPath, "CHANGELOG.md"));
+				changelogPaths.push(join(pkgPath, "CHANGELOG.md"));
 			}
 			// Fall back to root changelog for single-package repos
-			changelogPaths.push(path.join(process.cwd(), "CHANGELOG.md"));
+			changelogPaths.push(join(process.cwd(), "CHANGELOG.md"));
 
 			let notes: string | undefined;
 			for (const changelogPath of changelogPaths) {
-				core.debug(`Looking for CHANGELOG at: ${changelogPath}`);
+				debug(`Looking for CHANGELOG at: ${changelogPath}`);
 				notes = extractReleaseNotes(changelogPath, pkg.version);
 				if (notes) {
-					core.debug(`Found release notes for ${pkg.name}@${pkg.version} in ${changelogPath}`);
+					debug(`Found release notes for ${pkg.name}@${pkg.version} in ${changelogPath}`);
 					break;
 				}
 			}
@@ -362,7 +361,7 @@ export async function createGitHubReleases(
 
 		// Create GitHub release
 		if (dryRun) {
-			core.info(`[DRY RUN] Would create GitHub release for ${tag.name}`);
+			info(`[DRY RUN] Would create GitHub release for ${tag.name}`);
 			releases.push({
 				tag: tag.name,
 				url: `https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/${tag.name}`,
@@ -383,7 +382,7 @@ export async function createGitHubReleases(
 				prerelease: tag.version.includes("-"),
 			});
 
-			core.info(`Created release: ${release.data.html_url}`);
+			info(`Created release: ${release.data.html_url}`);
 
 			const releaseInfo: ReleaseInfo = {
 				tag: tag.name,
@@ -396,17 +395,17 @@ export async function createGitHubReleases(
 			for (const pkg of associatedPackages) {
 				const pkgPath = findPackagePath(pkg.name);
 				if (!pkgPath) {
-					core.warning(`Could not find path for package ${pkg.name}, skipping artifact upload`);
+					warning(`Could not find path for package ${pkg.name}, skipping artifact upload`);
 					continue;
 				}
 				const artifacts = await findPackageArtifacts(pkgPath);
 
 				for (const artifactPath of artifacts) {
 					try {
-						const fileName = path.basename(artifactPath);
-						const fileContent = fs.readFileSync(artifactPath);
+						const fileName = basename(artifactPath);
+						const fileContent = readFileSync(artifactPath);
 
-						core.info(`Uploading asset: ${fileName}`);
+						info(`Uploading asset: ${fileName}`);
 
 						const asset = await octokit.rest.repos.uploadReleaseAsset({
 							owner: context.repo.owner,
@@ -416,7 +415,7 @@ export async function createGitHubReleases(
 							data: fileContent as unknown as string,
 						});
 
-						core.info(`Uploaded: ${asset.data.browser_download_url}`);
+						info(`Uploaded: ${asset.data.browser_download_url}`);
 
 						// Create attestation for the uploaded release asset
 						const attestationResult = await createReleaseAssetAttestation(artifactPath, pkg.name, pkg.version, dryRun);
@@ -431,12 +430,10 @@ export async function createGitHubReleases(
 						releaseInfo.assets.push(assetInfo);
 
 						if (attestationResult.success && attestationResult.attestationUrl) {
-							core.info(`  ✓ Created attestation: ${attestationResult.attestationUrl}`);
+							info(`  ✓ Created attestation: ${attestationResult.attestationUrl}`);
 						}
-					} catch (error) {
-						core.warning(
-							`Failed to upload artifact ${artifactPath}: ${error instanceof Error ? error.message : String(error)}`,
-						);
+					} catch (err) {
+						warning(`Failed to upload artifact ${artifactPath}: ${err instanceof Error ? err.message : String(err)}`);
 					}
 				}
 			}
@@ -458,22 +455,22 @@ export async function createGitHubReleases(
 							release_id: release.data.id,
 							body: releaseNotes.trim(),
 						});
-						core.info(`Updated release notes with asset attestations`);
-					} catch (error) {
-						core.warning(`Failed to update release notes: ${error instanceof Error ? error.message : String(error)}`);
+						info(`Updated release notes with asset attestations`);
+					} catch (err) {
+						warning(`Failed to update release notes: ${err instanceof Error ? err.message : String(err)}`);
 					}
 				}
 			}
 
 			releases.push(releaseInfo);
-		} catch (error) {
-			const errorMessage = `Failed to create release for ${tag.name}: ${error instanceof Error ? error.message : String(error)}`;
-			core.error(errorMessage);
+		} catch (err) {
+			const errorMessage = `Failed to create release for ${tag.name}: ${err instanceof Error ? err.message : String(err)}`;
+			error(errorMessage);
 			errors.push(errorMessage);
 		}
 	}
 
-	core.endGroup();
+	endGroup();
 
 	return {
 		success: errors.length === 0,

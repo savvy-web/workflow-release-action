@@ -1,6 +1,6 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as core from "@actions/core";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { debug } from "@actions/core";
 import type { PackageJson, PreValidationResult, ResolvedTarget } from "../types/publish-config.js";
 
 /**
@@ -49,7 +49,7 @@ function validateNpmPackageJson(
 		errors.push("Built package.json missing 'version' field");
 	} else {
 		// This might be okay during validation before version bump
-		core.debug(`Version in built package: ${pkg.version}`);
+		debug(`Version in built package: ${pkg.version}`);
 	}
 
 	// For GitHub Packages, name must be scoped
@@ -123,7 +123,7 @@ function preValidateJsrJson(
 	const warnings: string[] = [];
 
 	try {
-		const content = fs.readFileSync(jsrJsonPath, "utf-8");
+		const content = readFileSync(jsrJsonPath, "utf-8");
 		const jsrJson = JSON.parse(content) as { name?: string; version?: string; exports?: unknown };
 
 		if (!jsrJson.name) {
@@ -182,7 +182,7 @@ export async function preValidateTarget(
 	const warnings: string[] = [];
 
 	// Check directory exists
-	const directoryExists = fs.existsSync(target.directory);
+	const directoryExists = existsSync(target.directory);
 	if (!directoryExists) {
 		return {
 			valid: false,
@@ -195,14 +195,14 @@ export async function preValidateTarget(
 	}
 
 	// Check package.json exists
-	const packageJsonPath = path.join(target.directory, "package.json");
-	const packageJsonExists = fs.existsSync(packageJsonPath);
+	const packageJsonPath = join(target.directory, "package.json");
+	const packageJsonExists = existsSync(packageJsonPath);
 
 	if (!packageJsonExists) {
 		// For JSR, check for jsr.json instead
 		if (target.protocol === "jsr") {
-			const jsrJsonPath = path.join(target.directory, "jsr.json");
-			if (fs.existsSync(jsrJsonPath)) {
+			const jsrJsonPath = join(target.directory, "jsr.json");
+			if (existsSync(jsrJsonPath)) {
 				return preValidateJsrJson(target, jsrJsonPath, expectedName, expectedVersion);
 			}
 		}
@@ -220,7 +220,7 @@ export async function preValidateTarget(
 	// Read and parse package.json
 	let builtPackageJson: PackageJson;
 	try {
-		const content = fs.readFileSync(packageJsonPath, "utf-8");
+		const content = readFileSync(packageJsonPath, "utf-8");
 		builtPackageJson = JSON.parse(content) as PackageJson;
 	} catch (error) {
 		return {

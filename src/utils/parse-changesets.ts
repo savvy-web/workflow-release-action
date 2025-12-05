@@ -1,5 +1,5 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 
 /**
  * Bump type for a package in a changeset
@@ -73,7 +73,7 @@ export interface ParseChangesetsOptions {
  */
 export function parseChangesets(options: ParseChangesetsOptions = {}): ParseChangesetsResult {
 	const changesetPath = options.changesetPath || ".changeset";
-	const absolutePath = path.isAbsolute(changesetPath) ? changesetPath : path.join(process.cwd(), changesetPath);
+	const absolutePath = isAbsolute(changesetPath) ? changesetPath : join(process.cwd(), changesetPath);
 
 	const result: ParseChangesetsResult = {
 		hasChangesets: false,
@@ -85,12 +85,12 @@ export function parseChangesets(options: ParseChangesetsOptions = {}): ParseChan
 	};
 
 	// Check if directory exists
-	if (!fs.existsSync(absolutePath)) {
+	if (!existsSync(absolutePath)) {
 		return result;
 	}
 
 	// Find all .md files (excluding README.md)
-	const files = fs.readdirSync(absolutePath).filter((file) => {
+	const files = readdirSync(absolutePath).filter((file) => {
 		return file.endsWith(".md") && file.toLowerCase() !== "readme.md";
 	});
 
@@ -103,8 +103,8 @@ export function parseChangesets(options: ParseChangesetsOptions = {}): ParseChan
 
 	// Parse each changeset file
 	for (const file of files) {
-		const filePath = path.join(absolutePath, file);
-		const content = fs.readFileSync(filePath, "utf8");
+		const filePath = join(absolutePath, file);
+		const content = readFileSync(filePath, "utf8");
 		const parsed = parseChangesetFile(content, file.replace(/\.md$/, ""));
 
 		if (parsed) {
@@ -218,13 +218,13 @@ export function getHighestBumpType(packageBumps: Map<string, BumpType>): BumpTyp
  * @returns Whether any changeset files exist
  */
 export function hasChangesets(changesetPath: string = ".changeset"): boolean {
-	const absolutePath = path.isAbsolute(changesetPath) ? changesetPath : path.join(process.cwd(), changesetPath);
+	const absolutePath = isAbsolute(changesetPath) ? changesetPath : join(process.cwd(), changesetPath);
 
-	if (!fs.existsSync(absolutePath)) {
+	if (!existsSync(absolutePath)) {
 		return false;
 	}
 
-	const files = fs.readdirSync(absolutePath);
+	const files = readdirSync(absolutePath);
 	return files.some((file) => file.endsWith(".md") && file.toLowerCase() !== "readme.md");
 }
 
@@ -235,12 +235,12 @@ export function hasChangesets(changesetPath: string = ".changeset"): boolean {
  * @returns Number of changeset files
  */
 export function countChangesets(changesetPath: string = ".changeset"): number {
-	const absolutePath = path.isAbsolute(changesetPath) ? changesetPath : path.join(process.cwd(), changesetPath);
+	const absolutePath = isAbsolute(changesetPath) ? changesetPath : join(process.cwd(), changesetPath);
 
-	if (!fs.existsSync(absolutePath)) {
+	if (!existsSync(absolutePath)) {
 		return 0;
 	}
 
-	const files = fs.readdirSync(absolutePath);
+	const files = readdirSync(absolutePath);
 	return files.filter((file) => file.endsWith(".md") && file.toLowerCase() !== "readme.md").length;
 }

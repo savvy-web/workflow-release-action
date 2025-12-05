@@ -1,9 +1,9 @@
-import * as crypto from "node:crypto";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { basename, join } from "node:path";
 import { attestProvenance } from "@actions/attest";
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
+import { debug, getState, info, warning } from "@actions/core";
+import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 
 /**
@@ -29,8 +29,8 @@ export interface AttestationResult {
  * @returns SHA256 digest in format "sha256:hex"
  */
 function computeFileDigest(filePath: string): string {
-	const content = fs.readFileSync(filePath);
-	const hash = crypto.createHash("sha256").update(content).digest("hex");
+	const content = readFileSync(filePath);
+	const hash = createHash("sha256").update(content).digest("hex");
 	return `sha256:${hash}`;
 }
 
@@ -47,16 +47,16 @@ function findTarball(directory: string, packageName: string, version: string): s
 	const normalizedName = packageName.replace(/^@/, "").replace(/\//g, "-");
 	const expectedName = `${normalizedName}-${version}.tgz`;
 
-	const tarballPath = path.join(directory, expectedName);
-	if (fs.existsSync(tarballPath)) {
+	const tarballPath = join(directory, expectedName);
+	if (existsSync(tarballPath)) {
 		return tarballPath;
 	}
 
 	// Also check for any .tgz file in the directory
-	const files = fs.readdirSync(directory);
+	const files = readdirSync(directory);
 	const tgzFile = files.find((f) => f.endsWith(".tgz"));
 	if (tgzFile) {
-		return path.join(directory, tgzFile);
+		return join(directory, tgzFile);
 	}
 
 	return undefined;
@@ -121,10 +121,10 @@ async function createArtifactMetadataRecord(
 			github_repository: `${context.repo.owner}/${context.repo.repo}`,
 		});
 
-		core.debug(`Created artifact metadata record for ${purlName}`);
+		debug(`Created artifact metadata record for ${purlName}`);
 		return true;
 	} catch (error) {
-		core.debug(`Failed to create artifact metadata record: ${error instanceof Error ? error.message : String(error)}`);
+		debug(`Failed to create artifact metadata record: ${error instanceof Error ? error.message : String(error)}`);
 		return false;
 	}
 }
@@ -142,7 +142,7 @@ async function createTarball(directory: string, packageManager: string): Promise
 		const npmCmd = getNpmCommand(packageManager);
 		const packArgs = [...npmCmd.baseArgs, "pack", "--json"];
 
-		await exec.exec(npmCmd.cmd, packArgs, {
+		await exec(npmCmd.cmd, packArgs, {
 			cwd: directory,
 			silent: true,
 			listeners: {
@@ -155,13 +155,13 @@ async function createTarball(directory: string, packageManager: string): Promise
 		// Parse JSON output to get filename
 		const packInfo = JSON.parse(output) as Array<{ filename: string }>;
 		if (packInfo.length > 0 && packInfo[0].filename) {
-			const tarballPath = path.join(directory, packInfo[0].filename);
-			if (fs.existsSync(tarballPath)) {
+			const tarballPath = join(directory, packInfo[0].filename);
+			if (existsSync(tarballPath)) {
 				return tarballPath;
 			}
 		}
 	} catch (error) {
-		core.debug(`Failed to create tarball: ${error instanceof Error ? error.message : String(error)}`);
+		debug(`Failed to create tarball: ${error instanceof Error ? error.message : String(error)}`);
 	}
 
 	return undefined;
@@ -195,7 +195,7 @@ export async function createReleaseAssetAttestation(
 	dryRun: boolean,
 ): Promise<AttestationResult> {
 	if (dryRun) {
-		core.info(`[DRY RUN] Would create attestation for release asset ${path.basename(artifactPath)}`);
+		info(`[DRY RUN] Would create attestation for release asset ${basename(artifactPath)}`);
 		return {
 			success: true,
 			attestationUrl: `https://github.com/${context.repo.owner}/${context.repo.repo}/attestations/dry-run`,
@@ -203,7 +203,7 @@ export async function createReleaseAssetAttestation(
 	}
 
 	// Get the GITHUB_TOKEN for attestation API
-	const token = process.env.GITHUB_TOKEN || core.getState("githubToken");
+	const token = process.env.GITHUB_TOKEN || getState("githubToken");
 	if (!token) {
 		return {
 			success: false,
@@ -211,23 +211,23 @@ export async function createReleaseAssetAttestation(
 		};
 	}
 
-	if (!fs.existsSync(artifactPath)) {
+	if (!existsSync(artifactPath)) {
 		return {
 			success: false,
 			error: `Artifact not found: ${artifactPath}`,
 		};
 	}
 
-	const artifactName = path.basename(artifactPath);
+	const artifactName = basename(artifactPath);
 	// Use PURL format for npm packages to link with GitHub Packages
 	const purlName = `pkg:npm/${packageName}@${version}`;
-	core.info(`Creating attestation for release asset ${artifactName}...`);
+	info(`Creating attestation for release asset ${artifactName}...`);
 
 	try {
 		// Compute digest of the actual artifact
 		const digest = computeFileDigest(artifactPath);
-		core.debug(`Artifact digest: ${digest}`);
-		core.debug(`Subject name (PURL): ${purlName}`);
+		debug(`Artifact digest: ${digest}`);
+		debug(`Subject name (PURL): ${purlName}`);
 
 		// Create the attestation
 		const attestation = await attestProvenance({
@@ -240,12 +240,12 @@ export async function createReleaseAssetAttestation(
 			? `https://github.com/${context.repo.owner}/${context.repo.repo}/attestations/${attestation.attestationID}`
 			: undefined;
 
-		core.info(`✓ Created attestation for ${artifactName}`);
+		info(`✓ Created attestation for ${artifactName}`);
 		if (attestationUrl) {
-			core.info(`  Attestation URL: ${attestationUrl}`);
+			info(`  Attestation URL: ${attestationUrl}`);
 		}
 		if (attestation.tlogID) {
-			core.info(`  Transparency log: https://search.sigstore.dev/?logIndex=${attestation.tlogID}`);
+			info(`  Transparency log: https://search.sigstore.dev/?logIndex=${attestation.tlogID}`);
 		}
 
 		return {
@@ -256,7 +256,7 @@ export async function createReleaseAssetAttestation(
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		core.warning(`Failed to create attestation for ${artifactName}: ${message}`);
+		warning(`Failed to create attestation for ${artifactName}: ${message}`);
 
 		return {
 			success: false,
@@ -292,7 +292,7 @@ export async function createPackageAttestation(
 	packageManager: string = "npm",
 ): Promise<AttestationResult> {
 	if (dryRun) {
-		core.info(`[DRY RUN] Would create attestation for ${packageName}@${version}`);
+		info(`[DRY RUN] Would create attestation for ${packageName}@${version}`);
 		return {
 			success: true,
 			attestationUrl: `https://github.com/${context.repo.owner}/${context.repo.repo}/attestations/dry-run`,
@@ -301,7 +301,7 @@ export async function createPackageAttestation(
 
 	// Get the GITHUB_TOKEN for attestation API
 	// We need the workflow token, not the App token, for attestations
-	const token = process.env.GITHUB_TOKEN || core.getState("githubToken");
+	const token = process.env.GITHUB_TOKEN || getState("githubToken");
 	if (!token) {
 		return {
 			success: false,
@@ -312,29 +312,29 @@ export async function createPackageAttestation(
 	// Find the tarball, or create one if it doesn't exist
 	let tarballPath = findTarball(directory, packageName, version);
 	if (!tarballPath) {
-		core.debug(`No tarball found in ${directory} for ${packageName}@${version}, creating one...`);
+		debug(`No tarball found in ${directory} for ${packageName}@${version}, creating one...`);
 		tarballPath = await createTarball(directory, packageManager);
 		if (!tarballPath) {
-			core.debug(`Failed to create tarball in ${directory}`);
+			debug(`Failed to create tarball in ${directory}`);
 			return {
 				success: false,
 				error: `No tarball found and could not create one for ${packageName}@${version}`,
 			};
 		}
-		core.debug(`Created tarball: ${tarballPath}`);
+		debug(`Created tarball: ${tarballPath}`);
 	}
 
-	const tarballName = path.basename(tarballPath);
+	const tarballName = basename(tarballPath);
 	// Use PURL format for npm packages to link with GitHub Packages
 	// Format: pkg:npm/@scope/name@version or pkg:npm/name@version
 	const purlName = `pkg:npm/${packageName}@${version}`;
-	core.info(`Creating attestation for ${purlName}...`);
+	info(`Creating attestation for ${purlName}...`);
 
 	try {
 		// Compute digest
 		const digest = computeFileDigest(tarballPath);
-		core.debug(`Tarball digest: ${digest}`);
-		core.debug(`Subject name (PURL): ${purlName}`);
+		debug(`Tarball digest: ${digest}`);
+		debug(`Subject name (PURL): ${purlName}`);
 
 		// Create the attestation
 		const attestation = await attestProvenance({
@@ -347,18 +347,18 @@ export async function createPackageAttestation(
 			? `https://github.com/${context.repo.owner}/${context.repo.repo}/attestations/${attestation.attestationID}`
 			: undefined;
 
-		core.info(`✓ Created attestation for ${tarballName}`);
+		info(`✓ Created attestation for ${tarballName}`);
 		if (attestationUrl) {
-			core.info(`  Attestation URL: ${attestationUrl}`);
+			info(`  Attestation URL: ${attestationUrl}`);
 		}
 		if (attestation.tlogID) {
-			core.info(`  Transparency log: https://search.sigstore.dev/?logIndex=${attestation.tlogID}`);
+			info(`  Transparency log: https://search.sigstore.dev/?logIndex=${attestation.tlogID}`);
 		}
 
 		// Link attestation to GitHub Packages artifact via metadata API
 		const metadataLinked = await createArtifactMetadataRecord(context.repo.owner, packageName, version, digest, token);
 		if (metadataLinked) {
-			core.info(`  ✓ Linked attestation to GitHub Packages artifact`);
+			info(`  ✓ Linked attestation to GitHub Packages artifact`);
 		}
 
 		return {
@@ -369,7 +369,7 @@ export async function createPackageAttestation(
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		core.warning(`Failed to create attestation for ${packageName}@${version}: ${message}`);
+		warning(`Failed to create attestation for ${packageName}@${version}: ${message}`);
 
 		// Don't fail the publish for attestation errors
 		return {

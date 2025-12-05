@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { debug, getBooleanInput, getInput, info, saveState, setFailed, setOutput, setSecret } from "@actions/core";
 
 import { checkTokenPermissions } from "./utils/check-token-permissions.js";
 import { createAppToken } from "./utils/create-app-token.js";
@@ -14,20 +14,20 @@ import { createAppToken } from "./utils/create-app-token.js";
  */
 async function run(): Promise<void> {
 	try {
-		core.debug("Running pre-action script");
+		debug("Running pre-action script");
 
 		// Store initial state for post-action cleanup
 		const startTime = Date.now().toString();
-		core.saveState("startTime", startTime);
+		saveState("startTime", startTime);
 
 		// Get required GitHub App credentials
-		const appId = core.getInput("app-id", { required: true });
-		const privateKey = core.getInput("private-key", { required: true });
-		const skipTokenRevoke = core.getBooleanInput("skip-token-revoke");
-		const githubToken = core.getInput("github-token");
+		const appId = getInput("app-id", { required: true });
+		const privateKey = getInput("private-key", { required: true });
+		const skipTokenRevoke = getBooleanInput("skip-token-revoke");
+		const githubToken = getInput("github-token");
 
 		// Generate token from app credentials
-		core.info("Generating GitHub App installation token...");
+		info("Generating GitHub App installation token...");
 
 		const tokenResult = await createAppToken({
 			appId,
@@ -37,42 +37,42 @@ async function run(): Promise<void> {
 		const token = tokenResult.token;
 
 		// Save token info for main action and post-action cleanup
-		core.saveState("token", token);
-		core.saveState("expiresAt", tokenResult.expiresAt);
-		core.saveState("installationId", tokenResult.installationId.toString());
-		core.saveState("appSlug", tokenResult.appSlug);
-		core.saveState("skipTokenRevoke", skipTokenRevoke.toString());
+		saveState("token", token);
+		saveState("expiresAt", tokenResult.expiresAt);
+		saveState("installationId", tokenResult.installationId.toString());
+		saveState("appSlug", tokenResult.appSlug);
+		saveState("skipTokenRevoke", skipTokenRevoke.toString());
 
 		// Save optional github-token for GitHub Packages (when app doesn't have packages:write)
 		if (githubToken) {
-			core.saveState("githubToken", githubToken);
-			core.setSecret(githubToken);
-			core.info("GitHub token provided for GitHub Packages authentication");
+			saveState("githubToken", githubToken);
+			setSecret(githubToken);
+			info("GitHub token provided for GitHub Packages authentication");
 		}
 
 		// Set outputs for use in subsequent workflow steps
-		core.setOutput("token", token);
-		core.setOutput("installation-id", tokenResult.installationId);
-		core.setOutput("app-slug", tokenResult.appSlug);
+		setOutput("token", token);
+		setOutput("installation-id", tokenResult.installationId);
+		setOutput("app-slug", tokenResult.appSlug);
 
-		core.info(`Token generated for app "${tokenResult.appSlug}" (expires: ${tokenResult.expiresAt})`);
+		info(`Token generated for app "${tokenResult.appSlug}" (expires: ${tokenResult.expiresAt})`);
 
 		// Validate token permissions
-		core.info("Checking GitHub token permissions...");
+		info("Checking GitHub token permissions...");
 		const tokenInfo = await checkTokenPermissions(token);
 
 		if (tokenInfo.valid) {
-			core.saveState("tokenType", tokenInfo.type || "");
-			core.saveState("tokenLogin", tokenInfo.login || "");
+			saveState("tokenType", tokenInfo.type || "");
+			saveState("tokenLogin", tokenInfo.login || "");
 			if (tokenInfo.appName) {
-				core.saveState("appName", tokenInfo.appName);
+				saveState("appName", tokenInfo.appName);
 			}
 		}
 
-		core.debug(`Pre-action completed at ${startTime}`);
+		debug(`Pre-action completed at ${startTime}`);
 	} catch (error) {
 		// Pre-action failures SHOULD fail the workflow - token is required
-		core.setFailed(`Pre-action failed: ${error instanceof Error ? error.message : String(error)}`);
+		setFailed(`Pre-action failed: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 

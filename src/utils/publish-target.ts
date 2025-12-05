@@ -1,7 +1,7 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as core from "@actions/core";
-import * as exec from "@actions/exec";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { debug, error, info, warning } from "@actions/core";
+import { exec } from "@actions/exec";
 import type {
 	AlreadyPublishedReason,
 	NpmVersionInfo,
@@ -29,10 +29,10 @@ function getRegistryDisplayName(registry: string | null): string {
  * Generate a URL to the published package
  */
 function generatePackageUrl(target: ResolvedTarget): string | undefined {
-	const pkgJsonPath = path.join(target.directory, "package.json");
-	if (!fs.existsSync(pkgJsonPath)) return undefined;
+	const pkgJsonPath = join(target.directory, "package.json");
+	if (!existsSync(pkgJsonPath)) return undefined;
 
-	const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as { name?: string };
+	const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as { name?: string };
 	const name = pkg.name;
 
 	if (!name || !target.registry) return undefined;
@@ -147,7 +147,7 @@ export async function getLocalTarballIntegrity(directory: string, packageManager
 	let output = "";
 	const npmCmd = getNpmCommand(packageManager);
 	try {
-		await exec.exec(npmCmd.cmd, [...npmCmd.baseArgs, "pack", "--json", "--dry-run"], {
+		await exec(npmCmd.cmd, [...npmCmd.baseArgs, "pack", "--json", "--dry-run"], {
 			cwd: directory,
 			silent: true,
 			listeners: {
@@ -163,7 +163,7 @@ export async function getLocalTarballIntegrity(directory: string, packageManager
 		// Return shasum (SHA-1) for comparison - it's more universally available
 		return parsed[0]?.shasum;
 	} catch {
-		core.debug(`Failed to get local tarball integrity: ${output}`);
+		debug(`Failed to get local tarball integrity: ${output}`);
 		return undefined;
 	}
 }
@@ -186,7 +186,7 @@ async function getRemoteTarballIntegrity(
 	}
 
 	try {
-		await exec.exec(npmCmd.cmd, args, {
+		await exec(npmCmd.cmd, args, {
 			silent: true,
 			listeners: {
 				stdout: (data: Buffer) => {
@@ -199,7 +199,7 @@ async function getRemoteTarballIntegrity(
 		const shasum = output.trim();
 		return shasum || undefined;
 	} catch {
-		core.debug(`Failed to get remote tarball integrity for ${packageName}@${version}`);
+		debug(`Failed to get remote tarball integrity for ${packageName}@${version}`);
 		return undefined;
 	}
 }
@@ -252,11 +252,11 @@ export async function checkVersionExists(
 	}
 
 	const registryName = getRegistryDisplayName(registry);
-	core.debug(`Checking if ${packageName}@${version} exists on ${registryName}`);
+	debug(`Checking if ${packageName}@${version} exists on ${registryName}`);
 
 	let exitCode = 0;
 	try {
-		exitCode = await exec.exec(npmCmd.cmd, args, {
+		exitCode = await exec(npmCmd.cmd, args, {
 			silent: true,
 			listeners: {
 				stdout: (data: Buffer) => {
@@ -285,7 +285,7 @@ export async function checkVersionExists(
 		// Check if this is a "not found" error (package or version doesn't exist)
 		// npm view returns exit code 1 and E404 for missing packages
 		if (errorOutput.includes("E404") || errorOutput.includes("is not in this registry")) {
-			core.debug(`Package ${packageName}@${version} not found on ${registryName}`);
+			debug(`Package ${packageName}@${version} not found on ${registryName}`);
 			return {
 				success: true,
 				versionExists: false,
@@ -362,12 +362,12 @@ async function compareTarballIntegrity(
 	target: ResolvedTarget,
 	packageManager: string,
 ): Promise<{ reason: AlreadyPublishedReason; localIntegrity?: string; remoteIntegrity?: string }> {
-	const pkgJsonPath = path.join(target.directory, "package.json");
-	if (!fs.existsSync(pkgJsonPath)) {
+	const pkgJsonPath = join(target.directory, "package.json");
+	if (!existsSync(pkgJsonPath)) {
 		return { reason: "unknown" };
 	}
 
-	const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as { name?: string; version?: string };
+	const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as { name?: string; version?: string };
 	if (!pkg.name || !pkg.version) {
 		return { reason: "unknown" };
 	}
@@ -378,18 +378,18 @@ async function compareTarballIntegrity(
 	]);
 
 	if (!localIntegrity || !remoteIntegrity) {
-		core.debug(`Could not compare integrity: local=${localIntegrity}, remote=${remoteIntegrity}`);
+		debug(`Could not compare integrity: local=${localIntegrity}, remote=${remoteIntegrity}`);
 		return { reason: "unknown", localIntegrity, remoteIntegrity };
 	}
 
 	if (localIntegrity === remoteIntegrity) {
-		core.info(`✓ Local tarball matches remote (shasum: ${localIntegrity.substring(0, 12)}...)`);
+		info(`✓ Local tarball matches remote (shasum: ${localIntegrity.substring(0, 12)}...)`);
 		return { reason: "identical", localIntegrity, remoteIntegrity };
 	}
 
-	core.warning(`✗ Local tarball differs from remote!`);
-	core.warning(`  Local:  ${localIntegrity}`);
-	core.warning(`  Remote: ${remoteIntegrity}`);
+	warning(`✗ Local tarball differs from remote!`);
+	warning(`  Local:  ${localIntegrity}`);
+	warning(`  Remote: ${remoteIntegrity}`);
 	return { reason: "different", localIntegrity, remoteIntegrity };
 }
 
@@ -407,8 +407,8 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 	const registryName = getRegistryDisplayName(target.registry);
 
 	// Read package.json to get name and version
-	const pkgJsonPath = path.join(target.directory, "package.json");
-	if (!fs.existsSync(pkgJsonPath)) {
+	const pkgJsonPath = join(target.directory, "package.json");
+	if (!existsSync(pkgJsonPath)) {
 		return {
 			success: false,
 			output: "",
@@ -417,7 +417,7 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 		};
 	}
 
-	const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as { name?: string; version?: string };
+	const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as { name?: string; version?: string };
 	if (!pkg.name || !pkg.version) {
 		return {
 			success: false,
@@ -431,16 +431,16 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 	const version = pkg.version;
 
 	// Pre-check: Does this version already exist on the registry?
-	core.info(`Checking ${packageName}@${version} on ${registryName}...`);
+	info(`Checking ${packageName}@${version} on ${registryName}...`);
 	const versionCheck = await checkVersionExists(packageName, version, target.registry, packageManager);
 
 	if (!versionCheck.success) {
 		// Registry check failed - could be auth issue, network issue, etc.
-		core.warning(`⚠ Could not verify version on ${registryName}: ${versionCheck.error}`);
-		core.info("Proceeding with publish attempt...");
+		warning(`⚠ Could not verify version on ${registryName}: ${versionCheck.error}`);
+		info("Proceeding with publish attempt...");
 	} else if (versionCheck.versionExists) {
 		// Version already exists - compare integrity
-		core.info(`Version ${version} already exists on ${registryName}`);
+		info(`Version ${version} already exists on ${registryName}`);
 
 		// Get local tarball integrity for comparison
 		const localIntegrity = await getLocalTarballIntegrity(target.directory, packageManager);
@@ -448,8 +448,8 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 
 		if (localIntegrity && remoteIntegrity) {
 			if (localIntegrity === remoteIntegrity) {
-				core.info(`✓ Local tarball matches remote (shasum: ${localIntegrity.substring(0, 12)}...)`);
-				core.info(`✓ Skipping publish - identical content already published`);
+				info(`✓ Local tarball matches remote (shasum: ${localIntegrity.substring(0, 12)}...)`);
+				info(`✓ Skipping publish - identical content already published`);
 
 				// Show dist-tags info
 				const distTags = versionCheck.versionInfo?.distTags;
@@ -457,7 +457,7 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 					const tagsList = Object.entries(distTags)
 						.map(([tag, ver]) => `${tag}=${ver}`)
 						.join(", ");
-					core.info(`  Current dist-tags: ${tagsList}`);
+					info(`  Current dist-tags: ${tagsList}`);
 				}
 
 				return {
@@ -474,10 +474,10 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 			}
 
 			// Content differs - this is an error condition
-			core.error(`✗ Local tarball differs from published version!`);
-			core.error(`  Local shasum:  ${localIntegrity}`);
-			core.error(`  Remote shasum: ${remoteIntegrity}`);
-			core.error(`  This indicates the package content changed without a version bump.`);
+			error(`✗ Local tarball differs from published version!`);
+			error(`  Local shasum:  ${localIntegrity}`);
+			error(`  Remote shasum: ${remoteIntegrity}`);
+			error(`  This indicates the package content changed without a version bump.`);
 
 			return {
 				success: false,
@@ -492,10 +492,10 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 		}
 
 		// Could not compare integrity - proceed with warning
-		core.warning(
+		warning(
 			`⚠ Could not compare tarball integrity (local: ${localIntegrity || "unavailable"}, remote: ${remoteIntegrity || "unavailable"})`,
 		);
-		core.info(`✓ Skipping publish - version already exists`);
+		info(`✓ Skipping publish - version already exists`);
 
 		return {
 			success: true,
@@ -510,12 +510,12 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 		};
 	} else {
 		// Version doesn't exist - show available versions for context
-		core.info(`✓ Version ${version} not found on ${registryName} - proceeding with publish`);
+		info(`✓ Version ${version} not found on ${registryName} - proceeding with publish`);
 	}
 
 	// Build publish command
 	let output = "";
-	let error = "";
+	let errorOutput = "";
 	let exitCode = 0;
 
 	const args = ["publish"];
@@ -540,45 +540,45 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 
 	const publishCmd = getPublishCommand(packageManager);
 	const fullArgs = [...publishCmd.baseArgs, ...args];
-	core.info(`Running: ${publishCmd.cmd} ${fullArgs.join(" ")}`);
+	info(`Running: ${publishCmd.cmd} ${fullArgs.join(" ")}`);
 
 	try {
-		exitCode = await exec.exec(publishCmd.cmd, fullArgs, {
+		exitCode = await exec(publishCmd.cmd, fullArgs, {
 			cwd: target.directory,
 			listeners: {
 				stdout: (data: Buffer) => {
 					output += data.toString();
 				},
 				stderr: (data: Buffer) => {
-					error += data.toString();
+					errorOutput += data.toString();
 				},
 			},
 			ignoreReturnCode: true,
 		});
 	} catch (e) {
 		exitCode = 1;
-		error = e instanceof Error ? e.message : String(e);
+		errorOutput = e instanceof Error ? e.message : String(e);
 	}
 
 	const registryUrl = generatePackageUrl(target);
 	const attestationUrl = target.provenance ? extractProvenanceUrl(output) : undefined;
 
 	if (exitCode === 0) {
-		core.info(`✓ Successfully published ${packageName}@${version} to ${registryName}`);
+		info(`✓ Successfully published ${packageName}@${version} to ${registryName}`);
 		if (attestationUrl) {
-			core.info(`  Provenance: ${attestationUrl}`);
+			info(`  Provenance: ${attestationUrl}`);
 		}
 	} else {
 		// Check if this is a "version already published" error (race condition)
-		const alreadyPublished = isVersionAlreadyPublished(output, error);
+		const alreadyPublished = isVersionAlreadyPublished(output, errorOutput);
 		if (alreadyPublished) {
-			core.info("Version was published by another process - verifying integrity...");
+			info("Version was published by another process - verifying integrity...");
 			const comparison = await compareTarballIntegrity(target, packageManager);
 
 			return {
 				success: comparison.reason !== "different",
 				output,
-				error,
+				error: errorOutput,
 				exitCode,
 				registryUrl,
 				alreadyPublished: true,
@@ -588,13 +588,13 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 			};
 		}
 
-		core.error(`✗ Failed to publish ${packageName}@${version} to ${registryName}`);
+		error(`✗ Failed to publish ${packageName}@${version} to ${registryName}`);
 	}
 
 	return {
 		success: exitCode === 0,
 		output,
-		error,
+		error: errorOutput,
 		exitCode,
 		registryUrl,
 		attestationUrl,
@@ -617,7 +617,7 @@ function isJsrVersionAlreadyPublished(output: string, error: string): boolean {
  */
 async function publishToJsr(target: ResolvedTarget, packageManager: string): Promise<PublishResult> {
 	let output = "";
-	let error = "";
+	let errorOutput = "";
 	let exitCode = 0;
 
 	// JSR uses npx/pnpm dlx/bunx to run jsr publish
@@ -625,36 +625,36 @@ async function publishToJsr(target: ResolvedTarget, packageManager: string): Pro
 	const npx = getNpxCommand(packageManager);
 	const args = [...npx.args, "jsr", "publish", "--allow-dirty"];
 
-	core.info(`Publishing to JSR: ${npx.cmd} ${args.join(" ")}`);
-	core.info(`  Directory: ${target.directory}`);
+	info(`Publishing to JSR: ${npx.cmd} ${args.join(" ")}`);
+	info(`  Directory: ${target.directory}`);
 
 	try {
-		exitCode = await exec.exec(npx.cmd, args, {
+		exitCode = await exec(npx.cmd, args, {
 			cwd: target.directory,
 			listeners: {
 				stdout: (data: Buffer) => {
 					output += data.toString();
 				},
 				stderr: (data: Buffer) => {
-					error += data.toString();
+					errorOutput += data.toString();
 				},
 			},
 			ignoreReturnCode: true,
 		});
 	} catch (e) {
 		exitCode = 1;
-		error = e instanceof Error ? e.message : String(e);
+		errorOutput = e instanceof Error ? e.message : String(e);
 	}
 
 	// Extract JSR package URL from output
 	const urlMatch = output.match(/https:\/\/jsr\.io\/@[^\s]+/);
 	const registryUrl = urlMatch?.[0];
-	const alreadyPublished = isJsrVersionAlreadyPublished(output, error);
+	const alreadyPublished = isJsrVersionAlreadyPublished(output, errorOutput);
 
 	return {
 		success: exitCode === 0,
 		output,
-		error,
+		error: errorOutput,
 		exitCode,
 		registryUrl,
 		alreadyPublished,
@@ -676,7 +676,7 @@ export async function publishToTarget(
 ): Promise<PublishResult> {
 	if (dryRun) {
 		const registryName = target.protocol === "jsr" ? "JSR" : getRegistryDisplayName(target.registry);
-		core.info(`[DRY RUN] Would publish to ${registryName}: ${target.directory}`);
+		info(`[DRY RUN] Would publish to ${registryName}: ${target.directory}`);
 		return {
 			success: true,
 			output: "[DRY RUN] Skipped actual publish",

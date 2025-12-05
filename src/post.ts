@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { debug, getState, info, warning } from "@actions/core";
 
 import { isTokenExpired, revokeAppToken } from "./utils/create-app-token.js";
 
@@ -13,37 +13,37 @@ import { isTokenExpired, revokeAppToken } from "./utils/create-app-token.js";
  */
 async function run(): Promise<void> {
 	try {
-		core.debug("Running post-action script");
+		debug("Running post-action script");
 
 		// Retrieve state from pre-action
-		const startTime = core.getState("startTime");
+		const startTime = getState("startTime");
 
 		if (startTime) {
 			const duration = Date.now() - parseInt(startTime, 10);
-			core.info(`Release action completed in ${(duration / 1000).toFixed(2)}s`);
+			info(`Release action completed in ${(duration / 1000).toFixed(2)}s`);
 		}
 
 		// Revoke token if we generated it (not for legacy tokens)
-		const token = core.getState("token");
-		const isLegacyToken = core.getState("isLegacyToken") === "true";
-		const skipTokenRevoke = core.getState("skipTokenRevoke") === "true";
-		const expiresAt = core.getState("expiresAt");
+		const token = getState("token");
+		const isLegacyToken = getState("isLegacyToken") === "true";
+		const skipTokenRevoke = getState("skipTokenRevoke") === "true";
+		const expiresAt = getState("expiresAt");
 
 		if (token && !isLegacyToken) {
 			if (skipTokenRevoke) {
-				core.info("Token revocation skipped (skip-token-revoke is true)");
+				info("Token revocation skipped (skip-token-revoke is true)");
 			} else if (expiresAt && isTokenExpired(expiresAt)) {
-				core.info("Token already expired, skipping revocation");
+				info("Token already expired, skipping revocation");
 			} else {
-				core.info("Revoking GitHub App installation token...");
+				info("Revoking GitHub App installation token...");
 				await revokeAppToken(token);
 			}
 		}
 
-		core.debug("Post-action completed");
+		debug("Post-action completed");
 	} catch (error) {
 		// Post-action failures should not fail the entire workflow
-		core.warning(`Post-action warning: ${error instanceof Error ? error.message : String(error)}`);
+		warning(`Post-action warning: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 

@@ -1,4 +1,4 @@
-import * as core from "@actions/core";
+import { endGroup, info, startGroup, warning } from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -87,10 +87,8 @@ async function getLinkedIssues(
 		);
 
 		return response.repository.pullRequest.closingIssuesReferences.nodes;
-	} catch (error) {
-		core.warning(
-			`Failed to query linked issues via GraphQL: ${error instanceof Error ? error.message : String(error)}`,
-		);
+	} catch (err) {
+		warning(`Failed to query linked issues via GraphQL: ${err instanceof Error ? err.message : String(err)}`);
 		return [];
 	}
 }
@@ -118,15 +116,15 @@ export async function closeLinkedIssues(
 	let closedCount = 0;
 	let failedCount = 0;
 
-	core.startGroup("Closing linked issues");
+	startGroup("Closing linked issues");
 
 	// Get linked issues via GraphQL
 	const linkedIssues = await getLinkedIssues(github, prNumber);
-	core.info(`Found ${linkedIssues.length} linked issue(s) for PR #${prNumber}`);
+	info(`Found ${linkedIssues.length} linked issue(s) for PR #${prNumber}`);
 
 	if (linkedIssues.length === 0) {
-		core.info("No linked issues to close");
-		core.endGroup();
+		info("No linked issues to close");
+		endGroup();
 
 		// Create check run even with no issues
 		const { data: checkRun } = await github.rest.checks.create({
@@ -157,7 +155,7 @@ export async function closeLinkedIssues(
 		try {
 			// Check if already closed (GraphQL gives us state)
 			if (linkedIssue.state === "CLOSED") {
-				core.info(`Issue #${issueNumber} is already closed, skipping`);
+				info(`Issue #${issueNumber} is already closed, skipping`);
 				issues.push({
 					number: issueNumber,
 					title: linkedIssue.title,
@@ -184,9 +182,9 @@ export async function closeLinkedIssues(
 					state_reason: "completed",
 				});
 
-				core.info(`✓ Closed issue #${issueNumber}: ${linkedIssue.title}`);
+				info(`✓ Closed issue #${issueNumber}: ${linkedIssue.title}`);
 			} else {
-				core.info(`[DRY RUN] Would close issue #${issueNumber}: ${linkedIssue.title}`);
+				info(`[DRY RUN] Would close issue #${issueNumber}: ${linkedIssue.title}`);
 			}
 
 			issues.push({
@@ -195,9 +193,9 @@ export async function closeLinkedIssues(
 				closed: true,
 			});
 			closedCount++;
-		} catch (error) {
-			const errorMessage = error instanceof Error ? error.message : String(error);
-			core.warning(`Failed to close issue #${issueNumber}: ${errorMessage}`);
+		} catch (err) {
+			const errorMessage = err instanceof Error ? err.message : String(err);
+			warning(`Failed to close issue #${issueNumber}: ${errorMessage}`);
 			issues.push({
 				number: issueNumber,
 				title: linkedIssue.title,
@@ -208,7 +206,7 @@ export async function closeLinkedIssues(
 		}
 	}
 
-	core.endGroup();
+	endGroup();
 
 	// Create check run
 	const checkTitle = dryRun ? "🧪 Close Linked Issues (Dry Run)" : "Close Linked Issues";
@@ -245,7 +243,7 @@ export async function closeLinkedIssues(
 		},
 	});
 
-	core.info(`Created check run: ${checkRun.html_url}`);
+	info(`Created check run: ${checkRun.html_url}`);
 
 	// Write job summary
 	const jobSummary = summaryWriter.build([
