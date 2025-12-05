@@ -92,7 +92,9 @@ export async function checkTokenPermissions(token: string): Promise<TokenInfo> {
 		return info;
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
-		core.warning(`Failed to check token permissions: ${errorMessage}`);
+		// Use debug instead of warning to avoid creating annotations for expected failures
+		// GitHub App tokens often can't access /user endpoint (requires user:email scope)
+		core.debug(`Failed to check token permissions: ${errorMessage}`);
 		core.endGroup();
 
 		return {
