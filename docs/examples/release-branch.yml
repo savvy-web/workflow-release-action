@@ -1,0 +1,95 @@
+# Release Branch Management (Phase 1)
+# Creates or updates the release branch when changesets are pending
+#
+# Triggers: Push to main (excluding release commits)
+# Actions: Detect changes, create/update changeset-release/main branch, open PR
+
+name: Release Branch
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview changes without creating/updating branch
+        required: false
+        type: boolean
+        default: false
+
+# Cancel previous runs on new pushes (outdated branch updates)
+concurrency:
+  group: release-branch-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+
+jobs:
+  # Quick check to skip release commits and verify changesets exist
+  check:
+    name: Check Changesets
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      reason: ${{ steps.check.outputs.reason }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Check conditions
+        id: check
+        run: |
+          # Skip release commits (merged from release PR)
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          if [[ "$COMMIT_MSG" == *"Version Packages"* ]] || [[ "$COMMIT_MSG" == *"chore: release"* ]]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "reason=Release commit detected - skipping branch management" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check for pending changesets
+          CHANGESET_COUNT=$(find .changeset -name "*.md" ! -name "README.md" 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$CHANGESET_COUNT" -eq 0 ]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "reason=No pending changesets found" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "should_run=true" >> $GITHUB_OUTPUT
+          echo "reason=Found $CHANGESET_COUNT changeset(s) pending release" >> $GITHUB_OUTPUT
+
+      - name: Log decision
+        run: |
+          echo "## Release Branch Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Decision:** ${{ steps.check.outputs.should_run == 'true' && '✅ Running' || '⏭️ Skipping' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** ${{ steps.check.outputs.reason }}" >> $GITHUB_STEP_SUMMARY
+
+  release-branch:
+    name: Manage Release Branch
+    needs: check
+    if: needs.check.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Setup workflow runtime environment
+        id: workflow-runtime
+        uses: savvy-web/workflow-runtime-action@main
+
+      - name: Run release action
+        uses: savvy-web/workflow-release-action@main
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          dry-run: ${{ inputs.dry_run || 'false' }}
+          # Optional: Enable Claude PR description generation
+          # anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

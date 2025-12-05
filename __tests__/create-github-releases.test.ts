@@ -32,9 +32,14 @@ vi.mock("../src/utils/find-package-path.js", () => ({
 	findPackagePath: vi.fn(),
 }));
 
+vi.mock("../src/utils/create-attestation.js", () => ({
+	createReleaseAssetAttestation: vi.fn(),
+}));
+
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import * as github from "@actions/github";
+import { createReleaseAssetAttestation } from "../src/utils/create-attestation.js";
 import { createGitHubReleases } from "../src/utils/create-github-releases.js";
 import type { TagInfo } from "../src/utils/determine-tag-strategy.js";
 import { findPackagePath } from "../src/utils/find-package-path.js";
@@ -46,6 +51,7 @@ describe("create-github-releases", () => {
 			repos: {
 				createRelease: vi.fn(),
 				uploadReleaseAsset: vi.fn(),
+				updateRelease: vi.fn(),
 			},
 		},
 	};
@@ -57,6 +63,8 @@ describe("create-github-releases", () => {
 		vi.mocked(fs.readdirSync).mockReturnValue([]);
 		// Default: findPackagePath returns a mock path for any package
 		vi.mocked(findPackagePath).mockImplementation((name: string) => `/mock/packages/${name.replace(/^@[^/]+\//, "")}`);
+		// Default: createReleaseAssetAttestation returns success result
+		vi.mocked(createReleaseAssetAttestation).mockResolvedValue({ success: true, attestationUrl: undefined });
 	});
 
 	afterEach(() => {
@@ -1082,6 +1090,198 @@ describe("create-github-releases", () => {
 			expect(result.success).toBe(true);
 			expect(result.releases[0].assets).toHaveLength(0);
 			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not find path for package @org/pkg-a"));
+		});
+
+		it("throws error when no token is available from state", async () => {
+			// Override getState to return empty string for token
+			vi.mocked(core.getState).mockImplementation((key: string) => {
+				if (key === "token") return "";
+				return "mock-value";
+			});
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [];
+
+			await expect(createGitHubReleases(tags, publishResults, false)).rejects.toThrow(
+				"No token available from state - ensure pre.ts ran successfully",
+			);
+		});
+
+		it("logs attestation URL when asset attestation succeeds", async () => {
+			// Reset getState mock to return token
+			vi.mocked(core.getState).mockReturnValue("mock-token");
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [{ target: {} as never, success: true }],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				return true;
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue(["pkg.tgz"] as never);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
+				data: {
+					name: "pkg.tgz",
+					browser_download_url: "https://example.com/pkg.tgz",
+					size: 1234,
+				},
+			});
+			mockOctokit.rest.repos.updateRelease.mockResolvedValue({ data: {} });
+
+			// Mock attestation to return success with URL
+			vi.mocked(createReleaseAssetAttestation).mockResolvedValue({
+				success: true,
+				attestationUrl: "https://github.com/test-owner/test-repo/attestations/asset-123",
+			});
+
+			await createGitHubReleases(tags, publishResults, false);
+
+			expect(core.info).toHaveBeenCalledWith(
+				"  ✓ Created attestation: https://github.com/test-owner/test-repo/attestations/asset-123",
+			);
+		});
+
+		it("updates release notes with asset attestations", async () => {
+			// Reset getState mock to return token
+			vi.mocked(core.getState).mockReturnValue("mock-token");
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [{ target: {} as never, success: true }],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				return true;
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue(["pkg.tgz"] as never);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
+				data: {
+					name: "pkg.tgz",
+					browser_download_url: "https://example.com/pkg.tgz",
+					size: 1234,
+				},
+			});
+			mockOctokit.rest.repos.updateRelease.mockResolvedValue({ data: {} });
+
+			vi.mocked(createReleaseAssetAttestation).mockResolvedValue({
+				success: true,
+				attestationUrl: "https://github.com/test-owner/test-repo/attestations/asset-123",
+			});
+
+			await createGitHubReleases(tags, publishResults, false);
+
+			// Verify updateRelease was called with attestation info
+			expect(mockOctokit.rest.repos.updateRelease).toHaveBeenCalledWith(
+				expect.objectContaining({
+					owner: "test-owner",
+					repo: "test-repo",
+					release_id: 123,
+					body: expect.stringContaining("Release Asset Attestations"),
+				}),
+			);
+			expect(core.info).toHaveBeenCalledWith("Updated release notes with asset attestations");
+		});
+
+		it("handles release notes update failure gracefully", async () => {
+			// Reset getState mock to return token
+			vi.mocked(core.getState).mockReturnValue("mock-token");
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [{ target: {} as never, success: true }],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				return true;
+			});
+			vi.mocked(fs.readdirSync).mockReturnValue(["pkg.tgz"] as never);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
+				data: {
+					name: "pkg.tgz",
+					browser_download_url: "https://example.com/pkg.tgz",
+					size: 1234,
+				},
+			});
+			// Make updateRelease fail
+			mockOctokit.rest.repos.updateRelease.mockRejectedValue(new Error("Update failed"));
+
+			vi.mocked(createReleaseAssetAttestation).mockResolvedValue({
+				success: true,
+				attestationUrl: "https://github.com/test-owner/test-repo/attestations/asset-123",
+			});
+
+			const result = await createGitHubReleases(tags, publishResults, false);
+
+			// Should still succeed even if update fails
+			expect(result.success).toBe(true);
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to update release notes"));
 		});
 	});
 });

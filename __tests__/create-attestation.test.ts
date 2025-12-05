@@ -3,7 +3,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPackageAttestation } from "../src/utils/create-attestation.js";
+import { createPackageAttestation, createReleaseAssetAttestation } from "../src/utils/create-attestation.js";
 
 // Mock dependencies
 vi.mock("node:fs");
@@ -423,6 +423,155 @@ describe("create-attestation", () => {
 
 			expect(result.success).toBe(true);
 			expect(result.attestationId).toBe("12345");
+		});
+	});
+
+	describe("createReleaseAssetAttestation", () => {
+		it("returns dry-run result when dryRun is true", async () => {
+			const result = await createReleaseAssetAttestation("/path/to/asset.tgz", "@org/pkg", "1.0.0", true);
+
+			expect(result.success).toBe(true);
+			expect(result.attestationUrl).toBe(
+				`https://github.com/${context.repo.owner}/${context.repo.repo}/attestations/dry-run`,
+			);
+			expect(vi.mocked(core.info)).toHaveBeenCalledWith(
+				"[DRY RUN] Would create attestation for release asset asset.tgz",
+			);
+		});
+
+		it("returns error when no GITHUB_TOKEN is available", async () => {
+			const result = await createReleaseAssetAttestation("/path/to/asset.tgz", "@org/pkg", "1.0.0", false);
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("No GITHUB_TOKEN available for attestation creation");
+		});
+
+		it("returns error when artifact is not found", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			vi.mocked(fs.existsSync).mockReturnValue(false);
+
+			const result = await createReleaseAssetAttestation("/path/to/missing.tgz", "@org/pkg", "1.0.0", false);
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("Artifact not found: /path/to/missing.tgz");
+		});
+
+		it("creates attestation successfully with attestationID", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test artifact content"));
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "release-attest-123",
+				tlogID: "tlog-456",
+			});
+
+			const result = await createReleaseAssetAttestation("/path/to/asset.tgz", "@org/pkg", "1.0.0", false);
+
+			expect(result.success).toBe(true);
+			expect(result.attestationUrl).toBe("https://github.com/test-owner/test-repo/attestations/release-attest-123");
+			expect(result.attestationId).toBe("release-attest-123");
+			expect(result.tlogId).toBe("tlog-456");
+		});
+
+		it("logs transparency log URL when tlogID is returned", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+				tlogID: "67890",
+			});
+
+			await createReleaseAssetAttestation("/path/to/asset.tgz", "@org/pkg", "1.0.0", false);
+
+			expect(vi.mocked(core.info)).toHaveBeenCalledWith(
+				"  Transparency log: https://search.sigstore.dev/?logIndex=67890",
+			);
+		});
+
+		it("returns undefined attestationUrl when attestationID is not returned", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				// No attestationID
+			});
+
+			const result = await createReleaseAssetAttestation("/path/to/asset.tgz", "@org/pkg", "1.0.0", false);
+
+			expect(result.success).toBe(true);
+			expect(result.attestationUrl).toBeUndefined();
+		});
+
+		it("handles attestProvenance errors gracefully", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockRejectedValue(new Error("Release attestation API error"));
+
+			const result = await createReleaseAssetAttestation("/path/to/asset.tgz", "@org/pkg", "1.0.0", false);
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("Release attestation API error");
+			expect(vi.mocked(core.warning)).toHaveBeenCalledWith(
+				"Failed to create attestation for asset.tgz: Release attestation API error",
+			);
+		});
+
+		it("uses PURL format for subject name", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			await createReleaseAssetAttestation("/path/to/asset.tgz", "@org/pkg", "1.0.0", false);
+
+			expect(attestProvenance).toHaveBeenCalledWith(
+				expect.objectContaining({
+					subjectName: "pkg:npm/@org/pkg@1.0.0",
+				}),
+			);
+		});
+
+		it("falls back to githubToken from state", async () => {
+			vi.mocked(core.getState).mockReturnValue("state-token");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			await createReleaseAssetAttestation("/path/to/asset.tgz", "@org/pkg", "1.0.0", false);
+
+			expect(attestProvenance).toHaveBeenCalledWith(
+				expect.objectContaining({
+					token: "state-token",
+				}),
+			);
 		});
 	});
 });

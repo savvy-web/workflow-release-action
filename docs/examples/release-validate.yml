@@ -1,0 +1,49 @@
+# Release Validation (Phase 2)
+# Validates the release branch: builds, dry-run publishing, generates notes
+#
+# Triggers: Push to changeset-release/main
+# Actions: Validate builds, dry-run publish to all registries, update PR with status
+
+name: Release Validation
+
+on:
+  push:
+    branches: [changeset-release/main]
+  workflow_dispatch:
+
+# Don't cancel validation runs - they should complete for accurate status
+concurrency:
+  group: release-validate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  id-token: write # Required for OIDC dry-run validation (npm, JSR)
+  packages: read # Required to validate GitHub Packages access
+
+jobs:
+  validate:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Setup workflow runtime environment
+        id: workflow-runtime
+        uses: savvy-web/workflow-runtime-action@main
+
+      - name: Run release action
+        uses: savvy-web/workflow-release-action@main
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          # Custom registries for dry-run validation
+          # custom-registries: |
+          #   https://registry.savvyweb.dev/${{ secrets.SAVVYWEB_NPM_AUTH_TOKEN }}

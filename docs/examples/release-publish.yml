@@ -1,0 +1,90 @@
+# Release Publishing (Phase 3)
+# Publishes packages when the release PR is merged
+#
+# Triggers: Release PR merged to main
+# Actions: Publish to registries, create git tags, create GitHub releases
+
+name: Release Publish
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview publishing without actually releasing
+        required: false
+        type: boolean
+        default: true
+
+# Never cancel publishing - it must complete to avoid partial releases
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write # Required for OIDC publishing (npm, JSR)
+  attestations: write # Optional: for npm provenance
+
+jobs:
+  # Quick check to verify this is a release PR merge
+  check:
+    name: Check Release PR
+    runs-on: ubuntu-latest
+    # For workflow_dispatch, always run; for PR, check if merged from release branch
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.head.ref == 'changeset-release/main')
+    outputs:
+      should_publish: ${{ steps.check.outputs.should_publish }}
+    steps:
+      - name: Verify release conditions
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+            echo "## Release Publish" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Trigger:** Manual workflow dispatch" >> $GITHUB_STEP_SUMMARY
+            echo "**Dry Run:** ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+            echo "## Release Publish" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Trigger:** Release PR #${{ github.event.pull_request.number }} merged" >> $GITHUB_STEP_SUMMARY
+            echo "**PR Title:** ${{ github.event.pull_request.title }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  publish:
+    name: Publish Release
+    needs: check
+    if: needs.check.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Checkout main branch (not the PR merge ref) to ensure correct context
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Setup workflow runtime environment
+        id: workflow-runtime
+        uses: savvy-web/workflow-runtime-action@main
+
+      - name: Run release action
+        uses: savvy-web/workflow-release-action@main
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          dry-run: ${{ inputs.dry_run || 'false' }}
+          # Custom registries for publishing
+          # custom-registries: |
+          #   https://registry.savvyweb.dev/${{ secrets.SAVVYWEB_NPM_AUTH_TOKEN }}

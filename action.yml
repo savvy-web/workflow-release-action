@@ -45,6 +45,13 @@ inputs:
     description: Run in dry-run mode (preview only, no actual changes)
     required: false
     default: "false"
+  phase:
+    description: |
+      Explicitly set the workflow phase to run, skipping automatic detection.
+      Useful when phase was already determined by workflow-control-action.
+      Valid values: branch-management, validation, publishing, close-issues, none
+    required: false
+    default: ""
 
   # Custom registry authentication
   # NOTE: npm and JSR use OIDC trusted publishing - no tokens needed

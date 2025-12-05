@@ -12,6 +12,8 @@ import { createValidationCheck } from "./utils/create-validation-check.js";
 import { detectPublishableChanges } from "./utils/detect-publishable-changes.js";
 import { detectReleasedPackagesFromCommit, detectReleasedPackagesFromPR } from "./utils/detect-released-packages.js";
 import { detectRepoType } from "./utils/detect-repo-type.js";
+import type { WorkflowPhase } from "./utils/detect-workflow-phase.js";
+import { detectWorkflowPhase } from "./utils/detect-workflow-phase.js";
 import { determineReleaseType, determineTagStrategy } from "./utils/determine-tag-strategy.js";
 import { generatePRDescriptionDirect } from "./utils/generate-pr-description.js";
 import {
@@ -38,6 +40,7 @@ interface Inputs {
 	targetBranch: string;
 	packageManager: string;
 	dryRun: boolean;
+	phase?: WorkflowPhase;
 	anthropicApiKey?: string;
 	claudeReviewPat?: string;
 }
@@ -100,6 +103,9 @@ async function run(): Promise<void> {
 			// Workflow mode
 			dryRun: core.getBooleanInput("dry-run") || false,
 
+			// Explicit phase (optional, skips automatic detection)
+			phase: (core.getInput("phase") as WorkflowPhase) || undefined,
+
 			// Anthropic API key for Claude (optional, for PR description generation)
 			anthropicApiKey: core.getInput("anthropic-api-key"),
 
@@ -122,97 +128,63 @@ async function run(): Promise<void> {
 
 		const octokit = github.getOctokit(inputs.token);
 
-		// Determine which phase to run based on context
-		const isReleaseBranch = context.ref === `refs/heads/${inputs.releaseBranch}`;
-		const isMainBranch = context.ref === `refs/heads/${inputs.targetBranch}`;
-		const commitMessage = context.payload.head_commit?.message || "";
-
-		// Detect PR merge event (for pull_request trigger)
-		const isPullRequestEvent = context.eventName === "pull_request";
-		const pullRequest = context.payload.pull_request;
-		const isPRMerged = isPullRequestEvent && pullRequest?.merged === true;
-		const isReleasePRMerged =
-			isPRMerged && pullRequest?.head?.ref === inputs.releaseBranch && pullRequest?.base?.ref === inputs.targetBranch;
-
-		// Detect if this push is from a merged release PR (for push trigger)
-		// Query the API to find PRs associated with this commit
-		let isReleaseCommit = false;
-		let mergedReleasePR: { number: number; head: { ref: string }; base: { ref: string } } | undefined;
-
-		if (isMainBranch && context.eventName === "push") {
-			try {
-				const { data: associatedPRs } = await octokit.rest.repos.listPullRequestsAssociatedWithCommit({
-					owner: context.repo.owner,
-					repo: context.repo.repo,
-					commit_sha: context.sha,
-				});
-
-				// Find a merged PR from the release branch to main
-				mergedReleasePR = associatedPRs.find(
-					(pr) => pr.merged_at !== null && pr.head.ref === inputs.releaseBranch && pr.base.ref === inputs.targetBranch,
-				);
-
-				isReleaseCommit = mergedReleasePR !== undefined;
-
-				if (isReleaseCommit) {
-					core.info(`Detected merged release PR #${mergedReleasePR?.number} from ${inputs.releaseBranch}`);
-				}
-			} catch (error) {
-				core.warning(`Failed to check for associated PRs: ${error instanceof Error ? error.message : String(error)}`);
-				// Fall back to commit message detection
-				const isMergeFromReleaseBranch =
-					commitMessage.includes(`from ${context.repo.owner}/${inputs.releaseBranch}`) ||
-					commitMessage.includes(`Merge branch '${inputs.releaseBranch}'`);
-				const isVersionCommit =
-					commitMessage.includes("chore: version packages") || commitMessage.toLowerCase().includes("version packages");
-				isReleaseCommit = isMergeFromReleaseBranch || isVersionCommit;
-			}
-		}
+		// Detect which workflow phase to run using the phase detection utility
+		const phaseResult = await detectWorkflowPhase({
+			releaseBranch: inputs.releaseBranch,
+			targetBranch: inputs.targetBranch,
+			context,
+			octokit,
+			explicitPhase: inputs.phase,
+		});
 
 		// Log context info
 		logger.context({
 			branch: context.ref,
-			commitMessage: commitMessage.substring(0, 100) + (commitMessage.length > 100 ? "..." : ""),
-			isReleaseBranch,
-			isMainBranch,
-			isReleaseCommit,
-			mergedReleasePR: mergedReleasePR ? `#${mergedReleasePR.number}` : undefined,
-			isPullRequestEvent,
-			isPRMerged,
-			isReleasePRMerged,
+			commitMessage: phaseResult.commitMessage,
+			isReleaseBranch: phaseResult.isReleaseBranch,
+			isMainBranch: phaseResult.isMainBranch,
+			isReleaseCommit: phaseResult.isReleaseCommit,
+			mergedReleasePR: phaseResult.mergedReleasePRNumber ? `#${phaseResult.mergedReleasePRNumber}` : undefined,
+			isPullRequestEvent: context.eventName === "pull_request",
+			isPRMerged: phaseResult.isPRMerged,
+			isReleasePRMerged: phaseResult.isReleasePRMerged,
 			dryRun: inputs.dryRun,
 		});
 
-		// Phase 3a: Close linked issues (on release PR merge)
-		if (isReleasePRMerged) {
-			logger.phase(3, PHASE.publish, "Close Linked Issues");
-			await runCloseLinkedIssues(inputs, pullRequest.number);
-			return;
-		}
+		// Route to appropriate phase based on detection result
+		switch (phaseResult.phase) {
+			case "close-issues": {
+				// Phase 3a: Close linked issues (on release PR merge)
+				const prNumber = context.payload.pull_request?.number;
+				if (prNumber) {
+					logger.phase(3, PHASE.publish, "Close Linked Issues");
+					await runCloseLinkedIssues(inputs, prNumber);
+				}
+				return;
+			}
 
-		// Phase 3: Release Publishing (on merge to main with version commit)
-		if (isMainBranch && isReleaseCommit) {
-			logger.phase(3, PHASE.publish, "Release Publishing");
-			await runPhase3Publishing(inputs, mergedReleasePR?.number);
-			return;
-		}
+			case "publishing":
+				// Phase 3: Release Publishing (on merge to main with version commit)
+				logger.phase(3, PHASE.publish, "Release Publishing");
+				await runPhase3Publishing(inputs, phaseResult.mergedReleasePRNumber);
+				return;
 
-		// Phase 2: Release Validation (on release branch)
-		if (isReleaseBranch) {
-			logger.phase(2, PHASE.validation, "Release Validation");
-			await runPhase2Validation(inputs);
-			return;
-		}
+			case "validation":
+				// Phase 2: Release Validation (on release branch)
+				logger.phase(2, PHASE.validation, "Release Validation");
+				await runPhase2Validation(inputs);
+				return;
 
-		// Phase 1: Release Branch Management (on main branch, non-release commit)
-		if (isMainBranch && !isReleaseCommit) {
-			logger.phase(1, PHASE.branch, "Release Branch Management");
-			await runPhase1BranchManagement(inputs);
-			return;
-		}
+			case "branch-management":
+				// Phase 1: Release Branch Management (on main branch, non-release commit)
+				logger.phase(1, PHASE.branch, "Release Branch Management");
+				await runPhase1BranchManagement(inputs);
+				return;
 
-		// No action needed for other branches/scenarios
-		logger.noAction("not on main or release branch");
+			default:
+				// No action needed for other branches/scenarios (phase: "none")
+				logger.noAction(phaseResult.reason);
+		}
 	} catch (error) {
 		core.setFailed(`Release workflow failed: ${error instanceof Error ? error.message : String(error)}`);
 	}

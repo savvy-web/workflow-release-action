@@ -394,7 +394,7 @@ export async function setupRegistryAuth(targets: ResolvedTarget[], packageManage
 
 			if (authTokenMatch) {
 				// Format: URL_authToken=TOKEN (npmrc auth string appended directly)
-				const registry = authTokenMatch[1].replace(/\/$/, "") + "/"; // Normalize trailing slash
+				const registry = `${authTokenMatch[1].replace(/\/$/, "")}/`; // Normalize trailing slash
 				const authString = authTokenMatch[2]; // Full auth string: _authToken=TOKEN
 				const envVarName = registryToEnvName(registry);
 
@@ -407,7 +407,7 @@ export async function setupRegistryAuth(targets: ResolvedTarget[], packageManage
 				core.info(`Set ${envVarName} for custom registry: ${registry}`);
 			} else if (authMatch) {
 				// Format: URL_auth=BASE64 (htpasswd auth string appended directly)
-				const registry = authMatch[1].replace(/\/$/, "") + "/"; // Normalize trailing slash
+				const registry = `${authMatch[1].replace(/\/$/, "")}/`; // Normalize trailing slash
 				const authString = authMatch[2]; // Full auth string: _auth=BASE64
 				const envVarName = registryToEnvName(registry);
 
