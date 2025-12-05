@@ -15,7 +15,7 @@ import { detectRepoType } from "./utils/detect-repo-type.js";
 import type { WorkflowPhase } from "./utils/detect-workflow-phase.js";
 import { detectWorkflowPhase } from "./utils/detect-workflow-phase.js";
 import { determineReleaseType, determineTagStrategy } from "./utils/determine-tag-strategy.js";
-import { generatePRDescriptionDirect } from "./utils/generate-pr-description.js";
+import { CLAUDE_DESCRIPTION_MARKER, generatePRDescriptionDirect } from "./utils/generate-pr-description.js";
 import {
 	generateBuildFailureSummary,
 	generatePreValidationFailureSummary,
@@ -390,47 +390,64 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		if (prs.length > 0 && inputs.anthropicApiKey) {
 			const pr = prs[0];
-			logger.info(`Found release PR #${pr.number}, generating description with Claude`);
 
-			try {
-				const descResult = await generatePRDescriptionDirect(
-					inputs.token,
-					issuesResult.linkedIssues,
-					issuesResult.commits,
-					pr.number,
-					inputs.anthropicApiKey,
-					inputs.dryRun,
-				);
-
-				core.setOutput("pr_description", descResult.description);
-				logger.success(`Generated PR description (${descResult.description.length} characters)`);
-
+			// Check if PR already has a Claude-generated description
+			if (pr.body?.includes(CLAUDE_DESCRIPTION_MARKER)) {
+				logger.info(`PR #${pr.number} already has a Claude-generated description, skipping regeneration`);
 				await octokit.rest.checks.update({
 					owner: context.repo.owner,
 					repo: context.repo.repo,
 					check_run_id: checkIds[1],
 					status: "completed",
-					conclusion: "success",
+					conclusion: "skipped",
 					output: {
-						title: "PR Description Generated",
-						summary: `Generated ${descResult.description.length} character description with Claude`,
+						title: "Skipped",
+						summary: "PR already has a Claude-generated description",
 					},
 				});
-			} catch (descError) {
-				logger.warn(
-					`Failed to generate PR description: ${descError instanceof Error ? descError.message : String(descError)}`,
-				);
-				await octokit.rest.checks.update({
-					owner: context.repo.owner,
-					repo: context.repo.repo,
-					check_run_id: checkIds[1],
-					status: "completed",
-					conclusion: "neutral",
-					output: {
-						title: "PR Description Generation Failed",
-						summary: descError instanceof Error ? descError.message : String(descError),
-					},
-				});
+			} else {
+				logger.info(`Found release PR #${pr.number}, generating description with Claude`);
+
+				try {
+					const descResult = await generatePRDescriptionDirect(
+						inputs.token,
+						issuesResult.linkedIssues,
+						issuesResult.commits,
+						pr.number,
+						inputs.anthropicApiKey,
+						inputs.dryRun,
+					);
+
+					core.setOutput("pr_description", descResult.description);
+					logger.success(`Generated PR description (${descResult.description.length} characters)`);
+
+					await octokit.rest.checks.update({
+						owner: context.repo.owner,
+						repo: context.repo.repo,
+						check_run_id: checkIds[1],
+						status: "completed",
+						conclusion: "success",
+						output: {
+							title: "PR Description Generated",
+							summary: `Generated ${descResult.description.length} character description with Claude`,
+						},
+					});
+				} catch (descError) {
+					logger.warn(
+						`Failed to generate PR description: ${descError instanceof Error ? descError.message : String(descError)}`,
+					);
+					await octokit.rest.checks.update({
+						owner: context.repo.owner,
+						repo: context.repo.repo,
+						check_run_id: checkIds[1],
+						status: "completed",
+						conclusion: "neutral",
+						output: {
+							title: "PR Description Generation Failed",
+							summary: descError instanceof Error ? descError.message : String(descError),
+						},
+					});
+				}
 			}
 		} else if (!inputs.anthropicApiKey) {
 			logger.info("Anthropic API key not provided, skipping PR description generation");

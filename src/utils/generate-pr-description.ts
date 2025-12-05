@@ -4,6 +4,12 @@ import Anthropic from "@anthropic-ai/sdk";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
+ * Marker comment to identify Claude-generated PR descriptions
+ * Used to prevent re-generation on subsequent validation runs
+ */
+export const CLAUDE_DESCRIPTION_MARKER = "<!-- claude-generated-description -->";
+
+/**
  * Linked issue information
  */
 interface LinkedIssue {
@@ -239,14 +245,14 @@ export async function generatePRDescriptionDirect(
 			pull_number: prNumber,
 		});
 
-		let finalBody = description;
+		let finalBody = `${CLAUDE_DESCRIPTION_MARKER}\n\n${description}`;
 		const currentBody = currentPR.body || "";
 
 		// Extract and preserve the linked issues section if it exists
 		const linkedIssuesMatch = currentBody.match(/## Linked Issues\n\n[\s\S]*?(?=\n## |$)/);
 		if (linkedIssuesMatch) {
 			// Prepend the linked issues section to the new description
-			finalBody = `${linkedIssuesMatch[0].trim()}\n\n${description}`;
+			finalBody = `${linkedIssuesMatch[0].trim()}\n\n${CLAUDE_DESCRIPTION_MARKER}\n\n${description}`;
 			core.info("Preserved existing linked issues section");
 		}
 
