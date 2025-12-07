@@ -125,7 +125,6 @@ export async function detectWorkflowPhase(options: PhaseDetectionOptions): Promi
 				octokit,
 				releaseBranch,
 				targetBranch,
-				commitMessage,
 			});
 			if (detection.mergedPR) {
 				result.mergedReleasePRNumber = detection.mergedPR.number;
@@ -158,7 +157,6 @@ export async function detectWorkflowPhase(options: PhaseDetectionOptions): Promi
 			octokit,
 			releaseBranch,
 			targetBranch,
-			commitMessage,
 		});
 
 		result.isReleaseCommit = releaseCommitDetection.isReleaseCommit;
@@ -205,16 +203,15 @@ interface ReleaseCommitDetectionOptions {
 	octokit: InstanceType<typeof GitHub>;
 	releaseBranch: string;
 	targetBranch: string;
-	commitMessage: string;
 }
 
 /**
  * Detects if the current commit is a release commit (from merged release PR)
  *
  * @remarks
- * Detection methods:
- * 1. **Primary**: Query GitHub API for PRs associated with the commit
- * 2. **Fallback**: Check commit message for merge patterns
+ * Uses GitHub API to query for PRs associated with the commit.
+ * Returns false if the API call fails (no fallback to commit message patterns
+ * since those are not stable across different merge strategies and user configurations).
  *
  * @param options - Detection options
  * @returns Whether this is a release commit and the merged PR if found
@@ -222,10 +219,9 @@ interface ReleaseCommitDetectionOptions {
 async function detectReleaseCommit(
 	options: ReleaseCommitDetectionOptions,
 ): Promise<{ isReleaseCommit: boolean; mergedPR?: { number: number } }> {
-	const { context, octokit, releaseBranch, targetBranch, commitMessage } = options;
+	const { context, octokit, releaseBranch, targetBranch } = options;
 
 	try {
-		// Primary: Query API for associated PRs
 		const { data: associatedPRs } = await octokit.rest.repos.listPullRequestsAssociatedWithCommit({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
@@ -245,44 +241,8 @@ async function detectReleaseCommit(
 		return { isReleaseCommit: false };
 	} catch (err) {
 		warning(`Failed to check for associated PRs: ${err instanceof Error ? err.message : String(err)}`);
-
-		// Fallback: Check commit message patterns
-		return detectReleaseCommitFromMessage(commitMessage, releaseBranch, context.repo.owner);
+		return { isReleaseCommit: false };
 	}
-}
-
-/**
- * Fallback detection using commit message patterns
- *
- * @param commitMessage - The commit message to check
- * @param releaseBranch - The release branch name
- * @param owner - Repository owner
- * @returns Whether this looks like a release commit
- */
-function detectReleaseCommitFromMessage(
-	commitMessage: string,
-	releaseBranch: string,
-	owner: string,
-): { isReleaseCommit: boolean; mergedPR?: { number: number } } {
-	// Check for merge commit patterns
-	const isMergeFromReleaseBranch =
-		commitMessage.includes(`from ${owner}/${releaseBranch}`) ||
-		commitMessage.includes(`Merge branch '${releaseBranch}'`) ||
-		(commitMessage.includes(`Merge pull request`) && commitMessage.includes(releaseBranch));
-
-	// Check for version commit patterns
-	const isVersionCommit =
-		commitMessage.includes("chore: version packages") ||
-		commitMessage.toLowerCase().includes("version packages") ||
-		commitMessage.startsWith("chore: release");
-
-	const isReleaseCommit = isMergeFromReleaseBranch || isVersionCommit;
-
-	if (isReleaseCommit) {
-		info(`Detected release commit from commit message pattern`);
-	}
-
-	return { isReleaseCommit };
 }
 
 /**
@@ -290,8 +250,9 @@ function detectReleaseCommitFromMessage(
  *
  * @remarks
  * This is a lightweight version that only uses local context.
- * It cannot detect release commits via API, only via commit message patterns.
- * Use this when you don't have an authenticated Octokit instance.
+ * It can only detect release commits via the `pull_request` event payload
+ * (when the release PR is merged). For push events, use the async
+ * {@link detectWorkflowPhase} which queries the GitHub API.
  *
  * @param options - Detection options (subset of full options)
  * @returns Detection result
@@ -315,27 +276,22 @@ export function detectWorkflowPhaseSync(options: {
 	const isReleasePRMerged =
 		isPRMerged && pullRequest?.head?.ref === releaseBranch && pullRequest?.base?.ref === targetBranch;
 
-	// Detect release commit from message (sync fallback)
-	const { isReleaseCommit } = detectReleaseCommitFromMessage(commitMessage, releaseBranch, context.repo.owner);
-
 	const result: Omit<PhaseDetectionResult, "mergedReleasePRNumber"> = {
 		phase: "none",
 		reason: "",
 		isReleaseBranch,
 		isMainBranch,
-		isReleaseCommit: isReleasePRMerged || isReleaseCommit,
+		isReleaseCommit: isReleasePRMerged,
 		isPullRequestEvent,
 		isPRMerged,
 		isReleasePRMerged,
 		commitMessage: commitMessage.substring(0, 100) + (commitMessage.length > 100 ? "..." : ""),
 	};
 
-	// Phase 3a/3: Release commit
-	if (isReleasePRMerged || (isMainBranch && result.isReleaseCommit)) {
-		result.phase = isReleasePRMerged ? "close-issues" : "publishing";
-		result.reason = isReleasePRMerged
-			? `Release PR merged via pull_request event`
-			: `Release commit detected on ${targetBranch}`;
+	// Phase 3a: Close issues (release PR merged via pull_request event)
+	if (isReleasePRMerged) {
+		result.phase = "close-issues";
+		result.reason = "Release PR merged via pull_request event";
 		return result;
 	}
 
@@ -346,10 +302,11 @@ export function detectWorkflowPhaseSync(options: {
 		return result;
 	}
 
-	// Phase 1: Branch management
+	// Phase 1: Branch management (push to main)
+	// Note: Cannot detect publishing phase without API call
 	if (isMainBranch) {
 		result.phase = "branch-management";
-		result.reason = `Push to ${targetBranch} (not a release commit)`;
+		result.reason = `Push to ${targetBranch}`;
 		return result;
 	}
 

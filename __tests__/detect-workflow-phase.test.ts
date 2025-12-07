@@ -137,7 +137,7 @@ describe("detect-workflow-phase", () => {
 			expect(result.reason).toContain("Not on main or changeset-release/main");
 		});
 
-		it("should fallback to commit message detection when API fails", async () => {
+		it("should return branch-management when API fails (no commit message fallback)", async () => {
 			mockContext.payload = {
 				head_commit: { message: "chore: release v1.0.0\n\nVersion Packages" },
 			};
@@ -145,21 +145,10 @@ describe("detect-workflow-phase", () => {
 
 			const result = await detectWorkflowPhase(createOptions());
 
-			expect(result.phase).toBe("publishing");
-			expect(result.isReleaseCommit).toBe(true);
+			// Without commit message fallback, API failure means we can't detect release commit
+			expect(result.phase).toBe("branch-management");
+			expect(result.isReleaseCommit).toBe(false);
 			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to check for associated PRs"));
-		});
-
-		it("should detect release commit from merge commit message", async () => {
-			mockContext.payload = {
-				head_commit: { message: "Merge branch 'changeset-release/main' into main" },
-			};
-			mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockRejectedValue(new Error("API Error"));
-
-			const result = await detectWorkflowPhase(createOptions());
-
-			expect(result.phase).toBe("publishing");
-			expect(result.isReleaseCommit).toBe(true);
 		});
 
 		it("should use custom branch names", async () => {
@@ -360,15 +349,18 @@ describe("detect-workflow-phase", () => {
 			expect(result.isReleaseBranch).toBe(true);
 		});
 
-		it("should detect publishing from commit message patterns", () => {
+		it("should return branch-management for commit message patterns (no API available)", () => {
+			// Sync version cannot detect release commits from commit messages
+			// since we removed the unstable commit message detection
 			mockContext.payload = {
 				head_commit: { message: "chore: version packages" },
 			};
 
 			const result = detectWorkflowPhaseSync(createSyncOptions());
 
-			expect(result.phase).toBe("publishing");
-			expect(result.isReleaseCommit).toBe(true);
+			// Without API call, we can't detect release commits on push events
+			expect(result.phase).toBe("branch-management");
+			expect(result.isReleaseCommit).toBe(false);
 		});
 
 		it("should detect close-issues on PR merge event", () => {
@@ -396,26 +388,17 @@ describe("detect-workflow-phase", () => {
 			expect(result.phase).toBe("none");
 		});
 
-		it("should detect release commit from merge pull request message", () => {
+		it("should not detect release from merge commit message (requires API)", () => {
+			// Commit message detection was removed as it's not stable across merge strategies
 			mockContext.payload = {
 				head_commit: { message: "Merge pull request #123 from owner/changeset-release/main" },
 			};
 
 			const result = detectWorkflowPhaseSync(createSyncOptions());
 
-			expect(result.phase).toBe("publishing");
-			expect(result.isReleaseCommit).toBe(true);
-		});
-
-		it("should detect release commit from chore: release prefix", () => {
-			mockContext.payload = {
-				head_commit: { message: "chore: release v2.0.0" },
-			};
-
-			const result = detectWorkflowPhaseSync(createSyncOptions());
-
-			expect(result.phase).toBe("publishing");
-			expect(result.isReleaseCommit).toBe(true);
+			// Sync version can only detect release via pull_request event, not push
+			expect(result.phase).toBe("branch-management");
+			expect(result.isReleaseCommit).toBe(false);
 		});
 	});
 });
