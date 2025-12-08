@@ -1,20 +1,20 @@
 {
+	"includeCoAuthoredBy": false,
 	"permissions": {
 		"allow": [
-			// Directory navigation and inspection
+			"Glob",
+			"Grep",
+			"Task",
+			"Skill",
 			"Bash(ls:*)",
 			"Bash(tree:*)",
 			"Bash(find:*)",
 			"Bash(mkdir:*)",
-
-			// File inspection
 			"Bash(cat:*)",
 			"Bash(head:*)",
 			"Bash(tail:*)",
 			"Bash(grep:*)",
 			"Bash(wc:*)",
-
-			// Package management - pnpm
 			"Bash(pnpm:--version)",
 			"Bash(pnpm test:*)",
 			"Bash(pnpm lint:*)",
@@ -22,37 +22,28 @@
 			"Bash(pnpm typecheck:*)",
 			"Bash(pnpm validate:*)",
 			"Bash(pnpm run:*)",
+			"Bash(pnpm dev)",
 			"Bash(pnpm exec:*)",
-
-			// Package management - npm
 			"Bash(npm:--version)",
 			"Bash(npm test:*)",
 			"Bash(npm run:*)",
 			"Bash(npm exec:*)",
 			"Bash(npx:*)",
-
-			// Package management - yarn
 			"Bash(yarn:--version)",
 			"Bash(yarn test:*)",
 			"Bash(yarn run:*)",
 			"Bash(yarn exec:*)",
 			"Bash(yarn dlx:*)",
-
-			// Package management - bun
 			"Bash(bun:--version)",
 			"Bash(bun test:*)",
 			"Bash(bun run:*)",
 			"Bash(bunx:*)",
-
-			// Package management - deno
 			"Bash(deno:--version)",
 			"Bash(deno test:*)",
 			"Bash(deno task:*)",
 			"Bash(deno run:*)",
 			"Bash(deno cache:*)",
 			"Bash(deno check:*)",
-
-			// Package installation (can modify package.json and lock files)
 			"Bash(pnpm install:*)",
 			"Bash(pnpm add:*)",
 			"Bash(pnpm remove:*)",
@@ -72,11 +63,7 @@
 			"Bash(deno install:*)",
 			"Bash(deno add:*)",
 			"Bash(deno remove:*)",
-
-			// Node/runtime version checks
 			"Bash(node:--version)",
-
-			// Git read-only operations
 			"Bash(git status:*)",
 			"Bash(git diff:*)",
 			"Bash(git log:*)",
@@ -86,8 +73,6 @@
 			"Bash(git branch:--show-current)",
 			"Bash(git branch:--list)",
 			"Bash(git remote:--verbose)",
-
-			// GitHub CLI read operations
 			"Bash(gh:api)",
 			"Bash(gh:pr view)",
 			"Bash(gh:pr list)",
@@ -96,28 +81,20 @@
 			"Bash(gh:issue view)",
 			"Bash(gh:issue list)",
 			"Bash(gh:repo view)",
-
-			// GitHub CLI workflow operations (integration testing)
 			"Bash(gh workflow run:*)",
 			"Bash(gh run list:*)",
 			"Bash(gh run view:*)",
 			"Bash(gh run watch:*)",
-
-			// Docker read-only
 			"Bash(docker ps:*)",
 			"Bash(docker logs:*)",
 			"Bash(docker inspect:*)",
 			"Bash(docker-compose ps:*)",
 			"Bash(docker-compose logs:*)",
-
-			// Utilities
 			"Bash(jq:*)",
 			"Bash(shellcheck:*)",
 			"Bash(which:*)",
 			"Bash(echo:*)",
 			"Bash(printf:*)",
-
-			// Web documentation
 			"WebFetch(domain:code.claude.com)",
 			"WebFetch(domain:docs.anthropic.com)",
 			"WebFetch(domain:github.com)",
@@ -134,65 +111,42 @@
 			"WebFetch(domain:vitest.dev)",
 			"WebFetch(domain:biomejs.dev)",
 			"WebFetch(domain:docs.aws.amazon.com)",
-
-			// File operations - project directory (read always allowed)
+			"WebFetch(domain:grafana.com)",
+			"WebFetch(domain:docker.com)",
+			"WebFetch(domain:v2.rspress.rs)",
+			"WebFetch(domain:rspress.dev)",
+			"WebFetch(domain:rsbuild.dev)",
 			"Read(./*)",
-			"Read(./.env)",
-			"Read(./.env.*)",
-
-			// Temporary directory access
+			"Write(./*)",
+			"Edit(./*)",
 			"Write(//tmp/**)",
-			"Read(//tmp/**)"
-		],
-		"ask": [
-			// Potentially destructive operations
-			"Bash(rm:*)",
-			"Bash(mv:*)",
-			"Bash(cp -r:*)", // Recursive copy could be large
-
-			// chmod operations (even restricted ones)
-			"Bash(chmod:*)",
-
-			// Git operations that modify working directory
+			"Read(//tmp/**)",
+			"mcp__playwright",
+			"mcp__github",
+			"Bash(gh run list:*)",
+			"Bash(gh run view:*)",
+			"Bash(gh run watch:*)",
+			"Bash(gh run rerun:*)",
 			"Bash(git checkout:*)",
 			"Bash(git switch:*)",
 			"Bash(git restore:*)",
 			"Bash(git clean:*)",
 			"Bash(git stash:*)",
-
-			// GitHub CLI write operations
 			"Bash(gh:pr create)",
 			"Bash(gh:pr close)",
 			"Bash(gh:pr merge)",
 			"Bash(gh:pr comment)",
 			"Bash(gh:issue create)",
 			"Bash(gh:issue close)",
-			"Bash(gh:issue comment)",
-
-			// Docker operations that could cost resources
-			"Bash(docker pull:*)",
-			"Bash(docker build:*)",
-
-			// System modification
-			"Bash(npm config:*)",
-			"Bash(pnpm config:*)",
-			"Bash(yarn config:*)",
-
-			"Bash(gh run list:*)",
-			"Bash(gh run view:*)",
-			"Bash(gh run watch:*)",
-			"Bash(gh run rerun:*)"
+			"Bash(gh:issue comment)"
 		],
 		"deny": [
-			// Destructive system operations
 			"Bash(rm -rf /*)",
 			"Bash(rm -rf ~/*)",
 			"Bash(rm -rf ./node_modules)",
 			"Bash(rm -rf ./.pnpm-store)",
 			"Bash(rm -rf ./.yarn)",
 			"Bash(sudo:*)",
-
-			// Git operations that modify history
 			"Bash(git push:*)",
 			"Bash(git commit:*)",
 			"Bash(git reset --hard:*)",
@@ -201,8 +155,6 @@
 			"Bash(git remote add:*)",
 			"Bash(git remote remove:*)",
 			"Bash(git remote set-url:*)",
-
-			// Docker operations that execute/modify
 			"Bash(docker run:*)",
 			"Bash(docker exec:*)",
 			"Bash(docker start:*)",
@@ -210,8 +162,6 @@
 			"Bash(docker rm:*)",
 			"Bash(docker-compose up:*)",
 			"Bash(docker-compose down:*)",
-
-			// Publishing operations
 			"Bash(npm publish:*)",
 			"Bash(pnpm publish:*)",
 			"Bash(yarn publish:*)",
@@ -219,13 +169,9 @@
 			"Bash(bun publish:*)",
 			"Bash(deno publish:*)",
 			"Bash(git tag:*)",
-
-			// Dangerous file operations
 			"Bash(sed -i:*)",
 			"Bash(chmod 777:*)",
 			"Bash(chmod -R 777:*)",
-
-			// Global installations
 			"Bash(npm install -g:*)",
 			"Bash(npm i -g:*)",
 			"Bash(yarn global add:*)",
@@ -236,7 +182,17 @@
 			"Bash(deno install -g:*)",
 			"Bash(deno install --global:*)"
 		],
-		"defaultMode": "acceptEdits"
+		"ask": [
+			"Bash(rm:*)",
+			"Bash(mv:*)",
+			"Bash(cp -r:*)",
+			"Bash(chmod:*)",
+			"Bash(docker pull:*)",
+			"Bash(docker build:*)",
+			"Bash(npm config:*)",
+			"Bash(pnpm config:*)",
+			"Bash(yarn config:*)"
+		]
 	},
 	"model": "sonnet",
 	"enableAllProjectMcpServers": true,

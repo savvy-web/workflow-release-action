@@ -72,14 +72,154 @@ function extractIssueReferences(message: string): number[] {
 }
 
 /**
+ * Get the latest release tag SHA
+ *
+ * @param github - Authenticated Octokit instance
+ * @returns Latest tag SHA or null if no tags exist
+ */
+async function getLatestTagSha(github: ReturnType<typeof getOctokit>): Promise<string | null> {
+	try {
+		const { data: tags } = await github.rest.repos.listTags({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			per_page: 1,
+		});
+
+		if (tags.length === 0) {
+			return null;
+		}
+
+		return tags[0].commit.sha;
+	} catch (error) {
+		warning(`Failed to get latest tag: ${error instanceof Error ? error.message : String(error)}`);
+		return null;
+	}
+}
+
+/**
+ * Get all commits on a branch using pagination
+ *
+ * @param github - Authenticated Octokit instance
+ * @param branch - Branch name to get commits from
+ * @returns Array of all commits
+ */
+async function getAllCommitsOnBranch(github: ReturnType<typeof getOctokit>, branch: string): Promise<CommitInfo[]> {
+	const commits: CommitInfo[] = [];
+	let page = 1;
+	const perPage = 100; // GitHub API max
+
+	info(`Fetching all commits from ${branch} branch...`);
+
+	while (true) {
+		const { data } = await github.rest.repos.listCommits({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			sha: branch,
+			per_page: perPage,
+			page,
+		});
+
+		if (data.length === 0) {
+			break;
+		}
+
+		commits.push(
+			...data.map((c) => ({
+				sha: c.sha,
+				message: c.commit.message,
+				author: c.commit.author?.name || "Unknown",
+			})),
+		);
+
+		debug(`Fetched page ${page} with ${data.length} commit(s)`);
+
+		// If we got fewer commits than the page size, we've reached the end
+		if (data.length < perPage) {
+			break;
+		}
+
+		page++;
+	}
+
+	info(`Fetched total of ${commits.length} commit(s) from ${branch}`);
+	return commits;
+}
+
+/**
+ * Get linked issues from a merged PR using GraphQL API
+ *
+ * @param github - Authenticated Octokit instance
+ * @param prNumber - PR number
+ * @returns Array of linked issues
+ */
+async function getLinkedIssuesFromPR(
+	github: ReturnType<typeof getOctokit>,
+	prNumber: number,
+): Promise<Array<{ number: number; title: string; state: string; url: string }>> {
+	try {
+		const query = `
+			query ($owner: String!, $repo: String!, $prNumber: Int!) {
+				repository(owner: $owner, name: $repo) {
+					pullRequest(number: $prNumber) {
+						closingIssuesReferences(first: 10) {
+							nodes {
+								number
+								title
+								state
+								url
+							}
+						}
+					}
+				}
+			}
+		`;
+
+		const result: {
+			repository: {
+				pullRequest: {
+					closingIssuesReferences: {
+						nodes: Array<{ number: number; title: string; state: string; url: string }>;
+					};
+				};
+			};
+		} = await github.graphql(query, {
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			prNumber,
+		});
+
+		return result.repository.pullRequest.closingIssuesReferences.nodes;
+	} catch (error) {
+		debug(`Failed to get linked issues for PR #${prNumber}: ${error instanceof Error ? error.message : String(error)}`);
+		return [];
+	}
+}
+
+/**
+ * Extract PR number from merge commit message
+ *
+ * GitHub merge commits have format: "Title (#123)"
+ *
+ * @param message - Commit message
+ * @returns PR number or null
+ */
+function extractPRNumber(message: string): number | null {
+	const match = message.match(/\(#(\d+)\)$/m);
+	if (match) {
+		return Number.parseInt(match[1], 10);
+	}
+	return null;
+}
+
+/**
  * Links issues from commits between release branch and target branch
  *
-
-
-
- * @param releaseBranch - Release branch name
- * @param targetBranch - Target branch to compare against
- * @param dryRun - Whether this is a dry-run
+ * This function:
+ * 1. Gets all commits in target branch since last release tag
+ * 2. For each merge commit, queries GitHub API for linked issues
+ * 3. Also extracts issue references from commit messages (fallback)
+ * 4. Returns combined list of unique linked issues
+ *
  * @returns Link issues result
  */
 export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
@@ -88,54 +228,114 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
-	const releaseBranch = getInput("release-branch") || "changeset-release/main";
 	const targetBranch = getInput("target-branch") || "main";
 	const dryRun = getBooleanInput("dry-run") || false;
 
 	const github = getOctokit(token);
 	startGroup("Linking issues from commits");
 
-	// Compare commits between release branch and target branch
-	info(`Comparing ${releaseBranch}...${targetBranch}`);
+	// Get the latest release tag to determine the commit range
+	const latestTagSha = await getLatestTagSha(github);
 
-	const { data: comparison } = await github.rest.repos.compareCommits({
-		owner: context.repo.owner,
-		repo: context.repo.repo,
-		base: targetBranch,
-		head: releaseBranch,
-	});
+	let commits: CommitInfo[];
 
-	const commits = comparison.commits.map((c) => ({
-		sha: c.sha,
-		message: c.commit.message,
-		author: c.commit.author?.name || "Unknown",
-	}));
+	if (latestTagSha) {
+		// If we have a tag, compare from that tag to target branch
+		info(`Comparing ${latestTagSha}...${targetBranch}`);
 
-	info(`Found ${commits.length} commit(s) in release branch`);
+		const { data: comparison } = await github.rest.repos.compareCommits({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			base: latestTagSha,
+			head: targetBranch,
+		});
 
-	// Extract issue references from all commits
-	const issueMap = new Map<number, string[]>();
+		commits = comparison.commits.map((c) => ({
+			sha: c.sha,
+			message: c.commit.message,
+			author: c.commit.author?.name || "Unknown",
+		}));
 
+		info(`Found ${commits.length} commit(s) since last release`);
+	} else {
+		// No tags exist - get all commits from the branch
+		info("No tags found - fetching all commits from branch");
+		commits = await getAllCommitsOnBranch(github, targetBranch);
+	}
+
+	// Extract issue references from all commits (fallback method)
+	const issueMap = new Map<number, LinkedIssue>();
+
+	// First pass: Extract from commit messages
 	for (const commit of commits) {
 		const issues = extractIssueReferences(commit.message);
-		debug(`Commit ${commit.sha.slice(0, 7)}: found ${issues.length} issue reference(s)`);
+		debug(`Commit ${commit.sha.slice(0, 7)}: found ${issues.length} issue reference(s) in message`);
 
 		for (const issueNumber of issues) {
 			if (!issueMap.has(issueNumber)) {
-				issueMap.set(issueNumber, []);
+				issueMap.set(issueNumber, {
+					number: issueNumber,
+					title: "", // Will be filled in later
+					state: "",
+					url: "",
+					commits: [],
+				});
 			}
-			issueMap.get(issueNumber)?.push(commit.sha);
+			issueMap.get(issueNumber)?.commits.push(commit.sha);
+		}
+	}
+
+	// Second pass: Check for merged PRs and get their linked issues via GraphQL
+	info("Checking merged PRs for linked issues...");
+	for (const commit of commits) {
+		const prNumber = extractPRNumber(commit.message);
+		if (prNumber) {
+			debug(`Commit ${commit.sha.slice(0, 7)} is a merge from PR #${prNumber}`);
+
+			const linkedIssues = await getLinkedIssuesFromPR(github, prNumber);
+			debug(`PR #${prNumber} has ${linkedIssues.length} linked issue(s)`);
+
+			for (const issue of linkedIssues) {
+				if (!issueMap.has(issue.number)) {
+					issueMap.set(issue.number, {
+						number: issue.number,
+						title: issue.title,
+						state: issue.state.toLowerCase(),
+						url: issue.url,
+						commits: [commit.sha],
+					});
+				} else {
+					// Update existing entry with full details
+					const existing = issueMap.get(issue.number);
+					if (existing) {
+						existing.title = issue.title;
+						existing.state = issue.state.toLowerCase();
+						existing.url = issue.url;
+						if (!existing.commits.includes(commit.sha)) {
+							existing.commits.push(commit.sha);
+						}
+					}
+				}
+			}
 		}
 	}
 
 	info(`Found ${issueMap.size} unique issue reference(s)`);
 
-	// Fetch issue details for each referenced issue
+	// Fetch issue details for any that don't have them yet (from commit message extraction)
 	const linkedIssues: LinkedIssue[] = [];
 
-	for (const [issueNumber, commitShas] of issueMap.entries()) {
+	for (const [issueNumber, issue] of issueMap.entries()) {
+		// If we already have details from GraphQL, use them
+		if (issue.title) {
+			linkedIssues.push(issue);
+			info(`✓ Issue #${issueNumber}: ${issue.title} (${issue.state})`);
+			continue;
+		}
+
+		// Otherwise, fetch from REST API
 		try {
-			const { data: issue } = await github.rest.issues.get({
+			const { data: issueData } = await github.rest.issues.get({
 				owner: context.repo.owner,
 				repo: context.repo.repo,
 				issue_number: issueNumber,
@@ -143,13 +343,13 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 
 			linkedIssues.push({
 				number: issueNumber,
-				title: issue.title,
-				state: issue.state,
-				url: issue.html_url,
-				commits: commitShas,
+				title: issueData.title,
+				state: issueData.state,
+				url: issueData.html_url,
+				commits: issue.commits,
 			});
 
-			info(`✓ Issue #${issueNumber}: ${issue.title} (${issue.state})`);
+			info(`✓ Issue #${issueNumber}: ${issueData.title} (${issueData.state})`);
 		} catch (error) {
 			warning(`Failed to fetch issue #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
 		}
