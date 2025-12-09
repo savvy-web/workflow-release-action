@@ -3,6 +3,7 @@ import type { ExecOptions } from "@actions/exec";
 import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { createApiCommit } from "./create-api-commit.js";
+import { getLinkedIssuesFromCommits } from "./link-issues-from-commits.js";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
@@ -195,6 +196,72 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 		await execWithRetry("git", ["push", "-u", "origin", releaseBranch]);
 	} else {
 		info(`[DRY RUN] Would push branch: ${releaseBranch}`);
+	}
+
+	// Link branch to issues from commits
+	if (!dryRun) {
+		startGroup("Linking branch to issues");
+		try {
+			const { linkedIssues } = await getLinkedIssuesFromCommits(github, targetBranch);
+
+			if (linkedIssues.length > 0) {
+				info(`Found ${linkedIssues.length} issue(s) to link to branch`);
+
+				// Get repository ID and commit SHA for createLinkedBranch
+				const { data: repo } = await github.rest.repos.get({
+					owner: context.repo.owner,
+					repo: context.repo.repo,
+				});
+
+				const { data: branchRef } = await github.rest.git.getRef({
+					owner: context.repo.owner,
+					repo: context.repo.repo,
+					ref: `heads/${releaseBranch}`,
+				});
+
+				// Link the branch to each issue
+				for (const issue of linkedIssues) {
+					try {
+						await github.graphql(
+							`
+							mutation ($issueId: ID!, $name: String!, $oid: GitObjectID!, $repositoryId: ID!) {
+								createLinkedBranch(input: {
+									issueId: $issueId
+									name: $name
+									oid: $oid
+									repositoryId: $repositoryId
+								}) {
+									linkedBranch {
+										id
+									}
+								}
+							}
+							`,
+							{
+								issueId: issue.node_id,
+								name: releaseBranch,
+								oid: branchRef.object.sha,
+								repositoryId: repo.node_id,
+							},
+						);
+						info(`  ✓ Linked branch to issue #${issue.number}`);
+					} catch (error) {
+						warning(
+							`  Failed to link issue #${issue.number}: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					}
+				}
+
+				info(`✓ Successfully linked branch to ${linkedIssues.length} issue(s)`);
+			} else {
+				info("No issues found to link to branch");
+			}
+		} catch (error) {
+			warning(`Failed to link branch to issues: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		endGroup();
+	} else {
+		info("[DRY RUN] Would link branch to issues from commits");
 	}
 
 	// Create commit via GitHub API (automatically signed and attributed to GitHub App)

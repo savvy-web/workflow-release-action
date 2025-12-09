@@ -218,7 +218,7 @@ function extractPRNumber(message: string): number | null {
 }
 
 /**
- * Links issues from commits between release branch and target branch
+ * Gets linked issues from commits without creating check runs or linking to PRs
  *
  * This function:
  * 1. Gets all commits in target branch since last release tag
@@ -226,20 +226,14 @@ function extractPRNumber(message: string): number | null {
  * 3. Also extracts issue references from commit messages (fallback)
  * 4. Returns combined list of unique linked issues
  *
- * @returns Link issues result
+ * @param github - Authenticated Octokit instance
+ * @param targetBranch - Target branch to analyze
+ * @returns Object containing linked issues and commits
  */
-export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
-	// Read all inputs
-	const token = getState("token");
-	if (!token) {
-		throw new Error("No token available from state - ensure pre.ts ran successfully");
-	}
-	const targetBranch = getInput("target-branch") || "main";
-	const dryRun = getBooleanInput("dry-run") || false;
-
-	const github = getOctokit(token);
-	startGroup("Linking issues from commits");
-
+export async function getLinkedIssuesFromCommits(
+	github: ReturnType<typeof getOctokit>,
+	targetBranch: string,
+): Promise<{ linkedIssues: LinkedIssue[]; commits: CommitInfo[] }> {
 	// Get the latest release tag to determine the commit range
 	const latestTagSha = await getLatestTagSha(github);
 
@@ -364,6 +358,36 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 			warning(`Failed to fetch issue #${issueNumber}: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
+
+	return { linkedIssues, commits };
+}
+
+/**
+ * Links issues from commits between release branch and target branch
+ *
+ * This function:
+ * 1. Gets all commits in target branch since last release tag
+ * 2. For each merge commit, queries GitHub API for linked issues
+ * 3. Also extracts issue references from commit messages (fallback)
+ * 4. Creates a check run with results
+ * 5. Returns combined list of unique linked issues
+ *
+ * @returns Link issues result
+ */
+export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
+	// Read all inputs
+	const token = getState("token");
+	if (!token) {
+		throw new Error("No token available from state - ensure pre.ts ran successfully");
+	}
+	const targetBranch = getInput("target-branch") || "main";
+	const dryRun = getBooleanInput("dry-run") || false;
+
+	const github = getOctokit(token);
+	startGroup("Linking issues from commits");
+
+	// Get linked issues and commits
+	const { linkedIssues, commits } = await getLinkedIssuesFromCommits(github, targetBranch);
 
 	endGroup();
 
