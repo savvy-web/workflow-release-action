@@ -879,4 +879,250 @@ describe("update-release-branch", () => {
 		// Should log dry-run message
 		expect(core.info).toHaveBeenCalledWith("[DRY RUN] Would create new release PR (no existing PR found)");
 	});
+
+	it("should include linked issues in new PR body when creating PR", async () => {
+		// No open PRs - will create new PR
+		mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+		// Mock linked issues via git log output
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("log") && args?.includes("--diff-filter=A")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("commit1\nCloses #42\n---END---\n"));
+				}
+				return 0;
+			}
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		// Mock changeset directory
+		vi.mocked(fs.readdir).mockResolvedValue(["feature.md"] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+
+		// Mock issue API call
+		mockOctokit.rest.issues.get.mockResolvedValue({
+			data: {
+				number: 42,
+				title: "Bug fix",
+				state: "open",
+				html_url: "https://github.com/test/issues/42",
+			},
+		});
+
+		// Mock PR creation
+		mockOctokit.rest.pulls.create.mockResolvedValue({
+			data: { number: 999, html_url: "https://github.com/test/pulls/999" },
+		});
+
+		const result = await updateReleaseBranch();
+
+		expect(result.success).toBe(true);
+		expect(result.linkedIssues).toHaveLength(1);
+		// Should create PR with linked issues in body
+		expect(mockOctokit.rest.pulls.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				body: expect.stringContaining("## Linked Issues"),
+			}),
+		);
+		expect(mockOctokit.rest.pulls.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				body: expect.stringContaining("#42"),
+			}),
+		);
+	});
+
+	it("should handle PR body update when existing linked issues section has no next heading", async () => {
+		// Mock PR exists
+		mockOctokit.rest.pulls.list.mockResolvedValue({
+			data: [{ number: 123, title: "chore: release", state: "open", head: { sha: "old-sha" } }],
+		});
+
+		// Mock PR body with linked issues section at the end (no next heading)
+		mockOctokit.rest.pulls.get.mockResolvedValue({
+			data: {
+				body: "## Summary\n\nSome changes\n\n## Linked Issues\n\n- Closes #99: Old issue",
+			},
+		});
+
+		// Mock linked issues via git log output
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("log") && args?.includes("--diff-filter=A")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("commit1\nCloses #42\n---END---\n"));
+				}
+				return 0;
+			}
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		// Mock changeset directory
+		vi.mocked(fs.readdir).mockResolvedValue(["feature.md"] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+
+		// Mock issue API call
+		mockOctokit.rest.issues.get.mockResolvedValue({
+			data: {
+				number: 42,
+				title: "New bug fix",
+				state: "open",
+				html_url: "https://github.com/test/issues/42",
+			},
+		});
+
+		const result = await updateReleaseBranch();
+
+		expect(result.success).toBe(true);
+		expect(result.linkedIssues).toHaveLength(1);
+		// Should update PR body, removing old linked issues section
+		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				pull_number: 123,
+				body: expect.stringContaining("## Linked Issues"),
+			}),
+		);
+		// Old issue should be removed
+		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				body: expect.not.stringContaining("#99"),
+			}),
+		);
+	});
+
+	it("should handle error when updating PR body with linked issues", async () => {
+		// Mock PR exists
+		mockOctokit.rest.pulls.list.mockResolvedValue({
+			data: [{ number: 123, title: "chore: release", state: "open", head: { sha: "old-sha" } }],
+		});
+
+		// Mock PR body fetch
+		mockOctokit.rest.pulls.get.mockResolvedValue({
+			data: { body: "Existing content" },
+		});
+
+		// Mock linked issues via git log output
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("log") && args?.includes("--diff-filter=A")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("commit1\nCloses #42\n---END---\n"));
+				}
+				return 0;
+			}
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		// Mock changeset directory
+		vi.mocked(fs.readdir).mockResolvedValue(["feature.md"] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+
+		// Mock issue API call
+		mockOctokit.rest.issues.get.mockResolvedValue({
+			data: {
+				number: 42,
+				title: "Bug fix",
+				state: "open",
+				html_url: "https://github.com/test/issues/42",
+			},
+		});
+
+		// Mock PR update to throw error
+		mockOctokit.rest.pulls.update.mockRejectedValue(new Error("API rate limit exceeded"));
+
+		const result = await updateReleaseBranch();
+
+		// Should handle error gracefully
+		expect(result.success).toBe(true);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not update PR body"));
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("API rate limit exceeded"));
+	});
+
+	it("should handle when createApiCommit returns created false", async () => {
+		// Mock changesets exist
+		vi.mocked(fs.readdir).mockResolvedValue(["feature.md"] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+
+		// Mock version command that modifies files
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "pnpm" && args?.includes("ci:version")) {
+				return 0;
+			}
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		// Mock PR exists
+		mockOctokit.rest.pulls.list.mockResolvedValue({
+			data: [{ number: 123, title: "chore: release", state: "open", head: { sha: "old-sha" } }],
+		});
+
+		// Mock createApiCommit to return created: false (no changes)
+		vi.mocked(createApiCommit).mockResolvedValue({
+			created: false,
+			sha: "",
+		});
+
+		const result = await updateReleaseBranch();
+
+		expect(result.success).toBe(true);
+		expect(core.warning).toHaveBeenCalledWith("No changes to commit via API");
+	});
+
+	it("should handle reopening closed PR in dry-run mode", async () => {
+		vi.mocked(core.getBooleanInput).mockImplementation((name: string) => {
+			if (name === "dry-run") return true;
+			return false;
+		});
+
+		// Mock PR that was closed
+		mockOctokit.rest.pulls.list
+			.mockResolvedValueOnce({ data: [] }) // No open PRs
+			.mockResolvedValueOnce({
+				data: [
+					{
+						number: 123,
+						title: "chore: release",
+						state: "closed",
+						head: { sha: "old-sha" },
+						closed_at: new Date().toISOString(),
+						merged_at: null, // Closed but not merged
+					},
+				],
+			}); // Closed PR found
+
+		// Mock changesets exist
+		vi.mocked(fs.readdir).mockResolvedValue(["feature.md"] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+
+		// Mock version command
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		const result = await updateReleaseBranch();
+
+		expect(result.success).toBe(true);
+		expect(result.prNumber).toBe(123);
+		// Should log dry-run message for reopening PR
+		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("[DRY RUN] Would reopen PR #123"));
+		// Should NOT actually reopen PR in dry-run mode
+		expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+	});
 });

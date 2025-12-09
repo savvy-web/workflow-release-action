@@ -4,6 +4,7 @@ import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApiCommit } from "../src/utils/create-api-commit.js";
 import { createReleaseBranch } from "../src/utils/create-release-branch.js";
+import { getLinkedIssuesFromCommits } from "../src/utils/link-issues-from-commits.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.js";
 
@@ -12,6 +13,7 @@ vi.mock("@actions/core");
 vi.mock("@actions/exec");
 vi.mock("@actions/github");
 vi.mock("../src/utils/create-api-commit.js");
+vi.mock("../src/utils/link-issues-from-commits.js");
 
 describe("create-release-branch", () => {
 	let mockOctokit: MockOctokit;
@@ -76,6 +78,9 @@ describe("create-release-branch", () => {
 
 		// Mock createApiCommit
 		vi.mocked(createApiCommit).mockResolvedValue({ sha: "abc123def456", created: true });
+
+		// Mock getLinkedIssuesFromCommits to return empty by default
+		vi.mocked(getLinkedIssuesFromCommits).mockResolvedValue({ linkedIssues: [], commits: [] });
 	});
 
 	afterEach(() => {
@@ -361,5 +366,186 @@ describe("create-release-branch", () => {
 
 		expect(caughtError).toBeInstanceOf(Error);
 		expect((caughtError as unknown as Error).message).toContain("ETIMEDOUT");
+	});
+
+	it("should skip branch linking when no final commit SHA is available", async () => {
+		// Mock createApiCommit to return no commit SHA
+		vi.mocked(createApiCommit).mockResolvedValue({ sha: "", created: false });
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		await createReleaseBranch();
+
+		expect(core.info).toHaveBeenCalledWith("No final commit SHA available, skipping branch linking");
+	});
+
+	it("should link branch to issues when linked issues are found", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			if (cmd === "git" && args?.includes("rev-parse") && args?.includes("HEAD")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("abc123\n"));
+				}
+			}
+			return 0;
+		});
+
+		// Mock repos.get to return node_id
+		mockOctokit.rest.repos.get.mockResolvedValue({
+			data: { node_id: "test-repo-node-id" },
+		} as never);
+
+		// Mock linked issues
+		vi.mocked(getLinkedIssuesFromCommits).mockResolvedValue({
+			linkedIssues: [
+				{
+					number: 10,
+					title: "Test Issue",
+					node_id: "issue-node-id-1",
+					state: "open",
+					url: "https://github.com/test/issues/10",
+					commits: ["commit1"],
+				},
+				{
+					number: 20,
+					title: "Another Issue",
+					node_id: "issue-node-id-2",
+					state: "open",
+					url: "https://github.com/test/issues/20",
+					commits: ["commit1"],
+				},
+			],
+			commits: [{ sha: "commit1", message: "Fixes #10", author: "Test User" }],
+		});
+
+		// Mock GraphQL for both PR creation and branch linking
+		mockOctokit.graphql.mockImplementation(async (query: string) => {
+			if (query.includes("createPullRequest")) {
+				return {
+					createPullRequest: {
+						pullRequest: {
+							number: 123,
+							url: "https://github.com/test/pull/123",
+							id: "test-pr-node-id",
+						},
+					},
+				};
+			}
+			if (query.includes("createLinkedBranch")) {
+				return {
+					createLinkedBranch: { linkedBranch: { id: "linked-branch-id" } },
+				};
+			}
+			return {};
+		});
+
+		await createReleaseBranch();
+
+		expect(mockOctokit.graphql).toHaveBeenCalledWith(
+			expect.stringContaining("createLinkedBranch"),
+			expect.objectContaining({
+				issueId: "issue-node-id-1",
+				name: "changeset-release/main",
+				oid: "abc123def456",
+				repositoryId: "test-repo-node-id",
+			}),
+		);
+	});
+
+	it("should handle GraphQL errors when linking individual issues", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			if (cmd === "git" && args?.includes("rev-parse") && args?.includes("HEAD")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("abc123\n"));
+				}
+			}
+			return 0;
+		});
+
+		mockOctokit.rest.repos.get.mockResolvedValue({
+			data: { node_id: "test-repo-node-id" },
+		} as never);
+
+		vi.mocked(getLinkedIssuesFromCommits).mockResolvedValue({
+			linkedIssues: [
+				{
+					number: 10,
+					title: "Test Issue",
+					node_id: "issue-node-id-1",
+					state: "open",
+					url: "https://github.com/test/issues/10",
+					commits: ["commit1"],
+				},
+			],
+			commits: [{ sha: "commit1", message: "Fixes #10", author: "Test User" }],
+		});
+
+		// Mock GraphQL to succeed for PR creation but fail for branch linking
+		mockOctokit.graphql.mockImplementation(async (query: string) => {
+			if (query.includes("createPullRequest")) {
+				return {
+					createPullRequest: {
+						pullRequest: {
+							number: 123,
+							url: "https://github.com/test/pull/123",
+							id: "test-pr-node-id",
+						},
+					},
+				};
+			}
+			if (query.includes("createLinkedBranch")) {
+				throw new Error("GraphQL API error");
+			}
+			return {};
+		});
+
+		await createReleaseBranch();
+
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to link issue #10"));
+	});
+
+	it("should handle errors from getLinkedIssuesFromCommits gracefully", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			if (cmd === "git" && args?.includes("rev-parse") && args?.includes("HEAD")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("abc123\n"));
+				}
+			}
+			return 0;
+		});
+
+		mockOctokit.rest.repos.get.mockResolvedValue({
+			data: { node_id: "test-repo-node-id" },
+		} as never);
+
+		// Mock getLinkedIssuesFromCommits to throw
+		vi.mocked(getLinkedIssuesFromCommits).mockRejectedValue(new Error("Failed to fetch linked issues"));
+
+		await createReleaseBranch();
+
+		expect(core.warning).toHaveBeenCalledWith(
+			expect.stringContaining("Failed to link branch to issues: Failed to fetch linked issues"),
+		);
 	});
 });

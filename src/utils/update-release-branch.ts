@@ -572,12 +572,9 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 		info("No version changes from changesets");
 
 		// Update release branch to point to main via API (no git push needed)
-		if (!dryRun) {
-			const sha = await updateBranchToRef(token, releaseBranch, targetBranch);
-			info(`✓ Updated '${releaseBranch}' to match '${targetBranch}' (${sha})`);
-		} else {
-			info(`[DRY RUN] Would update ${releaseBranch} to match ${targetBranch}`);
-		}
+		// Note: This only happens in non-dry-run mode since dry-run always assumes changes exist
+		const sha = await updateBranchToRef(token, releaseBranch, targetBranch);
+		info(`✓ Updated '${releaseBranch}' to match '${targetBranch}' (${sha})`);
 	}
 
 	endGroup();
@@ -725,9 +722,9 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 			warning(`Could not update PR body: ${err instanceof Error ? err.message : String(err)}`);
 		}
 		endGroup();
-	} else if (prNumber && linkedIssues.length > 0 && dryRun) {
-		info(`[DRY RUN] Would update PR #${prNumber} with ${linkedIssues.length} linked issue(s)`);
 	}
+	// Note: No dry-run branch needed here because linkedIssues is always empty in dry-run mode
+	// (see line 474-479 where collection is skipped in dry-run mode)
 
 	// Build check details using summaryWriter (markdown, not HTML)
 	const checkStatusTable = summaryWriter.keyValueTable([

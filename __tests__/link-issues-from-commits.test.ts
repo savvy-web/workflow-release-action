@@ -1,7 +1,7 @@
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { linkIssuesFromCommits } from "../src/utils/link-issues-from-commits.js";
+import { getLinkedIssuesFromCommits, linkIssuesFromCommits } from "../src/utils/link-issues-from-commits.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { MockOctokit } from "./utils/test-types.js";
 
@@ -697,5 +697,228 @@ describe("link-issues-from-commits", () => {
 		expect(core.warning).toHaveBeenCalledWith("No PR found for current commit, skipping issue linking");
 		// Verify GraphQL was NOT called when no PR exists
 		expect(mockOctokit.graphql).not.toHaveBeenCalled();
+	});
+
+	it("should handle non-Error from listTags API", async () => {
+		// Throw a non-Error to test String(error) path
+		mockOctokit.rest.repos.listTags.mockRejectedValue("String error from API");
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: { commits: [] },
+		});
+
+		const result = await linkIssuesFromCommits();
+
+		// Should handle the error gracefully and fall back to all commits
+		expect(result.linkedIssues).toEqual([]);
+	});
+
+	it("should handle PR with manually linked issues not in allLinked", async () => {
+		mockOctokit.rest.repos.listTags.mockResolvedValue({
+			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
+		});
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: {
+				commits: [
+					{
+						sha: "merge123",
+						commit: {
+							message: "feat: add feature (#50)",
+							author: { name: "GitHub" },
+						},
+					},
+				],
+			},
+		});
+
+		// Mock GraphQL with a manually linked issue that's NOT in allLinked
+		mockOctokit.graphql.mockResolvedValue({
+			repository: {
+				pullRequest: {
+					allLinked: {
+						nodes: [
+							{
+								id: "issue-node-id-10",
+								number: 10,
+								title: "Keyword linked",
+								state: "OPEN",
+								url: "https://github.com/test-owner/test-repo/issues/10",
+							},
+						],
+					},
+					manuallyLinked: {
+						nodes: [
+							{
+								id: "issue-node-id-20",
+								number: 20,
+								title: "Manually linked only",
+								state: "OPEN",
+								url: "https://github.com/test-owner/test-repo/issues/20",
+							},
+						],
+					},
+				},
+			},
+		});
+
+		const result = await getLinkedIssuesFromCommits(mockOctokit as unknown as ReturnType<typeof getOctokit>, "main");
+
+		// Should have both issues (one from allLinked, one from manuallyLinked only)
+		expect(result.linkedIssues).toHaveLength(2);
+		expect(result.linkedIssues.map((i) => i.number).sort()).toEqual([10, 20]);
+	});
+
+	it("should handle GraphQL errors when linking issues to PR", async () => {
+		mockOctokit.rest.repos.listTags.mockResolvedValue({
+			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
+		});
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: {
+				commits: [{ sha: "abc123", commit: { message: "Closes #42", author: { name: "Test" } } }],
+			},
+		});
+		mockOctokit.rest.issues.get.mockResolvedValue({
+			data: {
+				number: 42,
+				title: "Issue",
+				state: "open",
+				html_url: "https://github.com/test/issues/42",
+				node_id: "I_42",
+			},
+		});
+
+		// Mock PR found
+		mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({
+			data: [{ number: 109, title: "Release PR" }],
+		});
+
+		// Mock GraphQL to throw error when querying timeline
+		mockOctokit.graphql.mockRejectedValue(new Error("GraphQL error"));
+
+		await linkIssuesFromCommits();
+
+		// Should log warning but not throw
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to link issue #42"));
+	});
+
+	it("should skip commit if it's already in existing.commits array", async () => {
+		mockOctokit.rest.repos.listTags.mockResolvedValue({
+			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
+		});
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: {
+				commits: [
+					{
+						sha: "commit1",
+						commit: {
+							message: "fix: initial\n\nCloses #15",
+							author: { name: "Dev" },
+						},
+					},
+					{
+						sha: "merge1",
+						commit: {
+							message: "Merge branch (#99)",
+							author: { name: "GitHub" },
+						},
+					},
+				],
+			},
+		});
+
+		// Mock GraphQL for PR #99 to return issue #15 (same as in commit message)
+		mockOctokit.graphql.mockResolvedValue({
+			repository: {
+				pullRequest: {
+					allLinked: {
+						nodes: [
+							{
+								id: "issue-node-id-15",
+								number: 15,
+								title: "Bug fix",
+								state: "CLOSED",
+								url: "https://github.com/test-owner/test-repo/issues/15",
+							},
+						],
+					},
+					manuallyLinked: {
+						nodes: [],
+					},
+				},
+			},
+		});
+
+		const result = await getLinkedIssuesFromCommits(mockOctokit as unknown as ReturnType<typeof getOctokit>, "main");
+
+		// Should have only 1 issue (deduplicated)
+		expect(result.linkedIssues).toHaveLength(1);
+		expect(result.linkedIssues[0].number).toBe(15);
+		// Should have both commits listed, but not duplicated
+		expect(result.linkedIssues[0].commits).toEqual(["commit1", "merge1"]);
+	});
+
+	it("should handle errors from listPullRequestsAssociatedWithCommit", async () => {
+		mockOctokit.rest.repos.listTags.mockResolvedValue({
+			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
+		});
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: {
+				commits: [{ sha: "abc123", commit: { message: "Closes #42", author: { name: "Test" } } }],
+			},
+		});
+		mockOctokit.rest.issues.get.mockResolvedValue({
+			data: {
+				number: 42,
+				title: "Issue",
+				state: "open",
+				html_url: "https://github.com/test/issues/42",
+				node_id: "I_42",
+			},
+		});
+
+		// Mock listPullRequestsAssociatedWithCommit to throw error
+		mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockRejectedValue(
+			new Error("API error when listing PRs"),
+		);
+
+		await linkIssuesFromCommits();
+
+		// Should handle the error gracefully and log warning
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to link issues to PR"));
+	});
+
+	it("should throw error when token is missing from state", async () => {
+		// Mock getState to return empty token
+		vi.mocked(core.getState).mockReturnValue("");
+
+		await expect(linkIssuesFromCommits()).rejects.toThrow("No token available from state");
+	});
+
+	it("should handle non-Error thrown from getLinkedIssuesFromPR", async () => {
+		mockOctokit.rest.repos.listTags.mockResolvedValue({
+			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
+		});
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: {
+				commits: [
+					{
+						sha: "merge123",
+						commit: {
+							message: "feat: add feature (#75)",
+							author: { name: "GitHub" },
+						},
+					},
+				],
+			},
+		});
+
+		// Mock GraphQL to throw non-Error value
+		mockOctokit.graphql.mockRejectedValue("String error from GraphQL");
+
+		const result = await getLinkedIssuesFromCommits(mockOctokit as unknown as ReturnType<typeof getOctokit>, "main");
+
+		// Should handle gracefully
+		expect(result.linkedIssues).toEqual([]);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to get linked issues for PR #75"));
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("String error from GraphQL"));
 	});
 });
