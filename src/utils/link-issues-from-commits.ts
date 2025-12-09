@@ -409,9 +409,93 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 
 	info(`Created check run: ${checkRun.html_url}`);
 
+	// If we have linked issues and we're on a release branch, update the PR body to link them
+	if (linkedIssues.length > 0 && !dryRun) {
+		await linkIssuesToPR(github, linkedIssues);
+	}
+
 	return {
 		linkedIssues,
 		commits,
 		checkId: checkRun.id,
 	};
+}
+
+/**
+ * Links issues to the current PR by updating the PR body
+ *
+ * @param github - Authenticated Octokit instance
+ * @param linkedIssues - Issues to link to the PR
+ */
+async function linkIssuesToPR(github: ReturnType<typeof getOctokit>, linkedIssues: LinkedIssue[]): Promise<void> {
+	try {
+		// Find the PR associated with the current commit
+		const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			commit_sha: context.sha,
+		});
+
+		if (prs.length === 0) {
+			debug("No PR found for current commit, skipping issue linking");
+			return;
+		}
+
+		// Use the first PR (should be the release PR)
+		const pr = prs[0];
+		const currentBody = pr.body || "";
+
+		// Check which issues are not already referenced in the PR body
+		const issueNumbersToAdd: number[] = [];
+		for (const issue of linkedIssues) {
+			// Check if issue is already referenced (various formats)
+			const patterns = [
+				new RegExp(`closes\\s+#${issue.number}\\b`, "i"),
+				new RegExp(`fixes\\s+#${issue.number}\\b`, "i"),
+				new RegExp(`resolves\\s+#${issue.number}\\b`, "i"),
+				new RegExp(`#${issue.number}\\b`), // Simple reference
+			];
+
+			const alreadyReferenced = patterns.some((pattern) => pattern.test(currentBody));
+
+			if (!alreadyReferenced) {
+				issueNumbersToAdd.push(issue.number);
+			}
+		}
+
+		if (issueNumbersToAdd.length === 0) {
+			info("All issues already referenced in PR body");
+			return;
+		}
+
+		// Build the closing references section
+		const closingReferences = issueNumbersToAdd.map((num) => `Closes #${num}`).join("\n");
+
+		// Append to PR body (or create new body if empty)
+		const newBody = currentBody
+			? `${currentBody}\n\n## Linked Issues\n\n${closingReferences}`
+			: `## Linked Issues\n\n${closingReferences}`;
+
+		// Update PR body using GraphQL
+		const query = `
+			mutation ($pullRequestId: ID!, $body: String!) {
+				updatePullRequest(input: { pullRequestId: $pullRequestId, body: $body }) {
+					pullRequest {
+						id
+						number
+						body
+					}
+				}
+			}
+		`;
+
+		await github.graphql(query, {
+			pullRequestId: pr.node_id,
+			body: newBody,
+		});
+
+		info(`✓ Added ${issueNumbersToAdd.length} issue reference(s) to PR #${pr.number}`);
+	} catch (error) {
+		warning(`Failed to link issues to PR: ${error instanceof Error ? error.message : String(error)}`);
+	}
 }

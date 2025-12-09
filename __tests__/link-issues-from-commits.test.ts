@@ -490,4 +490,120 @@ describe("link-issues-from-commits", () => {
 		expect(result.linkedIssues).toHaveLength(2);
 		expect(result.linkedIssues.map((i) => i.number).sort()).toEqual([10, 30]);
 	});
+
+	it("should update PR body with linked issues", async () => {
+		// Mock tags to use compareCommits path
+		mockOctokit.rest.repos.listTags.mockResolvedValue({
+			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
+		});
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: {
+				commits: [{ sha: "abc123", commit: { message: "Closes #42", author: { name: "Test" } } }],
+			},
+		});
+		mockOctokit.rest.issues.get.mockResolvedValue({
+			data: { number: 42, title: "Issue", state: "open", html_url: "https://github.com/test/issues/42" },
+		});
+
+		// Mock PR associated with commit
+		mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({
+			data: [
+				{ number: 109, node_id: "PR_123", body: "<!-- claude-generated-description -->\n\n- Release version update" },
+			],
+		});
+
+		// Mock GraphQL updatePullRequest
+		mockOctokit.graphql.mockResolvedValue({
+			updatePullRequest: {
+				pullRequest: { id: "PR_123", number: 109, body: "Updated body" },
+			},
+		});
+
+		await linkIssuesFromCommits();
+
+		// Verify GraphQL was called to update PR
+		expect(mockOctokit.graphql).toHaveBeenCalledWith(
+			expect.stringContaining("updatePullRequest"),
+			expect.objectContaining({
+				pullRequestId: "PR_123",
+				body: expect.stringContaining("Closes #42"),
+			}),
+		);
+	});
+
+	it("should not duplicate issue references in PR body", async () => {
+		// Mock tags
+		mockOctokit.rest.repos.listTags.mockResolvedValue({
+			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
+		});
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: {
+				commits: [{ sha: "abc123", commit: { message: "Closes #42", author: { name: "Test" } } }],
+			},
+		});
+		mockOctokit.rest.issues.get.mockResolvedValue({
+			data: { number: 42, title: "Issue", state: "open", html_url: "https://github.com/test/issues/42" },
+		});
+
+		// Mock PR that already has the issue referenced
+		mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({
+			data: [{ number: 109, node_id: "PR_123", body: "Release PR\n\nCloses #42" }],
+		});
+
+		await linkIssuesFromCommits();
+
+		// Verify GraphQL was NOT called since issue is already referenced
+		expect(mockOctokit.graphql).not.toHaveBeenCalled();
+		expect(core.info).toHaveBeenCalledWith("All issues already referenced in PR body");
+	});
+
+	it("should skip linking in dry-run mode", async () => {
+		vi.mocked(core.getBooleanInput).mockImplementation((name: string) => {
+			if (name === "dry-run") return true;
+			return false;
+		});
+
+		// Mock tags
+		mockOctokit.rest.repos.listTags.mockResolvedValue({
+			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
+		});
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: {
+				commits: [{ sha: "abc123", commit: { message: "Closes #42", author: { name: "Test" } } }],
+			},
+		});
+		mockOctokit.rest.issues.get.mockResolvedValue({
+			data: { number: 42, title: "Issue", state: "open", html_url: "https://github.com/test/issues/42" },
+		});
+
+		await linkIssuesFromCommits();
+
+		// Verify PR lookup was NOT called in dry-run mode
+		expect(mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit).not.toHaveBeenCalled();
+	});
+
+	it("should handle missing PR gracefully", async () => {
+		// Mock tags
+		mockOctokit.rest.repos.listTags.mockResolvedValue({
+			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
+		});
+		mockOctokit.rest.repos.compareCommits.mockResolvedValue({
+			data: {
+				commits: [{ sha: "abc123", commit: { message: "Closes #42", author: { name: "Test" } } }],
+			},
+		});
+		mockOctokit.rest.issues.get.mockResolvedValue({
+			data: { number: 42, title: "Issue", state: "open", html_url: "https://github.com/test/issues/42" },
+		});
+
+		// Mock no PR found
+		mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({
+			data: [],
+		});
+
+		await linkIssuesFromCommits();
+
+		// Should not throw, just skip linking
+		expect(core.debug).toHaveBeenCalledWith("No PR found for current commit, skipping issue linking");
+	});
 });
