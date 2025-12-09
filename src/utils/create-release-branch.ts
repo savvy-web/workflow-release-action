@@ -223,25 +223,34 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 	// Get repository node ID (needed for both branch linking and PR creation)
 	let repoNodeId = "";
 	if (!dryRun) {
+		info("Fetching repository node ID...");
 		const { data: repo } = await github.rest.repos.get({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
 		});
 		repoNodeId = repo.node_id;
+		info(`Repository node ID: ${repoNodeId}`);
 	}
 
 	// Link branch to issues from commits (AFTER creating the final commit)
 	if (!dryRun && finalCommitSha) {
 		startGroup("Linking branch to issues");
 		try {
-			const { linkedIssues } = await getLinkedIssuesFromCommits(github, targetBranch);
+			info(`Searching for linked issues from commits on branch: ${targetBranch}`);
+			const { linkedIssues, commits } = await getLinkedIssuesFromCommits(github, targetBranch);
+			info(`Found ${commits.length} commit(s) to analyze`);
 
 			if (linkedIssues.length > 0) {
-				info(`Found ${linkedIssues.length} issue(s) to link to branch`);
+				info(`Found ${linkedIssues.length} issue(s) to link to branch:`);
+				for (const issue of linkedIssues) {
+					info(`  - Issue #${issue.number}: ${issue.title} (${issue.node_id})`);
+				}
 
 				// Link the branch to each issue using the final commit SHA
+				info(`Linking branch '${releaseBranch}' at commit ${finalCommitSha} to issues...`);
 				for (const issue of linkedIssues) {
 					try {
+						info(`  Linking to issue #${issue.number}...`);
 						await github.graphql(
 							`
 							mutation ($issueId: ID!, $name: String!, $oid: GitObjectID!, $repositoryId: ID!) {
@@ -275,6 +284,9 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 				info(`✓ Successfully linked branch to ${linkedIssues.length} issue(s)`);
 			} else {
 				info("No issues found to link to branch");
+				info("This could mean:");
+				info("  - No commits reference issues with 'Closes #N', 'Fixes #N', etc.");
+				info("  - No merged PRs on this branch had linked issues");
 			}
 		} catch (error) {
 			warning(`Failed to link branch to issues: ${error instanceof Error ? error.message : String(error)}`);
@@ -313,6 +325,12 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 
 	if (!dryRun) {
 		try {
+			info(`Creating PR via GraphQL API...`);
+			info(`  Repository: ${repoNodeId}`);
+			info(`  Base: ${targetBranch}`);
+			info(`  Head: ${releaseBranch}`);
+			info(`  Title: ${prTitle}`);
+
 			// Create PR via GraphQL (preserves branch-issue links)
 			const prResult = (await github.graphql(
 				`
@@ -343,8 +361,10 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 
 			prNumber = prResult.createPullRequest.pullRequest.number;
 			prUrl = prResult.createPullRequest.pullRequest.url;
+			info(`✓ PR created with GraphQL: #${prNumber} (${prResult.createPullRequest.pullRequest.id})`);
 
 			// Add labels
+			info(`Adding labels to PR #${prNumber}...`);
 			await github.rest.issues.addLabels({
 				owner: context.repo.owner,
 				repo: context.repo.repo,
@@ -358,6 +378,8 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 			warning(`PR creation failed, retrying: ${error instanceof Error ? error.message : String(error)}`);
 			await new Promise((resolve) => setTimeout(resolve, 2000));
 
+			info(`Retrying PR creation via GraphQL...`);
+
 			// Create PR via GraphQL (preserves branch-issue links)
 			const prResult = (await github.graphql(
 				`
@@ -388,6 +410,7 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 
 			prNumber = prResult.createPullRequest.pullRequest.number;
 			prUrl = prResult.createPullRequest.pullRequest.url;
+			info(`✓ PR created on retry: #${prNumber}`);
 
 			await github.rest.issues.addLabels({
 				owner: context.repo.owner,
