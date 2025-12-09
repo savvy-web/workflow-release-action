@@ -324,15 +324,19 @@ describe("link-issues-from-commits", () => {
 		mockOctokit.graphql.mockResolvedValue({
 			repository: {
 				pullRequest: {
-					closingIssuesReferences: {
+					allLinked: {
 						nodes: [
 							{
+								id: "issue-node-id-42",
 								number: 42,
 								title: "Feature request",
 								state: "OPEN",
 								url: "https://github.com/test-owner/test-repo/issues/42",
 							},
 						],
+					},
+					manuallyLinked: {
+						nodes: [],
 					},
 				},
 			},
@@ -461,15 +465,19 @@ describe("link-issues-from-commits", () => {
 		mockOctokit.graphql.mockResolvedValue({
 			repository: {
 				pullRequest: {
-					closingIssuesReferences: {
+					allLinked: {
 						nodes: [
 							{
+								id: "issue-node-id-30",
 								number: 30,
 								title: "Feature request",
 								state: "OPEN",
 								url: "https://github.com/test-owner/test-repo/issues/30",
 							},
 						],
+					},
+					manuallyLinked: {
+						nodes: [],
 					},
 				},
 			},

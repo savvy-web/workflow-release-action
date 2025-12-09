@@ -54,6 +54,66 @@ function extractIssueReferences(message: string): number[] {
 }
 
 /**
+ * Extracts PR number from commit message
+ *
+ * GitHub merge commits have format: "Title (#123)"
+ *
+ * @param message - Commit message to parse
+ * @returns PR number if found, null otherwise
+ */
+function extractPRNumber(message: string): number | null {
+	const match = message.match(/\(#(\d+)\)$/m);
+	if (match) {
+		return Number.parseInt(match[1], 10);
+	}
+	return null;
+}
+
+/**
+ * Gets linked issues from a PR using GraphQL
+ *
+ * @param github - Octokit instance
+ * @param prNumber - PR number
+ * @returns Array of linked issue numbers
+ */
+async function getLinkedIssuesFromPR(github: ReturnType<typeof getOctokit>, prNumber: number): Promise<number[]> {
+	try {
+		const query = `
+			query ($owner: String!, $repo: String!, $prNumber: Int!) {
+				repository(owner: $owner, name: $repo) {
+					pullRequest(number: $prNumber) {
+						closingIssuesReferences(first: 50) {
+							nodes {
+								number
+							}
+						}
+					}
+				}
+			}
+		`;
+
+		const result: {
+			repository: {
+				pullRequest: {
+					closingIssuesReferences: {
+						nodes: Array<{ number: number }>;
+					};
+				};
+			};
+		} = await github.graphql(query, {
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			prNumber,
+		});
+
+		return result.repository.pullRequest.closingIssuesReferences.nodes.map((node) => node.number);
+	} catch (error) {
+		debug(`Failed to get linked issues for PR #${prNumber}: ${error instanceof Error ? error.message : String(error)}`);
+		return [];
+	}
+}
+
+/**
  * Gets changeset files from the .changeset directory
  *
  * @returns Array of changeset file paths (excluding README.md and config.json)
@@ -194,6 +254,7 @@ async function collectLinkedIssuesFromChangesets(
 			info(`  Commit: ${commit.sha.slice(0, 7)}`);
 			info(`  Message: ${commit.message.split("\n")[0]}`);
 
+			// Extract issue references from commit message
 			const issues = extractIssueReferences(commit.message);
 			info(`  Issue refs: ${issues.length > 0 ? issues.map((i) => `#${i}`).join(", ") : "(none found)"}`);
 
@@ -202,6 +263,25 @@ async function collectLinkedIssuesFromChangesets(
 					issueMap.set(issueNumber, []);
 				}
 				issueMap.get(issueNumber)?.push(commit.sha);
+			}
+
+			// Check if this commit message references a PR (merge commit format)
+			const prNumber = extractPRNumber(commit.message);
+			if (prNumber) {
+				info(`  PR reference: #${prNumber}`);
+				const prIssues = await getLinkedIssuesFromPR(github, prNumber);
+				if (prIssues.length > 0) {
+					info(`  PR #${prNumber} has ${prIssues.length} linked issue(s):`);
+					for (const issueNumber of prIssues) {
+						info(`    - Issue #${issueNumber}`);
+						if (!issueMap.has(issueNumber)) {
+							issueMap.set(issueNumber, []);
+						}
+						issueMap.get(issueNumber)?.push(commit.sha);
+					}
+				} else {
+					info(`  PR #${prNumber} has no linked issues`);
+				}
 			}
 		} else {
 			info(`Changeset ${file}: no commit found in ${remoteBranch} history`);
