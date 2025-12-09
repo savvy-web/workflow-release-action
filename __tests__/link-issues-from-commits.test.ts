@@ -491,7 +491,7 @@ describe("link-issues-from-commits", () => {
 		expect(result.linkedIssues.map((i) => i.number).sort()).toEqual([10, 30]);
 	});
 
-	it("should update PR body with linked issues", async () => {
+	it("should add comments to issues to create cross-references", async () => {
 		// Mock tags to use compareCommits path
 		mockOctokit.rest.repos.listTags.mockResolvedValue({
 			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
@@ -502,36 +502,67 @@ describe("link-issues-from-commits", () => {
 			},
 		});
 		mockOctokit.rest.issues.get.mockResolvedValue({
-			data: { number: 42, title: "Issue", state: "open", html_url: "https://github.com/test/issues/42" },
+			data: {
+				number: 42,
+				title: "Issue",
+				state: "open",
+				html_url: "https://github.com/test/issues/42",
+				node_id: "I_42",
+			},
 		});
 
 		// Mock PR associated with commit
 		mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({
-			data: [
-				{ number: 109, node_id: "PR_123", body: "<!-- claude-generated-description -->\n\n- Release version update" },
-			],
+			data: [{ number: 109, title: "Release PR" }],
 		});
 
-		// Mock GraphQL updatePullRequest
-		mockOctokit.graphql.mockResolvedValue({
-			updatePullRequest: {
-				pullRequest: { id: "PR_123", number: 109, body: "Updated body" },
-			},
-		});
+		// Mock GraphQL timeline query (no existing cross-reference)
+		mockOctokit.graphql
+			.mockResolvedValueOnce({
+				repository: {
+					issue: {
+						timelineItems: {
+							nodes: [],
+						},
+					},
+				},
+			})
+			// Mock GraphQL addComment mutation
+			.mockResolvedValueOnce({
+				addComment: {
+					commentEdge: {
+						node: { id: "IC_123" },
+					},
+				},
+			});
 
 		await linkIssuesFromCommits();
 
-		// Verify GraphQL was called to update PR
-		expect(mockOctokit.graphql).toHaveBeenCalledWith(
-			expect.stringContaining("updatePullRequest"),
+		// Verify timeline was queried (first call)
+		expect(mockOctokit.graphql).toHaveBeenNthCalledWith(
+			1,
+			expect.stringContaining("timelineItems"),
 			expect.objectContaining({
-				pullRequestId: "PR_123",
-				body: expect.stringContaining("Closes #42"),
+				issueNumber: 42,
+				prNumber: 109,
 			}),
 		);
+
+		// Verify comment was added (second call)
+		expect(mockOctokit.graphql).toHaveBeenNthCalledWith(
+			2,
+			expect.stringContaining("addComment"),
+			expect.objectContaining({
+				subjectId: "I_42",
+				body: expect.stringContaining("#109"),
+			}),
+		);
+
+		expect(core.info).toHaveBeenCalledWith("  ✓ Added cross-reference comment to issue #42");
+		expect(core.info).toHaveBeenCalledWith("✓ Successfully linked 1 issue(s) to PR #109");
 	});
 
-	it("should not duplicate issue references in PR body", async () => {
+	it("should not duplicate cross-references if already linked", async () => {
 		// Mock tags
 		mockOctokit.rest.repos.listTags.mockResolvedValue({
 			data: [{ name: "v1.0.0", commit: { sha: "tag-sha" } }],
@@ -542,19 +573,54 @@ describe("link-issues-from-commits", () => {
 			},
 		});
 		mockOctokit.rest.issues.get.mockResolvedValue({
-			data: { number: 42, title: "Issue", state: "open", html_url: "https://github.com/test/issues/42" },
+			data: {
+				number: 42,
+				title: "Issue",
+				state: "open",
+				html_url: "https://github.com/test/issues/42",
+				node_id: "I_42",
+			},
 		});
 
-		// Mock PR that already has the issue referenced
+		// Mock PR associated with commit
 		mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({
-			data: [{ number: 109, node_id: "PR_123", body: "Release PR\n\nCloses #42" }],
+			data: [{ number: 109, title: "Release PR" }],
+		});
+
+		// Mock GraphQL timeline query (existing cross-reference found)
+		mockOctokit.graphql.mockResolvedValueOnce({
+			repository: {
+				issue: {
+					timelineItems: {
+						nodes: [
+							{
+								__typename: "CrossReferencedEvent",
+								source: {
+									__typename: "PullRequest",
+									number: 109,
+								},
+							},
+						],
+					},
+				},
+			},
 		});
 
 		await linkIssuesFromCommits();
 
-		// Verify GraphQL was NOT called since issue is already referenced
-		expect(mockOctokit.graphql).not.toHaveBeenCalled();
-		expect(core.info).toHaveBeenCalledWith("All issues already referenced in PR body");
+		// Verify timeline was queried
+		expect(mockOctokit.graphql).toHaveBeenCalledWith(
+			expect.stringContaining("timelineItems"),
+			expect.objectContaining({
+				issueNumber: 42,
+				prNumber: 109,
+			}),
+		);
+
+		// Verify addComment was NOT called since already linked
+		expect(mockOctokit.graphql).not.toHaveBeenCalledWith(expect.stringContaining("addComment"), expect.anything());
+		expect(core.info).toHaveBeenCalledWith("  Issue #42 already linked to PR #109");
+		expect(core.info).toHaveBeenCalledWith("All issues already linked to PR");
 	});
 
 	it("should skip linking in dry-run mode", async () => {
@@ -573,13 +639,23 @@ describe("link-issues-from-commits", () => {
 			},
 		});
 		mockOctokit.rest.issues.get.mockResolvedValue({
-			data: { number: 42, title: "Issue", state: "open", html_url: "https://github.com/test/issues/42" },
+			data: {
+				number: 42,
+				title: "Issue",
+				state: "open",
+				html_url: "https://github.com/test/issues/42",
+				node_id: "I_42",
+			},
 		});
 
 		await linkIssuesFromCommits();
 
 		// Verify PR lookup was NOT called in dry-run mode
 		expect(mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit).not.toHaveBeenCalled();
+		// Verify GraphQL timeline query was NOT called
+		expect(mockOctokit.graphql).not.toHaveBeenCalledWith(expect.stringContaining("timelineItems"), expect.anything());
+		// Verify addComment was NOT called
+		expect(mockOctokit.graphql).not.toHaveBeenCalledWith(expect.stringContaining("addComment"), expect.anything());
 	});
 
 	it("should handle missing PR gracefully", async () => {
@@ -593,7 +669,13 @@ describe("link-issues-from-commits", () => {
 			},
 		});
 		mockOctokit.rest.issues.get.mockResolvedValue({
-			data: { number: 42, title: "Issue", state: "open", html_url: "https://github.com/test/issues/42" },
+			data: {
+				number: 42,
+				title: "Issue",
+				state: "open",
+				html_url: "https://github.com/test/issues/42",
+				node_id: "I_42",
+			},
 		});
 
 		// Mock no PR found
@@ -604,6 +686,8 @@ describe("link-issues-from-commits", () => {
 		await linkIssuesFromCommits();
 
 		// Should not throw, just skip linking
-		expect(core.debug).toHaveBeenCalledWith("No PR found for current commit, skipping issue linking");
+		expect(core.warning).toHaveBeenCalledWith("No PR found for current commit, skipping issue linking");
+		// Verify GraphQL was NOT called when no PR exists
+		expect(mockOctokit.graphql).not.toHaveBeenCalled();
 	});
 });

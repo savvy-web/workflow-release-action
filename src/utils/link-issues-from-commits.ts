@@ -14,6 +14,8 @@ interface LinkedIssue {
 	state: string;
 	/** Issue URL */
 	url: string;
+	/** Issue node ID (for GraphQL mutations) */
+	node_id: string;
 	/** Commits that reference this issue */
 	commits: string[];
 }
@@ -155,7 +157,7 @@ async function getAllCommitsOnBranch(github: ReturnType<typeof getOctokit>, bran
 async function getLinkedIssuesFromPR(
 	github: ReturnType<typeof getOctokit>,
 	prNumber: number,
-): Promise<Array<{ number: number; title: string; state: string; url: string }>> {
+): Promise<Array<{ number: number; title: string; state: string; url: string; node_id: string }>> {
 	try {
 		const query = `
 			query ($owner: String!, $repo: String!, $prNumber: Int!) {
@@ -163,6 +165,7 @@ async function getLinkedIssuesFromPR(
 					pullRequest(number: $prNumber) {
 						closingIssuesReferences(first: 10) {
 							nodes {
+								id
 								number
 								title
 								state
@@ -178,7 +181,7 @@ async function getLinkedIssuesFromPR(
 			repository: {
 				pullRequest: {
 					closingIssuesReferences: {
-						nodes: Array<{ number: number; title: string; state: string; url: string }>;
+						nodes: Array<{ id: string; number: number; title: string; state: string; url: string }>;
 					};
 				};
 			};
@@ -188,7 +191,10 @@ async function getLinkedIssuesFromPR(
 			prNumber,
 		});
 
-		return result.repository.pullRequest.closingIssuesReferences.nodes;
+		return result.repository.pullRequest.closingIssuesReferences.nodes.map((node) => ({
+			...node,
+			node_id: node.id,
+		}));
 	} catch (error) {
 		debug(`Failed to get linked issues for PR #${prNumber}: ${error instanceof Error ? error.message : String(error)}`);
 		return [];
@@ -278,6 +284,7 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 					title: "", // Will be filled in later
 					state: "",
 					url: "",
+					node_id: "", // Will be filled in later
 					commits: [],
 				});
 			}
@@ -302,6 +309,7 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 						title: issue.title,
 						state: issue.state.toLowerCase(),
 						url: issue.url,
+						node_id: issue.node_id,
 						commits: [commit.sha],
 					});
 				} else {
@@ -311,6 +319,7 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 						existing.title = issue.title;
 						existing.state = issue.state.toLowerCase();
 						existing.url = issue.url;
+						existing.node_id = issue.node_id;
 						if (!existing.commits.includes(commit.sha)) {
 							existing.commits.push(commit.sha);
 						}
@@ -346,6 +355,7 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 				title: issueData.title,
 				state: issueData.state,
 				url: issueData.html_url,
+				node_id: issueData.node_id,
 				commits: issue.commits,
 			});
 
@@ -422,13 +432,18 @@ export async function linkIssuesFromCommits(): Promise<LinkIssuesResult> {
 }
 
 /**
- * Links issues to the current PR by updating the PR body
+ * Links issues to the current PR by adding comments to issues
+ *
+ * This creates cross-reference links without modifying PR or issue bodies.
  *
  * @param github - Authenticated Octokit instance
  * @param linkedIssues - Issues to link to the PR
  */
 async function linkIssuesToPR(github: ReturnType<typeof getOctokit>, linkedIssues: LinkedIssue[]): Promise<void> {
 	try {
+		startGroup("Linking issues to PR");
+		info(`Looking for PR associated with commit ${context.sha}`);
+
 		// Find the PR associated with the current commit
 		const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
 			owner: context.repo.owner,
@@ -436,66 +451,111 @@ async function linkIssuesToPR(github: ReturnType<typeof getOctokit>, linkedIssue
 			commit_sha: context.sha,
 		});
 
+		info(`Found ${prs.length} PR(s) associated with commit`);
+
 		if (prs.length === 0) {
-			debug("No PR found for current commit, skipping issue linking");
+			warning("No PR found for current commit, skipping issue linking");
+			endGroup();
 			return;
 		}
 
 		// Use the first PR (should be the release PR)
 		const pr = prs[0];
-		const currentBody = pr.body || "";
+		info(`Found PR #${pr.number}: ${pr.title}`);
 
-		// Check which issues are not already referenced in the PR body
-		const issueNumbersToAdd: number[] = [];
+		// For each linked issue, check if it already has a cross-reference to this PR
+		let linkedCount = 0;
 		for (const issue of linkedIssues) {
-			// Check if issue is already referenced (various formats)
-			const patterns = [
-				new RegExp(`closes\\s+#${issue.number}\\b`, "i"),
-				new RegExp(`fixes\\s+#${issue.number}\\b`, "i"),
-				new RegExp(`resolves\\s+#${issue.number}\\b`, "i"),
-				new RegExp(`#${issue.number}\\b`), // Simple reference
-			];
-
-			const alreadyReferenced = patterns.some((pattern) => pattern.test(currentBody));
-
-			if (!alreadyReferenced) {
-				issueNumbersToAdd.push(issue.number);
-			}
-		}
-
-		if (issueNumbersToAdd.length === 0) {
-			info("All issues already referenced in PR body");
-			return;
-		}
-
-		// Build the closing references section
-		const closingReferences = issueNumbersToAdd.map((num) => `Closes #${num}`).join("\n");
-
-		// Append to PR body (or create new body if empty)
-		const newBody = currentBody
-			? `${currentBody}\n\n## Linked Issues\n\n${closingReferences}`
-			: `## Linked Issues\n\n${closingReferences}`;
-
-		// Update PR body using GraphQL
-		const query = `
-			mutation ($pullRequestId: ID!, $body: String!) {
-				updatePullRequest(input: { pullRequestId: $pullRequestId, body: $body }) {
-					pullRequest {
-						id
-						number
-						body
+			try {
+				// Check if this issue already has a cross-reference to our PR
+				const timelineData = await github.graphql<{
+					repository: {
+						issue: {
+							timelineItems: {
+								nodes: Array<{
+									__typename: string;
+									source?: { __typename: string; number?: number };
+								}>;
+							};
+						};
+					};
+				}>(
+					`
+					query ($owner: String!, $repo: String!, $issueNumber: Int!, $prNumber: Int!) {
+						repository(owner: $owner, name: $repo) {
+							issue(number: $issueNumber) {
+								timelineItems(last: 50, itemTypes: CROSS_REFERENCED_EVENT) {
+									nodes {
+										__typename
+										... on CrossReferencedEvent {
+											source {
+												__typename
+												... on PullRequest {
+													number
+												}
+											}
+										}
+									}
+								}
+							}
+						}
 					}
+				`,
+					{
+						owner: context.repo.owner,
+						repo: context.repo.repo,
+						issueNumber: issue.number,
+						prNumber: pr.number,
+					},
+				);
+
+				// Check if PR is already cross-referenced
+				const alreadyLinked = timelineData.repository.issue.timelineItems.nodes.some(
+					(node) => node.source?.__typename === "PullRequest" && node.source.number === pr.number,
+				);
+
+				if (alreadyLinked) {
+					info(`  Issue #${issue.number} already linked to PR #${pr.number}`);
+					continue;
 				}
+
+				// Add comment to issue to create cross-reference
+				const commentBody = `🔗 Linked to release PR #${pr.number}`;
+
+				await github.graphql(
+					`
+					mutation ($subjectId: ID!, $body: String!) {
+						addComment(input: { subjectId: $subjectId, body: $body }) {
+							commentEdge {
+								node {
+									id
+								}
+							}
+						}
+					}
+				`,
+					{
+						subjectId: issue.node_id,
+						body: commentBody,
+					},
+				);
+
+				info(`  ✓ Added cross-reference comment to issue #${issue.number}`);
+				linkedCount++;
+			} catch (error) {
+				warning(`  Failed to link issue #${issue.number}: ${error instanceof Error ? error.message : String(error)}`);
 			}
-		`;
+		}
 
-		await github.graphql(query, {
-			pullRequestId: pr.node_id,
-			body: newBody,
-		});
+		if (linkedCount > 0) {
+			info(`✓ Successfully linked ${linkedCount} issue(s) to PR #${pr.number}`);
+		} else {
+			info("All issues already linked to PR");
+		}
 
-		info(`✓ Added ${issueNumbersToAdd.length} issue reference(s) to PR #${pr.number}`);
+		endGroup();
 	} catch (error) {
 		warning(`Failed to link issues to PR: ${error instanceof Error ? error.message : String(error)}`);
+		endGroup();
 	}
 }
