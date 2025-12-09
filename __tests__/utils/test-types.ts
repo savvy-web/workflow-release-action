@@ -17,6 +17,7 @@ export interface MockOctokit {
 			getRef: ReturnType<typeof vi.fn>;
 		};
 		repos: {
+			get: ReturnType<typeof vi.fn>;
 			getBranch: ReturnType<typeof vi.fn>;
 			compareCommits: ReturnType<typeof vi.fn>;
 			listPullRequestsAssociatedWithCommit: ReturnType<typeof vi.fn>;

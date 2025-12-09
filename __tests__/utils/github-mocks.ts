@@ -307,6 +307,7 @@ export function createMockOctokit(): MockOctokit {
 				get: vi.fn().mockResolvedValue({ data: { id: 12345, status: "in_progress", name: "Test Check" } }),
 			},
 			repos: {
+				get: vi.fn().mockResolvedValue({ data: { node_id: "test-repo-node-id" } }),
 				getBranch: vi.fn(),
 				compareCommits: vi.fn().mockResolvedValue({ data: { commits: [] } }),
 				listPullRequestsAssociatedWithCommit: vi.fn().mockResolvedValue({ data: [] }),

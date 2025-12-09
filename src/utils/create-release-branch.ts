@@ -220,6 +220,16 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 		info(`[DRY RUN] Would commit with message: ${commitMessage}`);
 	}
 
+	// Get repository node ID (needed for both branch linking and PR creation)
+	let repoNodeId = "";
+	if (!dryRun) {
+		const { data: repo } = await github.rest.repos.get({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+		});
+		repoNodeId = repo.node_id;
+	}
+
 	// Link branch to issues from commits (AFTER creating the final commit)
 	if (!dryRun && finalCommitSha) {
 		startGroup("Linking branch to issues");
@@ -228,12 +238,6 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 
 			if (linkedIssues.length > 0) {
 				info(`Found ${linkedIssues.length} issue(s) to link to branch`);
-
-				// Get repository ID for createLinkedBranch
-				const { data: repo } = await github.rest.repos.get({
-					owner: context.repo.owner,
-					repo: context.repo.repo,
-				});
 
 				// Link the branch to each issue using the final commit SHA
 				for (const issue of linkedIssues) {
@@ -257,7 +261,7 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 								issueId: issue.node_id,
 								name: releaseBranch,
 								oid: finalCommitSha,
-								repositoryId: repo.node_id,
+								repositoryId: repoNodeId,
 							},
 						);
 						info(`  ✓ Linked branch to issue #${issue.number}`);
@@ -305,25 +309,40 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 		});
 	}
 
-	prBodySections.push({
-		content: `---\n🤖 Generated with [GitHub Actions](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
-	});
-
 	const prBody = summaryWriter.build(prBodySections);
 
 	if (!dryRun) {
 		try {
-			const { data: pr } = await github.rest.pulls.create({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				title: prTitle,
-				head: releaseBranch,
-				base: targetBranch,
-				body: prBody,
-			});
+			// Create PR via GraphQL (preserves branch-issue links)
+			const prResult = (await github.graphql(
+				`
+				mutation ($repositoryId: ID!, $baseRefName: String!, $headRefName: String!, $title: String!, $body: String!) {
+					createPullRequest(input: {
+						repositoryId: $repositoryId
+						baseRefName: $baseRefName
+						headRefName: $headRefName
+						title: $title
+						body: $body
+					}) {
+						pullRequest {
+							number
+							url
+							id
+						}
+					}
+				}
+				`,
+				{
+					repositoryId: repoNodeId,
+					baseRefName: targetBranch,
+					headRefName: releaseBranch,
+					title: prTitle,
+					body: prBody,
+				},
+			)) as { createPullRequest: { pullRequest: { number: number; url: string; id: string } } };
 
-			prNumber = pr.number;
-			prUrl = pr.html_url;
+			prNumber = prResult.createPullRequest.pullRequest.number;
+			prUrl = prResult.createPullRequest.pullRequest.url;
 
 			// Add labels
 			await github.rest.issues.addLabels({
@@ -339,17 +358,36 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 			warning(`PR creation failed, retrying: ${error instanceof Error ? error.message : String(error)}`);
 			await new Promise((resolve) => setTimeout(resolve, 2000));
 
-			const { data: pr } = await github.rest.pulls.create({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				title: prTitle,
-				head: releaseBranch,
-				base: targetBranch,
-				body: prBody,
-			});
+			// Create PR via GraphQL (preserves branch-issue links)
+			const prResult = (await github.graphql(
+				`
+				mutation ($repositoryId: ID!, $baseRefName: String!, $headRefName: String!, $title: String!, $body: String!) {
+					createPullRequest(input: {
+						repositoryId: $repositoryId
+						baseRefName: $baseRefName
+						headRefName: $headRefName
+						title: $title
+						body: $body
+					}) {
+						pullRequest {
+							number
+							url
+							id
+						}
+					}
+				}
+				`,
+				{
+					repositoryId: repoNodeId,
+					baseRefName: targetBranch,
+					headRefName: releaseBranch,
+					title: prTitle,
+					body: prBody,
+				},
+			)) as { createPullRequest: { pullRequest: { number: number; url: string; id: string } } };
 
-			prNumber = pr.number;
-			prUrl = pr.html_url;
+			prNumber = prResult.createPullRequest.pullRequest.number;
+			prUrl = prResult.createPullRequest.pullRequest.url;
 
 			await github.rest.issues.addLabels({
 				owner: context.repo.owner,

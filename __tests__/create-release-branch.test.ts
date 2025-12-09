@@ -51,6 +51,18 @@ describe("create-release-branch", () => {
 		Object.defineProperty(core, "summary", { value: mockSummary, writable: true });
 
 		mockOctokit = createMockOctokit();
+
+		// Set default GraphQL mock for createPullRequest
+		mockOctokit.graphql.mockResolvedValue({
+			createPullRequest: {
+				pullRequest: {
+					number: 123,
+					url: "https://github.com/test/pull/123",
+					id: "test-pr-node-id",
+				},
+			},
+		});
+
 		vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
 		Object.defineProperty(vi.mocked(context), "repo", {
 			value: { owner: "test-owner", repo: "test-repo" },
@@ -82,12 +94,23 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
+		// Mock GraphQL createPullRequest mutation
+		mockOctokit.graphql.mockResolvedValue({
+			createPullRequest: {
+				pullRequest: {
+					number: 123,
+					url: "https://github.com/test/pull/123",
+					id: "test-pr-node-id",
+				},
+			},
+		});
+
 		const result = await createReleaseBranch();
 
 		expect(result.created).toBe(true);
 		expect(result.prNumber).toBe(123);
 		expect(result.checkId).toBe(12345);
-		expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+		expect(mockOctokit.graphql).toHaveBeenCalled();
 		expect(mockOctokit.rest.issues.addLabels).toHaveBeenCalledWith(
 			expect.objectContaining({
 				labels: ["automated", "release"],
@@ -125,7 +148,7 @@ describe("create-release-branch", () => {
 		expect(result.created).toBe(true);
 		expect(result.prNumber).toBeNull(); // No PR created in dry-run
 		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("[DRY RUN]"));
-		expect(mockOctokit.rest.pulls.create).not.toHaveBeenCalled();
+		expect(mockOctokit.graphql).not.toHaveBeenCalled();
 	});
 
 	it("should retry PR creation on failure", async () => {
@@ -140,10 +163,16 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		// First call fails, second succeeds
-		mockOctokit.rest.pulls.create
-			.mockRejectedValueOnce(new Error("API Error"))
-			.mockResolvedValueOnce({ data: { number: 456, html_url: "https://github.com/test/pull/456" } });
+		// First GraphQL call fails, second succeeds
+		mockOctokit.graphql.mockRejectedValueOnce(new Error("API Error")).mockResolvedValueOnce({
+			createPullRequest: {
+				pullRequest: {
+					number: 456,
+					url: "https://github.com/test/pull/456",
+					id: "test-pr-node-id",
+				},
+			},
+		});
 
 		const actionPromise = createReleaseBranch();
 		await vi.advanceTimersByTimeAsync(5000); // Advance past the 2s retry delay
@@ -151,7 +180,7 @@ describe("create-release-branch", () => {
 
 		expect(result.created).toBe(true);
 		expect(result.prNumber).toBe(456);
-		expect(mockOctokit.rest.pulls.create).toHaveBeenCalledTimes(2);
+		expect(mockOctokit.graphql).toHaveBeenCalledTimes(2);
 	});
 
 	it("should use npm command for npm package manager", async () => {
@@ -242,6 +271,9 @@ describe("create-release-branch", () => {
 			"test-token",
 			"changeset-release/main",
 			expect.stringContaining("chore: release"),
+			expect.objectContaining({
+				parentCommitSha: expect.any(String),
+			}),
 		);
 		// Verify git config is NOT called (we use API commits now)
 		expect(exec.exec).not.toHaveBeenCalledWith("git", ["config", "user.name", expect.any(String)]);
@@ -329,33 +361,5 @@ describe("create-release-branch", () => {
 
 		expect(caughtError).toBeInstanceOf(Error);
 		expect((caughtError as unknown as Error).message).toContain("ETIMEDOUT");
-	});
-
-	it("should retry on network errors for git push", async () => {
-		vi.useFakeTimers(); // Enable fake timers for retry test
-
-		let pushCallCount = 0;
-		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
-			if (cmd === "git" && args?.includes("push")) {
-				pushCallCount++;
-				if (pushCallCount === 1) {
-					throw new Error("ENOTFOUND: Could not resolve host");
-				}
-				return 0;
-			}
-			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from("M package.json\n"));
-				}
-			}
-			return 0;
-		});
-
-		const actionPromise = createReleaseBranch();
-		await vi.advanceTimersByTimeAsync(60000); // Advance time to cover all retries
-		const result = await actionPromise;
-
-		expect(result.created).toBe(true);
-		expect(pushCallCount).toBe(2);
 	});
 });
