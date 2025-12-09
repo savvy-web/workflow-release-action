@@ -150,6 +150,10 @@ async function getAllCommitsOnBranch(github: ReturnType<typeof getOctokit>, bran
 /**
  * Get linked issues from a merged PR using GraphQL API
  *
+ * This fetches ALL linked issues including:
+ * 1. Issues with closing keywords (Closes #N, Fixes #N)
+ * 2. Manually linked issues from the GitHub UI sidebar
+ *
  * @param github - Authenticated Octokit instance
  * @param prNumber - PR number
  * @returns Array of linked issues
@@ -163,7 +167,18 @@ async function getLinkedIssuesFromPR(
 			query ($owner: String!, $repo: String!, $prNumber: Int!) {
 				repository(owner: $owner, name: $repo) {
 					pullRequest(number: $prNumber) {
-						closingIssuesReferences(first: 10) {
+						# Get ALL linked issues (both closing keywords and manually linked)
+						allLinked: closingIssuesReferences(first: 50) {
+							nodes {
+								id
+								number
+								title
+								state
+								url
+							}
+						}
+						# Get only manually linked issues (linked via UI sidebar)
+						manuallyLinked: closingIssuesReferences(first: 50, userLinkedOnly: true) {
 							nodes {
 								id
 								number
@@ -180,7 +195,10 @@ async function getLinkedIssuesFromPR(
 		const result: {
 			repository: {
 				pullRequest: {
-					closingIssuesReferences: {
+					allLinked: {
+						nodes: Array<{ id: string; number: number; title: string; state: string; url: string }>;
+					};
+					manuallyLinked: {
 						nodes: Array<{ id: string; number: number; title: string; state: string; url: string }>;
 					};
 				};
@@ -191,12 +209,31 @@ async function getLinkedIssuesFromPR(
 			prNumber,
 		});
 
-		return result.repository.pullRequest.closingIssuesReferences.nodes.map((node) => ({
-			...node,
-			node_id: node.id,
-		}));
+		const issuesMap = new Map<number, { number: number; title: string; state: string; url: string; node_id: string }>();
+
+		// Add all linked issues (this includes both closing keywords and manually linked)
+		for (const node of result.repository.pullRequest.allLinked.nodes) {
+			issuesMap.set(node.number, {
+				...node,
+				node_id: node.id,
+			});
+		}
+
+		// Ensure manually linked issues are included (should already be in allLinked, but being explicit)
+		for (const node of result.repository.pullRequest.manuallyLinked.nodes) {
+			if (!issuesMap.has(node.number)) {
+				issuesMap.set(node.number, {
+					...node,
+					node_id: node.id,
+				});
+			}
+		}
+
+		return Array.from(issuesMap.values());
 	} catch (error) {
-		debug(`Failed to get linked issues for PR #${prNumber}: ${error instanceof Error ? error.message : String(error)}`);
+		warning(
+			`Failed to get linked issues for PR #${prNumber}: ${error instanceof Error ? error.message : String(error)}`,
+		);
 		return [];
 	}
 }
