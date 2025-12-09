@@ -27,7 +27,6 @@ import { detectRepoType } from "./utils/detect-repo-type.js";
 import type { WorkflowPhase } from "./utils/detect-workflow-phase.js";
 import { detectWorkflowPhase } from "./utils/detect-workflow-phase.js";
 import { determineReleaseType, determineTagStrategy } from "./utils/determine-tag-strategy.js";
-import { CLAUDE_DESCRIPTION_MARKER, generatePRDescriptionDirect } from "./utils/generate-pr-description.js";
 import {
 	generateBuildFailureSummary,
 	generatePreValidationFailureSummary,
@@ -53,8 +52,6 @@ interface Inputs {
 	packageManager: string;
 	dryRun: boolean;
 	phase?: WorkflowPhase;
-	anthropicApiKey?: string;
-	claudeReviewPat?: string;
 }
 
 /**
@@ -70,7 +67,6 @@ interface Inputs {
  *
  * **Phase 2: Release Validation** (on release branch)
  * - Link issues from commits
- * - Generate PR description with Claude
  * - Validate builds
  * - Validate publishing (multi-registry: NPM, GitHub Packages, JSR, custom)
  * - Generate release notes preview
@@ -117,12 +113,6 @@ async function run(): Promise<void> {
 
 			// Explicit phase (optional, skips automatic detection)
 			phase: (getInput("phase") as WorkflowPhase) || undefined,
-
-			// Anthropic API key for Claude (optional, for PR description generation)
-			anthropicApiKey: getInput("anthropic-api-key"),
-
-			// GitHub PAT for operations requiring user context (optional)
-			claudeReviewPat: getInput("claude-review-pat"),
 		};
 
 		debug(`Inputs: ${JSON.stringify({ ...inputs, token: "[REDACTED]" }, null, 2)}`);
@@ -217,8 +207,6 @@ async function runPhase1BranchManagement(inputs: {
 	targetBranch: string;
 	packageManager: string;
 	dryRun: boolean;
-	anthropicApiKey?: string;
-	claudeReviewPat?: string;
 }): Promise<void> {
 	try {
 		logger.step(1, "Detect Publishable Changes");
@@ -284,13 +272,11 @@ async function runPhase1BranchManagement(inputs: {
  * @remarks
  * Runs on push to release branch:
  * 1. Link issues from commits
- * 2. Generate PR description
- * 3. Validate builds
- * 4. Validate NPM publish
- * 5. Validate GitHub Packages publish
- * 6. Create validation check
- * 7. Update sticky comment
- * 8. Generate release notes preview
+ * 2. Validate builds
+ * 3. Validate publishing (multi-registry)
+ * 4. Generate release notes preview
+ * 5. Create validation check
+ * 6. Update sticky comment
  */
 async function runPhase2Validation(inputs: Inputs): Promise<void> {
 	const octokit = getOctokit(inputs.token);
@@ -335,13 +321,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 	endGroup();
 
 	const checkIds: number[] = [];
-	const checkNames = [
-		"Link Issues from Commits",
-		"Generate PR Description",
-		"Build Validation",
-		"Publish Validation",
-		"Release Notes Preview",
-	];
+	const checkNames = ["Link Issues from Commits", "Build Validation", "Publish Validation", "Release Notes Preview"];
 
 	try {
 		// Create all validation checks upfront for immediate visibility
@@ -381,122 +361,13 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		logger.endStep();
 
-		// Step 2: Generate PR description
-		logger.step(2, "Generate PR Description");
+		// Step 2: Validate builds
+		logger.step(2, "Validate Builds");
 
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
 			check_run_id: checkIds[1],
-			status: "in_progress",
-		});
-
-		// Find the PR for the release branch to get PR number
-		const { data: prs } = await octokit.rest.pulls.list({
-			owner: context.repo.owner,
-			repo: context.repo.repo,
-			state: "open",
-			head: `${context.repo.owner}:${inputs.releaseBranch}`,
-			base: inputs.targetBranch,
-		});
-
-		if (prs.length > 0 && inputs.anthropicApiKey) {
-			const pr = prs[0];
-
-			// Check if PR already has a Claude-generated description
-			if (pr.body?.includes(CLAUDE_DESCRIPTION_MARKER)) {
-				logger.info(`PR #${pr.number} already has a Claude-generated description, skipping regeneration`);
-				await octokit.rest.checks.update({
-					owner: context.repo.owner,
-					repo: context.repo.repo,
-					check_run_id: checkIds[1],
-					status: "completed",
-					conclusion: "skipped",
-					output: {
-						title: "Skipped",
-						summary: "PR already has a Claude-generated description",
-					},
-				});
-			} else {
-				logger.info(`Found release PR #${pr.number}, generating description with Claude`);
-
-				try {
-					const descResult = await generatePRDescriptionDirect(
-						inputs.token,
-						issuesResult.linkedIssues,
-						issuesResult.commits,
-						pr.number,
-						inputs.anthropicApiKey,
-						inputs.dryRun,
-					);
-
-					setOutput("pr_description", descResult.description);
-					logger.success(`Generated PR description (${descResult.description.length} characters)`);
-
-					await octokit.rest.checks.update({
-						owner: context.repo.owner,
-						repo: context.repo.repo,
-						check_run_id: checkIds[1],
-						status: "completed",
-						conclusion: "success",
-						output: {
-							title: "PR Description Generated",
-							summary: `Generated ${descResult.description.length} character description with Claude`,
-						},
-					});
-				} catch (descError) {
-					logger.warn(
-						`Failed to generate PR description: ${descError instanceof Error ? descError.message : String(descError)}`,
-					);
-					await octokit.rest.checks.update({
-						owner: context.repo.owner,
-						repo: context.repo.repo,
-						check_run_id: checkIds[1],
-						status: "completed",
-						conclusion: "neutral",
-						output: {
-							title: "PR Description Generation Failed",
-							summary: descError instanceof Error ? descError.message : String(descError),
-						},
-					});
-				}
-			}
-		} else if (!inputs.anthropicApiKey) {
-			logger.info("Anthropic API key not provided, skipping PR description generation");
-			await octokit.rest.checks.update({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				check_run_id: checkIds[1],
-				status: "completed",
-				conclusion: "skipped",
-				output: {
-					title: "Skipped",
-					summary: "Anthropic API key not provided",
-				},
-			});
-		} else {
-			logger.warn("No open PR found for release branch, skipping PR description generation");
-			await octokit.rest.checks.update({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				check_run_id: checkIds[1],
-				status: "completed",
-				conclusion: "skipped",
-				output: {
-					title: "Skipped",
-					summary: "No open PR found for release branch",
-				},
-			});
-		}
-		logger.endStep();
-
-		// Step 3: Validate builds
-		logger.step(3, "Validate Builds");
-
-		await octokit.rest.checks.update({
-			owner: context.repo.owner,
-			repo: context.repo.repo,
-			check_run_id: checkIds[2],
 			status: "in_progress",
 		});
 
@@ -509,7 +380,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
-			check_run_id: checkIds[2],
+			check_run_id: checkIds[1],
 			status: "completed",
 			conclusion: buildResult.success ? "success" : "failure",
 			output: {
@@ -541,13 +412,13 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		// Only continue with publish validation if builds passed
 		if (buildResult.success) {
-			// Step 4: Validate publishing (multi-registry)
-			logger.step(4, "Validate Publishing");
+			// Step 3: Validate publishing (multi-registry)
+			logger.step(3, "Validate Publishing");
 
 			await octokit.rest.checks.update({
 				owner: context.repo.owner,
 				repo: context.repo.repo,
-				check_run_id: checkIds[3],
+				check_run_id: checkIds[2],
 				status: "in_progress",
 			});
 
@@ -571,7 +442,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			await octokit.rest.checks.update({
 				owner: context.repo.owner,
 				repo: context.repo.repo,
-				check_run_id: checkIds[3],
+				check_run_id: checkIds[2],
 				status: "completed",
 				conclusion,
 				output: {
@@ -588,7 +459,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			await octokit.rest.checks.update({
 				owner: context.repo.owner,
 				repo: context.repo.repo,
-				check_run_id: checkIds[3],
+				check_run_id: checkIds[2],
 				status: "completed",
 				conclusion: "skipped",
 				output: {
@@ -598,13 +469,13 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			});
 		}
 
-		// Step 5: Generate release notes preview
-		logger.step(5, "Generate Release Notes Preview");
+		// Step 4: Generate release notes preview
+		logger.step(4, "Generate Release Notes Preview");
 
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
-			check_run_id: checkIds[4],
+			check_run_id: checkIds[3],
 			status: "in_progress",
 		});
 
@@ -614,7 +485,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 		await octokit.rest.checks.update({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
-			check_run_id: checkIds[4],
+			check_run_id: checkIds[3],
 			status: "completed",
 			conclusion: "success",
 			output: {
@@ -625,8 +496,8 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		logger.endStep();
 
-		// Step 6: Create unified validation check
-		logger.step(6, "Create Unified Validation Check");
+		// Step 5: Create unified validation check
+		logger.step(5, "Create Unified Validation Check");
 
 		const validationResults = [
 			{
@@ -637,29 +508,23 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			},
 			{
 				name: checkNames[1],
-				success: true,
-				checkId: checkIds[1],
-				outcome: inputs.anthropicApiKey ? "Description generated" : "Skipped",
-			},
-			{
-				name: checkNames[2],
 				success: buildResult.success,
-				checkId: checkIds[2],
+				checkId: checkIds[1],
 				outcome: buildResult.success ? "Build passed" : "Build failed",
 			},
 			{
-				name: checkNames[3],
+				name: checkNames[2],
 				success: buildResult.success && publishResult.success,
-				checkId: checkIds[3],
+				checkId: checkIds[2],
 				outcome:
 					publishResult.totalTargets === 0
 						? "No targets"
 						: `${publishResult.readyTargets}/${publishResult.totalTargets} target(s) ready`,
 			},
 			{
-				name: checkNames[4],
+				name: checkNames[3],
 				success: true,
-				checkId: checkIds[4],
+				checkId: checkIds[3],
 				outcome: `${releaseNotesResult.packages.length} package(s) ready`,
 			},
 		];
@@ -668,8 +533,8 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		logger.endStep();
 
-		// Step 7: Update sticky comment on PR
-		logger.step(7, "Update Sticky Comment");
+		// Step 6: Update sticky comment on PR
+		logger.step(6, "Update Sticky Comment");
 
 		try {
 			// Find the PR for the release branch
@@ -732,7 +597,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 					commentSections.push({
 						heading: "📋 Release Notes Preview",
 						level: 3,
-						content: `[View detailed release notes →](${getCheckUrl(checkIds[4])})`,
+						content: `[View detailed release notes →](${getCheckUrl(checkIds[3])})`,
 					});
 				}
 

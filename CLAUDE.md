@@ -50,12 +50,11 @@ The action implements a **three-phase release workflow** that triggers based on 
 **Triggers:** Push to `changeset-release/main` branch
 
 1. **Link Issues from Commits** - Extracts issue references from commit messages for release notes
-2. **Generate PR Description** - Uses Claude (optional) to generate a human-readable release summary
-3. **Validate Builds** - Runs `pnpm build` to ensure all packages compile successfully
-4. **Validate Publishing** - Performs dry-run publish to each configured registry (NPM, JSR, GitHub Packages, custom)
-5. **Generate Release Notes Preview** - Creates preview of CHANGELOG entries that will be created
-6. **Create Validation Check** - Unified check run showing all validation results
-7. **Update Sticky Comment** - Posts/updates a summary comment on the release PR
+2. **Validate Builds** - Runs `pnpm build` to ensure all packages compile successfully
+3. **Validate Publishing** - Performs dry-run publish to each configured registry (NPM, JSR, GitHub Packages, custom)
+4. **Generate Release Notes Preview** - Creates preview of CHANGELOG entries that will be created
+5. **Create Validation Check** - Unified check run showing all validation results
+6. **Update Sticky Comment** - Posts/updates a summary comment on the release PR
 
 #### Phase 3: Release Publishing
 
@@ -129,8 +128,6 @@ jobs:
         uses: savvy-web/workflow-release-action@main
         with:
           token: ${{ steps.app-token.outputs.token }}
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude-review-pat: ${{ secrets.CLAUDE_REVIEW_PAT }}
           dry-run: ${{ inputs.dry_run || 'false' }}
           registry-tokens: |
             https://npm.savvyweb.dev/=${{ steps.app-token.outputs.token }}
@@ -148,8 +145,6 @@ jobs:
 | `pr-title-prefix` | No | `chore: release` | Prefix for release PR titles |
 | `dry-run` | No | `false` | Run in dry-run mode (preview only) |
 | `registry-tokens` | No | - | Custom registry tokens (one per line: `registry=token`) |
-| `anthropic-api-key` | No | - | Anthropic API key for Claude PR description generation |
-| `claude-review-pat` | No | - | GitHub PAT for operations requiring user context |
 
 ### Authentication Model
 

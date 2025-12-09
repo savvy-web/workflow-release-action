@@ -79,16 +79,6 @@ inputs:
     required: false
     default: ""
 
-  # Optional inputs
-  anthropic-api-key:
-    description: Anthropic API key for Claude PR description generation
-    required: false
-    default: ""
-  claude-review-pat:
-    description: GitHub PAT for operations requiring user context
-    required: false
-    default: ""
-
 outputs:
   # Token outputs (when using app-id/private-key)
   token:
@@ -121,8 +111,6 @@ outputs:
   # Phase 2: Validation outputs
   linked_issues:
     description: JSON array of linked issues
-  pr_description:
-    description: Generated PR description
   builds_passed:
     description: Whether all builds passed
   npm_publish_ready:

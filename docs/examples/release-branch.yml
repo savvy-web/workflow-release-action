@@ -91,5 +91,3 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           dry-run: ${{ inputs.dry_run || 'false' }}
-          # Optional: Enable Claude PR description generation
-          # anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
