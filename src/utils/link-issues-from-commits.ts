@@ -288,15 +288,18 @@ export async function getLinkedIssuesFromCommits(
 
 	// Second pass: Check for merged PRs and get their linked issues via GraphQL
 	info("Checking merged PRs for linked issues...");
+	let prCount = 0;
 	for (const commit of commits) {
 		const prNumber = extractPRNumber(commit.message);
 		if (prNumber) {
-			debug(`Commit ${commit.sha.slice(0, 7)} is a merge from PR #${prNumber}`);
+			prCount++;
+			info(`  Commit ${commit.sha.slice(0, 7)}: "${commit.message.split("\n")[0]}" -> PR #${prNumber}`);
 
 			const linkedIssues = await getLinkedIssuesFromPR(github, prNumber);
-			debug(`PR #${prNumber} has ${linkedIssues.length} linked issue(s)`);
+			info(`  PR #${prNumber} has ${linkedIssues.length} linked issue(s)`);
 
 			for (const issue of linkedIssues) {
+				info(`    - Issue #${issue.number}: ${issue.title}`);
 				if (!issueMap.has(issue.number)) {
 					issueMap.set(issue.number, {
 						number: issue.number,
@@ -322,6 +325,7 @@ export async function getLinkedIssuesFromCommits(
 			}
 		}
 	}
+	info(`Found ${prCount} PR merge commit(s) to check`);
 
 	info(`Found ${issueMap.size} unique issue reference(s)`);
 
