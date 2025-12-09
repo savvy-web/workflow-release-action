@@ -117,6 +117,8 @@ async function getFileMode(filePath: string): Promise<GitFileMode> {
 interface CreateApiCommitOptions {
 	/** Branch to use as parent for the commit (defaults to targetBranch) */
 	parentBranch?: string;
+	/** Parent commit SHA to use (avoids API call to get ref) */
+	parentCommitSha?: string;
 	/** Whether to force update the ref (for rebasing onto different parent) */
 	force?: boolean;
 }
@@ -164,13 +166,19 @@ export async function createApiCommit(
 	info(`Found ${changedFiles.length} changed file(s)`);
 	debug(`Changed files: ${JSON.stringify(changedFiles, null, 2)}`);
 
-	// Get the parent commit from the specified parent branch
-	const { data: refData } = await octokit.rest.git.getRef({
-		owner,
-		repo,
-		ref: `heads/${parentBranch}`,
-	});
-	const parentCommitSha = refData.object.sha;
+	// Get the parent commit SHA - either from options or from the specified parent branch
+	let parentCommitSha: string;
+	if (options.parentCommitSha) {
+		parentCommitSha = options.parentCommitSha;
+		info(`Using provided parent commit SHA: ${parentCommitSha}`);
+	} else {
+		const { data: refData } = await octokit.rest.git.getRef({
+			owner,
+			repo,
+			ref: `heads/${parentBranch}`,
+		});
+		parentCommitSha = refData.object.sha;
+	}
 
 	// Get the parent commit's tree
 	const { data: parentCommit } = await octokit.rest.git.getCommit({
@@ -232,16 +240,32 @@ export async function createApiCommit(
 	});
 	info(`Created commit: ${newCommit.sha}`);
 
-	// Update the branch ref
-	info(`Updating ref heads/${branch}${force ? " (force)" : ""}...`);
-	await octokit.rest.git.updateRef({
-		owner,
-		repo,
-		ref: `heads/${branch}`,
-		sha: newCommit.sha,
-		force,
-	});
-	info(`✓ Updated branch ${branch} to ${newCommit.sha}`);
+	// Update or create the branch ref
+	try {
+		info(`Updating ref heads/${branch}${force ? " (force)" : ""}...`);
+		await octokit.rest.git.updateRef({
+			owner,
+			repo,
+			ref: `heads/${branch}`,
+			sha: newCommit.sha,
+			force,
+		});
+		info(`✓ Updated branch ${branch} to ${newCommit.sha}`);
+	} catch (error) {
+		// If ref doesn't exist, create it
+		if ((error as { status?: number }).status === 422 || (error as { status?: number }).status === 404) {
+			info(`Ref heads/${branch} doesn't exist, creating it...`);
+			await octokit.rest.git.createRef({
+				owner,
+				repo,
+				ref: `refs/heads/${branch}`,
+				sha: newCommit.sha,
+			});
+			info(`✓ Created branch ${branch} at ${newCommit.sha}`);
+		} else {
+			throw error;
+		}
+	}
 
 	endGroup();
 

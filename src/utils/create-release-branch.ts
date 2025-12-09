@@ -189,17 +189,39 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 	info("Version changes:");
 	info(versionSummary);
 
-	// Push the branch first (with no commits yet) so the ref exists
-	info(`Pushing branch '${releaseBranch}' to origin`);
+	// Get the current local commit SHA to use as parent for the API commit
+	let parentSha = "";
 	if (!dryRun) {
-		// Push the branch to create the remote ref
-		await execWithRetry("git", ["push", "-u", "origin", releaseBranch]);
-	} else {
-		info(`[DRY RUN] Would push branch: ${releaseBranch}`);
+		await exec("git", ["rev-parse", "HEAD"], {
+			listeners: {
+				stdout: (data: Buffer) => {
+					parentSha += data.toString().trim();
+				},
+			},
+		});
+		info(`Current HEAD: ${parentSha}`);
 	}
 
-	// Link branch to issues from commits
+	// Create commit via GitHub API (automatically signed and attributed to GitHub App)
+	const commitMessage = `${prTitlePrefix}\n\nVersion bump from changesets`;
+	let finalCommitSha = "";
 	if (!dryRun) {
+		info("Creating verified commit via GitHub API...");
+		const commitResult = await createApiCommit(token, releaseBranch, commitMessage, {
+			parentCommitSha: parentSha,
+		});
+		if (!commitResult.created) {
+			warning("No changes to commit via API");
+		} else {
+			info(`✓ Created verified commit: ${commitResult.sha}`);
+			finalCommitSha = commitResult.sha;
+		}
+	} else {
+		info(`[DRY RUN] Would commit with message: ${commitMessage}`);
+	}
+
+	// Link branch to issues from commits (AFTER creating the final commit)
+	if (!dryRun && finalCommitSha) {
 		startGroup("Linking branch to issues");
 		try {
 			const { linkedIssues } = await getLinkedIssuesFromCommits(github, targetBranch);
@@ -207,19 +229,13 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 			if (linkedIssues.length > 0) {
 				info(`Found ${linkedIssues.length} issue(s) to link to branch`);
 
-				// Get repository ID and commit SHA for createLinkedBranch
+				// Get repository ID for createLinkedBranch
 				const { data: repo } = await github.rest.repos.get({
 					owner: context.repo.owner,
 					repo: context.repo.repo,
 				});
 
-				const { data: branchRef } = await github.rest.git.getRef({
-					owner: context.repo.owner,
-					repo: context.repo.repo,
-					ref: `heads/${releaseBranch}`,
-				});
-
-				// Link the branch to each issue
+				// Link the branch to each issue using the final commit SHA
 				for (const issue of linkedIssues) {
 					try {
 						await github.graphql(
@@ -240,7 +256,7 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 							{
 								issueId: issue.node_id,
 								name: releaseBranch,
-								oid: branchRef.object.sha,
+								oid: finalCommitSha,
 								repositoryId: repo.node_id,
 							},
 						);
@@ -260,22 +276,10 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 			warning(`Failed to link branch to issues: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		endGroup();
+	} else if (!dryRun && !finalCommitSha) {
+		info("No final commit SHA available, skipping branch linking");
 	} else {
 		info("[DRY RUN] Would link branch to issues from commits");
-	}
-
-	// Create commit via GitHub API (automatically signed and attributed to GitHub App)
-	const commitMessage = `${prTitlePrefix}\n\nVersion bump from changesets`;
-	if (!dryRun) {
-		info("Creating verified commit via GitHub API...");
-		const commitResult = await createApiCommit(token, releaseBranch, commitMessage);
-		if (!commitResult.created) {
-			warning("No changes to commit via API");
-		} else {
-			info(`✓ Created verified commit: ${commitResult.sha}`);
-		}
-	} else {
-		info(`[DRY RUN] Would commit with message: ${commitMessage}`);
 	}
 
 	endGroup();
