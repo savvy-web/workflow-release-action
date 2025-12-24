@@ -119,7 +119,7 @@ function getPackCommand(packageManager: string): { cmd: string; args: string[] }
 			// yarn dlx is for yarn 2+, yarn 1.x uses npx
 			return { cmd: "yarn", args: ["dlx", "npm", "pack", "--json"] };
 		case "bun":
-			return { cmd: "bunx", args: ["npm", "pack", "--json"] };
+			return { cmd: "bun", args: ["x", "npm", "pack", "--json"] };
 		default:
 			// npm uses npx
 			return { cmd: "npx", args: ["npm", "pack", "--json"] };

@@ -170,7 +170,7 @@ describe("create-attestation", () => {
 			expect(exec.exec).toHaveBeenCalledWith("yarn", ["npm", "pack", "--json"], expect.any(Object));
 		});
 
-		it("uses bunx npm for tarball creation with bun", async () => {
+		it("uses bun x npm for tarball creation with bun", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 			let existsCallCount = 0;
 			vi.mocked(fs.existsSync).mockImplementation((path) => {
@@ -196,11 +196,11 @@ describe("create-attestation", () => {
 				tlogID: "67890",
 			});
 
-			// Use bun as package manager, which uses bunx npm
+			// Use bun as package manager, which uses bun x npm
 			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false, "bun");
 
 			expect(result.success).toBe(true);
-			expect(exec.exec).toHaveBeenCalledWith("bunx", ["npm", "pack", "--json"], expect.any(Object));
+			expect(exec.exec).toHaveBeenCalledWith("bun", ["x", "npm", "pack", "--json"], expect.any(Object));
 		});
 
 		it("finds tarball with scoped package name", async () => {

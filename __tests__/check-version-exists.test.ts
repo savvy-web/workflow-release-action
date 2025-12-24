@@ -163,8 +163,8 @@ describe("checkVersionExists", () => {
 		await checkVersionExists("@savvy-web/pkg", "1.0.0", "https://registry.npmjs.org/", "bun");
 
 		expect(exec.exec).toHaveBeenCalledWith(
-			"bunx",
-			["npm", "view", "@savvy-web/pkg@1.0.0", "--json", "--registry", "https://registry.npmjs.org/"],
+			"bun",
+			["x", "npm", "view", "@savvy-web/pkg@1.0.0", "--json", "--registry", "https://registry.npmjs.org/"],
 			expect.any(Object),
 		);
 	});
