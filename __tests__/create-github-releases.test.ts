@@ -115,7 +115,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
 			expect(createReleaseCall.body).toContain("Added new feature");
@@ -165,7 +165,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
 			expect(createReleaseCall.body).toContain("Removed deprecated API");
@@ -208,7 +208,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
 			expect(createReleaseCall.body).toContain("Released version 3.0.0");
@@ -256,7 +256,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
 			// Should trim leading empty lines but preserve content
@@ -269,7 +269,7 @@ describe("create-github-releases", () => {
 			const tags: TagInfo[] = [];
 			const publishResults: PackagePublishResult[] = [];
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			expect(result.success).toBe(true);
 			expect(result.releases).toHaveLength(0);
@@ -286,7 +286,7 @@ describe("create-github-releases", () => {
 			];
 			const publishResults: PackagePublishResult[] = [];
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			expect(core.warning).toHaveBeenCalledWith("No packages found for tag v1.0.0");
 			expect(result.releases).toHaveLength(0);
@@ -324,7 +324,7 @@ describe("create-github-releases", () => {
 
 			vi.mocked(exec.exec).mockResolvedValue(0);
 
-			const result = await createGitHubReleases(tags, publishResults, true);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", true);
 
 			expect(result.success).toBe(true);
 			expect(result.createdTags).toContain("v1.0.0");
@@ -374,7 +374,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			expect(result.success).toBe(true);
 			expect(result.createdTags).toContain("v2.0.0");
@@ -410,7 +410,7 @@ describe("create-github-releases", () => {
 				return 0;
 			});
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			expect(result.success).toBe(false);
 			expect(result.errors).toContain("Failed to create tag v1.0.0");
@@ -435,7 +435,7 @@ describe("create-github-releases", () => {
 			vi.mocked(exec.exec).mockResolvedValue(0);
 			mockOctokit.rest.repos.createRelease.mockRejectedValue(new Error("API error"));
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			expect(result.success).toBe(false);
 			expect(result.errors[0]).toContain("Failed to create release for v1.0.0");
@@ -480,7 +480,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
 			expect(createReleaseCall.body).toContain("Published to:");
@@ -528,7 +528,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
 			expect(createReleaseCall.body).toContain("GitHub attestation");
@@ -559,7 +559,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
 			expect(createReleaseCall.prerelease).toBe(true);
@@ -594,7 +594,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			expect(result.success).toBe(true);
 			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
@@ -655,7 +655,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			expect(result.releases[0].assets).toHaveLength(1);
 			expect(result.releases[0].assets[0].name).toBe("org-pkg-a-1.0.0.tgz");
@@ -714,7 +714,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			expect(packCalled).toBe(true);
 			expect(result.releases[0].assets).toHaveLength(1);
@@ -757,7 +757,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			// Should still create release even if npm pack fails
 			expect(result.success).toBe(true);
@@ -821,7 +821,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			expect(packCmd).toBe("pnpm");
 			expect(packArgs).toEqual(["dlx", "npm", "pack", "--json"]);
@@ -883,7 +883,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "yarn", false);
 
 			expect(packCmd).toBe("yarn");
 			expect(packArgs).toEqual(["dlx", "npm", "pack", "--json"]);
@@ -945,7 +945,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "bun", false);
 
 			expect(packCmd).toBe("bunx");
 			expect(packArgs).toEqual(["npm", "pack", "--json"]);
@@ -1007,7 +1007,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "npm", false);
 
 			expect(packCmd).toBe("npx");
 			expect(packArgs).toEqual(["npm", "pack", "--json"]);
@@ -1045,7 +1045,7 @@ describe("create-github-releases", () => {
 			});
 			mockOctokit.rest.repos.uploadReleaseAsset.mockRejectedValue(new Error("Upload failed"));
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			// Release should still succeed even if asset upload fails
 			expect(result.success).toBe(true);
@@ -1084,7 +1084,7 @@ describe("create-github-releases", () => {
 				},
 			});
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			// Release should still succeed, but with no assets
 			expect(result.success).toBe(true);
@@ -1108,7 +1108,7 @@ describe("create-github-releases", () => {
 			];
 			const publishResults: PackagePublishResult[] = [];
 
-			await expect(createGitHubReleases(tags, publishResults, false)).rejects.toThrow(
+			await expect(createGitHubReleases(tags, publishResults, "pnpm", false)).rejects.toThrow(
 				"No token available from state - ensure pre.ts ran successfully",
 			);
 		});
@@ -1161,7 +1161,7 @@ describe("create-github-releases", () => {
 				attestationUrl: "https://github.com/test-owner/test-repo/attestations/asset-123",
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			expect(core.info).toHaveBeenCalledWith(
 				"  ✓ Created attestation: https://github.com/test-owner/test-repo/attestations/asset-123",
@@ -1215,7 +1215,7 @@ describe("create-github-releases", () => {
 				attestationUrl: "https://github.com/test-owner/test-repo/attestations/asset-123",
 			});
 
-			await createGitHubReleases(tags, publishResults, false);
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			// Verify updateRelease was called with attestation info
 			expect(mockOctokit.rest.repos.updateRelease).toHaveBeenCalledWith(
@@ -1277,7 +1277,7 @@ describe("create-github-releases", () => {
 				attestationUrl: "https://github.com/test-owner/test-repo/attestations/asset-123",
 			});
 
-			const result = await createGitHubReleases(tags, publishResults, false);
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			// Should still succeed even if update fails
 			expect(result.success).toBe(true);

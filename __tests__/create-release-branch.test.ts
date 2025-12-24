@@ -110,7 +110,7 @@ describe("create-release-branch", () => {
 			},
 		});
 
-		const result = await createReleaseBranch();
+		const result = await createReleaseBranch("pnpm");
 
 		expect(result.created).toBe(true);
 		expect(result.prNumber).toBe(123);
@@ -134,7 +134,7 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		const result = await createReleaseBranch();
+		const result = await createReleaseBranch("pnpm");
 
 		expect(result.created).toBe(false);
 		expect(result.prNumber).toBeNull();
@@ -148,7 +148,7 @@ describe("create-release-branch", () => {
 			return false;
 		});
 
-		const result = await createReleaseBranch();
+		const result = await createReleaseBranch("pnpm");
 
 		expect(result.created).toBe(true);
 		expect(result.prNumber).toBeNull(); // No PR created in dry-run
@@ -179,7 +179,7 @@ describe("create-release-branch", () => {
 			},
 		});
 
-		const actionPromise = createReleaseBranch();
+		const actionPromise = createReleaseBranch("pnpm");
 		await vi.advanceTimersByTimeAsync(5000); // Advance past the 2s retry delay
 		const result = await actionPromise;
 
@@ -208,7 +208,7 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		await createReleaseBranch();
+		await createReleaseBranch("npm");
 
 		expect(exec.exec).toHaveBeenCalledWith("npm", ["run", "ci:version"], expect.any(Object));
 	});
@@ -233,7 +233,7 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		await createReleaseBranch();
+		await createReleaseBranch("yarn");
 
 		expect(exec.exec).toHaveBeenCalledWith("yarn", ["ci:version"], expect.any(Object));
 	});
@@ -254,7 +254,7 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		await createReleaseBranch();
+		await createReleaseBranch("pnpm");
 
 		expect(exec.exec).toHaveBeenCalledWith("turbo run version", ["turbo", "run", "version"], expect.any(Object));
 	});
@@ -269,7 +269,7 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		await createReleaseBranch();
+		await createReleaseBranch("pnpm");
 
 		// Verify createApiCommit was called instead of git commit
 		expect(createApiCommit).toHaveBeenCalledWith(
@@ -294,7 +294,7 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		await createReleaseBranch();
+		await createReleaseBranch("pnpm");
 
 		expect(mockOctokit.rest.checks.create).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -323,7 +323,7 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		const actionPromise = createReleaseBranch();
+		const actionPromise = createReleaseBranch("pnpm");
 		await vi.advanceTimersByTimeAsync(60000); // Advance time to cover all retries
 		const result = await actionPromise;
 
@@ -340,7 +340,7 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		await expect(createReleaseBranch()).rejects.toThrow("Permission denied");
+		await expect(createReleaseBranch("pnpm")).rejects.toThrow("Permission denied");
 	});
 
 	it("should throw after max retries exhausted", async () => {
@@ -353,7 +353,7 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		const actionPromise = createReleaseBranch();
+		const actionPromise = createReleaseBranch("pnpm");
 
 		// Advance timers and catch rejection in a controlled way
 		let caughtError: Error | null = null;
@@ -381,7 +381,7 @@ describe("create-release-branch", () => {
 			return 0;
 		});
 
-		await createReleaseBranch();
+		await createReleaseBranch("pnpm");
 
 		expect(core.info).toHaveBeenCalledWith("No final commit SHA available, skipping branch linking");
 	});
@@ -450,7 +450,7 @@ describe("create-release-branch", () => {
 			return {};
 		});
 
-		await createReleaseBranch();
+		await createReleaseBranch("pnpm");
 
 		expect(mockOctokit.graphql).toHaveBeenCalledWith(
 			expect.stringContaining("createLinkedBranch"),
@@ -515,7 +515,7 @@ describe("create-release-branch", () => {
 			return {};
 		});
 
-		await createReleaseBranch();
+		await createReleaseBranch("pnpm");
 
 		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to link issue #10"));
 	});
@@ -542,7 +542,7 @@ describe("create-release-branch", () => {
 		// Mock getLinkedIssuesFromCommits to throw
 		vi.mocked(getLinkedIssuesFromCommits).mockRejectedValue(new Error("Failed to fetch linked issues"));
 
-		await createReleaseBranch();
+		await createReleaseBranch("pnpm");
 
 		expect(core.warning).toHaveBeenCalledWith(
 			expect.stringContaining("Failed to link branch to issues: Failed to fetch linked issues"),

@@ -91,7 +91,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.hadConflicts).toBe(false);
@@ -109,7 +109,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		await updateReleaseBranch();
+		await updateReleaseBranch("pnpm");
 
 		// Should delete existing local branch and create new one
 		expect(exec.exec).toHaveBeenCalledWith("git", ["branch", "-D", "changeset-release/main"], {
@@ -130,7 +130,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		await updateReleaseBranch();
+		await updateReleaseBranch("pnpm");
 
 		// Verify createApiCommit was called with parentBranch option
 		expect(createApiCommit).toHaveBeenCalledWith(
@@ -151,7 +151,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		await updateReleaseBranch();
+		await updateReleaseBranch("pnpm");
 
 		// Should NOT use git push - uses API commit instead to avoid triggering multiple workflows
 		expect(exec.exec).not.toHaveBeenCalledWith("git", expect.arrayContaining(["push"]), expect.any(Object));
@@ -169,7 +169,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.hadConflicts).toBe(false);
@@ -186,7 +186,7 @@ describe("update-release-branch", () => {
 			return false;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("[DRY RUN]"));
@@ -205,7 +205,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		// Should create a new PR (mock returns number 123)
@@ -247,7 +247,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		await updateReleaseBranch();
+		await updateReleaseBranch("npm");
 
 		expect(exec.exec).toHaveBeenCalledWith("npm", ["run", "ci:version"], expect.any(Object));
 	});
@@ -272,7 +272,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		await updateReleaseBranch();
+		await updateReleaseBranch("yarn");
 
 		expect(exec.exec).toHaveBeenCalledWith("yarn", ["ci:version"], expect.any(Object));
 	});
@@ -289,7 +289,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		// Should warn about the error and create a new PR
@@ -318,7 +318,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.prNumber).toBe(789);
@@ -349,7 +349,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		// Should NOT try to reopen the merged PR
@@ -377,7 +377,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.prNumber).toBe(789);
@@ -404,7 +404,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const actionPromise = updateReleaseBranch();
+		const actionPromise = updateReleaseBranch("pnpm");
 		await vi.advanceTimersByTimeAsync(60000); // Advance time to cover all retries
 		const result = await actionPromise;
 
@@ -421,7 +421,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		await expect(updateReleaseBranch()).rejects.toThrow("Permission denied");
+		await expect(updateReleaseBranch("pnpm")).rejects.toThrow("Permission denied");
 	});
 
 	it("should throw after max retries exhausted", async () => {
@@ -434,7 +434,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const actionPromise = updateReleaseBranch();
+		const actionPromise = updateReleaseBranch("pnpm");
 
 		// Advance timers and catch rejection in a controlled way
 		let caughtError: Error | null = null;
@@ -485,7 +485,7 @@ describe("update-release-branch", () => {
 				data: { title: "New feature request", state: "open", html_url: "https://github.com/test/issues/99" },
 			});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(2);
@@ -526,7 +526,7 @@ describe("update-release-branch", () => {
 		// Mock PR update
 		mockOctokit.rest.pulls.update.mockResolvedValue({});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
@@ -550,7 +550,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(0);
@@ -575,7 +575,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(0);
@@ -602,7 +602,7 @@ describe("update-release-branch", () => {
 		// Mock issue fetch failure
 		mockOctokit.rest.issues.get.mockRejectedValue(new Error("Issue not found"));
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(0);
@@ -638,7 +638,7 @@ describe("update-release-branch", () => {
 
 		mockOctokit.rest.pulls.update.mockResolvedValue({});
 
-		await updateReleaseBranch();
+		await updateReleaseBranch("pnpm");
 
 		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -677,7 +677,7 @@ describe("update-release-branch", () => {
 		mockOctokit.rest.pulls.get.mockResolvedValue({ data: { body: "" } });
 		mockOctokit.rest.pulls.update.mockResolvedValue({});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.linkedIssues[0].state).toBe("closed");
 		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
@@ -706,7 +706,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(0);
@@ -738,7 +738,7 @@ describe("update-release-branch", () => {
 
 		mockOctokit.rest.pulls.get.mockRejectedValue(new Error("PR not found"));
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		// Should succeed despite PR body update failure
 		expect(result.success).toBe(true);
@@ -751,7 +751,7 @@ describe("update-release-branch", () => {
 			return false;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		// In dry-run mode, should not collect issues or update PR
@@ -777,7 +777,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(0);
@@ -802,7 +802,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(0);
@@ -823,7 +823,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(0);
@@ -852,7 +852,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.prNumber).toBe(999);
@@ -870,7 +870,7 @@ describe("update-release-branch", () => {
 			return false;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.prNumber).toBeNull();
@@ -918,7 +918,7 @@ describe("update-release-branch", () => {
 			data: { number: 999, html_url: "https://github.com/test/pulls/999" },
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(1);
@@ -977,7 +977,7 @@ describe("update-release-branch", () => {
 			},
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.linkedIssues).toHaveLength(1);
@@ -1039,7 +1039,7 @@ describe("update-release-branch", () => {
 		// Mock PR update to throw error
 		mockOctokit.rest.pulls.update.mockRejectedValue(new Error("API rate limit exceeded"));
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		// Should handle error gracefully
 		expect(result.success).toBe(true);
@@ -1075,7 +1075,7 @@ describe("update-release-branch", () => {
 			sha: "",
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(core.warning).toHaveBeenCalledWith("No changes to commit via API");
@@ -1116,7 +1116,7 @@ describe("update-release-branch", () => {
 			return 0;
 		});
 
-		const result = await updateReleaseBranch();
+		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.prNumber).toBe(123);

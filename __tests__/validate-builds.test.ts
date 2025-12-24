@@ -61,7 +61,7 @@ describe("validate-builds", () => {
 	it("should run build successfully with default command", async () => {
 		vi.mocked(exec.exec).mockResolvedValue(0);
 
-		const result = await validateBuilds();
+		const result = await validateBuilds("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(result.checkId).toBe(12345);
@@ -76,7 +76,7 @@ describe("validate-builds", () => {
 			throw new Error("Build failed");
 		});
 
-		const result = await validateBuilds();
+		const result = await validateBuilds("pnpm");
 
 		expect(result.success).toBe(false);
 	});
@@ -88,7 +88,7 @@ describe("validate-builds", () => {
 		});
 		vi.mocked(exec.exec).mockResolvedValue(0);
 
-		await validateBuilds();
+		await validateBuilds("pnpm");
 
 		expect(exec.exec).toHaveBeenCalledWith("pnpm", ["run", "turbo run build"], expect.any(Object));
 	});
@@ -96,12 +96,7 @@ describe("validate-builds", () => {
 	it("should handle different package managers", async () => {
 		vi.mocked(exec.exec).mockResolvedValue(0);
 
-		vi.mocked(core.getState).mockImplementation((name: string) => {
-			if (name === "token") return "test-token";
-			if (name === "packageManager") return "npm";
-			return "";
-		});
-		await validateBuilds();
+		await validateBuilds("npm");
 		expect(exec.exec).toHaveBeenCalledWith("npm", ["run", "ci:build"], expect.any(Object));
 	});
 
@@ -112,7 +107,7 @@ describe("validate-builds", () => {
 		});
 		vi.mocked(exec.exec).mockResolvedValue(0);
 
-		const result = await validateBuilds();
+		const result = await validateBuilds("pnpm");
 
 		expect(result.success).toBe(true);
 		expect(exec.exec).not.toHaveBeenCalled();
@@ -129,21 +124,16 @@ describe("validate-builds", () => {
 			return 0;
 		});
 
-		const result = await validateBuilds();
+		const result = await validateBuilds("pnpm");
 
 		expect(result.success).toBe(false);
 		expect(result.errors).toContain("error TS2322");
 	});
 
 	it("should use yarn command for yarn package manager", async () => {
-		vi.mocked(core.getState).mockImplementation((name: string) => {
-			if (name === "token") return "test-token";
-			if (name === "packageManager") return "yarn";
-			return "";
-		});
 		vi.mocked(exec.exec).mockResolvedValue(0);
 
-		await validateBuilds();
+		await validateBuilds("yarn");
 
 		expect(exec.exec).toHaveBeenCalledWith("yarn", ["ci:build"], expect.any(Object));
 	});
@@ -153,7 +143,7 @@ describe("validate-builds", () => {
 			throw "String error thrown"; // Non-Error throw to hit String(error) path
 		});
 
-		const result = await validateBuilds();
+		const result = await validateBuilds("pnpm");
 
 		expect(result.success).toBe(false);
 		expect(core.error).toHaveBeenCalledWith(expect.stringContaining("String error thrown"));
@@ -167,7 +157,7 @@ describe("validate-builds", () => {
 			return 0;
 		});
 
-		const result = await validateBuilds();
+		const result = await validateBuilds("pnpm");
 
 		expect(result.success).toBe(true);
 	});
@@ -181,7 +171,7 @@ describe("validate-builds", () => {
 			return 0;
 		});
 
-		const result = await validateBuilds();
+		const result = await validateBuilds("pnpm");
 
 		expect(result.success).toBe(false);
 		expect(result.errors).toContain("ERROR in src/utils/helper.ts");
@@ -196,7 +186,7 @@ describe("validate-builds", () => {
 			return 0;
 		});
 
-		const result = await validateBuilds();
+		const result = await validateBuilds("pnpm");
 
 		expect(result.success).toBe(false);
 		// Non-TS files should be skipped in annotations (the .js file won't create an annotation)
@@ -212,7 +202,7 @@ describe("validate-builds", () => {
 			return 0;
 		});
 
-		const result = await validateBuilds();
+		const result = await validateBuilds("pnpm");
 
 		expect(result.success).toBe(false);
 		expect(result.errors).toContain("ERROR in src/broken.ts");
@@ -233,7 +223,7 @@ describe("validate-builds", () => {
 			return 0;
 		});
 
-		const result = await validateBuilds();
+		const result = await validateBuilds("pnpm");
 
 		expect(result.success).toBe(false);
 		// The summary should indicate truncation when annotations.length > 20

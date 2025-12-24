@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { debug, endGroup, getBooleanInput, getInput, getState, info, startGroup, warning } from "@actions/core";
+import { debug, endGroup, getBooleanInput, getInput, info, startGroup, warning } from "@actions/core";
 import { context } from "@actions/github";
 import type { PackagePublishValidation } from "../types/publish-config.js";
 import { findPackagePath } from "./find-package-path.js";
@@ -196,10 +196,10 @@ function generateRegistryTable(validation: PackagePublishValidation): string {
  * This handles cases where directory names don't match package names.
  */
 export async function generateReleaseNotesPreview(
+	packageManager: string,
 	publishValidations?: PackagePublishValidation[],
 ): Promise<ReleaseNotesPreviewResult> {
 	// Read all inputs
-	const packageManager = getState("packageManager") || "pnpm";
 	const targetBranch = getInput("target-branch") || "main";
 	const dryRun = getBooleanInput("dry-run") || false;
 	startGroup("Generating release notes preview");

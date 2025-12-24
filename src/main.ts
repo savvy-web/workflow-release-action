@@ -240,7 +240,7 @@ async function runPhase1BranchManagement(inputs: {
 		if (!branchCheckResult.exists) {
 			logger.step(3, "Create Release Branch");
 
-			const createResult = await createReleaseBranch();
+			const createResult = await createReleaseBranch(inputs.packageManager);
 
 			setOutput("release_branch_created", createResult.created);
 			setOutput("release_pr_number", createResult.prNumber || "");
@@ -250,7 +250,7 @@ async function runPhase1BranchManagement(inputs: {
 		} else {
 			logger.step(3, "Update Release Branch");
 
-			const updateResult = await updateReleaseBranch();
+			const updateResult = await updateReleaseBranch(inputs.packageManager);
 
 			setOutput("release_branch_updated", updateResult.success);
 			setOutput("has_conflicts", updateResult.hadConflicts);
@@ -371,7 +371,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			status: "in_progress",
 		});
 
-		const buildResult = await validateBuilds();
+		const buildResult = await validateBuilds(inputs.packageManager);
 
 		setOutput("builds_passed", buildResult.success);
 		setOutput("build_results", JSON.stringify([]));
@@ -479,7 +479,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			status: "in_progress",
 		});
 
-		const releaseNotesResult = await generateReleaseNotesPreview(publishResult.validations);
+		const releaseNotesResult = await generateReleaseNotesPreview(inputs.packageManager, publishResult.validations);
 
 		// Complete the placeholder check with full release notes content
 		await octokit.rest.checks.update({
@@ -864,7 +864,12 @@ async function runPhase3Publishing(inputs: Inputs, mergedPRNumber?: number): Pro
 			status: "in_progress",
 		});
 
-		const releasesResult = await createGitHubReleases(tagStrategy.tags, publishResult.packages, inputs.dryRun);
+		const releasesResult = await createGitHubReleases(
+			tagStrategy.tags,
+			publishResult.packages,
+			inputs.packageManager,
+			inputs.dryRun,
+		);
 
 		setOutput("release_urls", JSON.stringify(releasesResult.releases.map((r) => r.url)));
 

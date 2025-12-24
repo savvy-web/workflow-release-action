@@ -18,13 +18,7 @@ interface BuildValidationResult {
 /**
  * Validates that all packages build successfully
  *
-
- * @param exec - GitHub Actions exec module
-
-
- * @param packageManager - Package manager to use
- * @param buildCommand - Custom build command
- * @param dryRun - Whether this is a dry-run
+ * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
  * @returns Build validation result
  *
  * @remarks
@@ -38,13 +32,12 @@ interface BuildValidationResult {
  * The build validates ALL packages (not just publishable ones) to ensure
  * the entire codebase is in a good state.
  */
-export async function validateBuilds(): Promise<BuildValidationResult> {
+export async function validateBuilds(packageManager: string): Promise<BuildValidationResult> {
 	// Read all inputs
 	const token = getState("token");
 	if (!token) {
 		throw new Error("No token available from state - ensure pre.ts ran successfully");
 	}
-	const packageManager = getState("packageManager") || "pnpm";
 	const buildCommand = getInput("build-command") || "";
 	const dryRun = getBooleanInput("dry-run") || false;
 

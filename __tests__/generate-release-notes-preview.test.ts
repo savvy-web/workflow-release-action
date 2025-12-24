@@ -94,7 +94,7 @@ describe("generate-release-notes-preview", () => {
 	});
 
 	it("should handle no packages to release", async () => {
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.packages).toEqual([]);
 		expect(result.summaryContent).toBeDefined();
@@ -137,7 +137,7 @@ describe("generate-release-notes-preview", () => {
 			return "";
 		});
 
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.packages).toHaveLength(1);
 		expect(result.packages[0].hasChangelog).toBe(true);
@@ -165,7 +165,7 @@ describe("generate-release-notes-preview", () => {
 			return "";
 		});
 
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.packages).toHaveLength(1);
 		expect(result.packages[0].hasChangelog).toBe(false);
@@ -190,7 +190,7 @@ describe("generate-release-notes-preview", () => {
 			return "";
 		});
 
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.packages).toHaveLength(1);
 		expect(result.packages[0].error).toBe("Package directory not found");
@@ -202,7 +202,7 @@ describe("generate-release-notes-preview", () => {
 			return false;
 		});
 
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.checkTitle).toContain("Dry Run");
 	});
@@ -232,7 +232,7 @@ describe("generate-release-notes-preview", () => {
 			return "";
 		});
 
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.packages).toHaveLength(1);
 		expect(result.packages[0].error).toContain("Could not find version section");
@@ -263,7 +263,7 @@ describe("generate-release-notes-preview", () => {
 			return "";
 		});
 
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.packages).toHaveLength(2);
 	});
@@ -274,7 +274,7 @@ describe("generate-release-notes-preview", () => {
 			return "";
 		});
 
-		await generateReleaseNotesPreview();
+		await generateReleaseNotesPreview("yarn");
 
 		// Command uses a temp filename: --output=.changeset-status-{timestamp}.json
 		expect(exec.exec).toHaveBeenCalledWith("yarn", expect.arrayContaining(["changeset", "status"]), expect.any(Object));
@@ -292,7 +292,7 @@ describe("generate-release-notes-preview", () => {
 			return "";
 		});
 
-		await generateReleaseNotesPreview();
+		await generateReleaseNotesPreview("npm");
 
 		// Command uses a temp filename: --output=.changeset-status-{timestamp}.json
 		expect(exec.exec).toHaveBeenCalledWith(
@@ -327,7 +327,7 @@ describe("generate-release-notes-preview", () => {
 			return "";
 		});
 
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.packages).toHaveLength(1);
 		expect(result.packages[0].hasChangelog).toBe(false);
@@ -354,7 +354,7 @@ describe("generate-release-notes-preview", () => {
 			return "";
 		});
 
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.packages).toHaveLength(1);
 		expect(result.packages[0].error).toBe("String error");
@@ -386,7 +386,7 @@ Previous notes`;
 			return "";
 		});
 
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.packages).toHaveLength(1);
 		// Notes should be empty string (after trim)
@@ -408,7 +408,7 @@ Previous notes`;
 			return 0;
 		});
 
-		const result = await generateReleaseNotesPreview();
+		const result = await generateReleaseNotesPreview("pnpm");
 
 		expect(result.packages).toEqual([]);
 		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("changeset config issue"));
@@ -466,7 +466,7 @@ Previous notes`;
 				},
 			];
 
-			const result = await generateReleaseNotesPreview(publishValidations);
+			const result = await generateReleaseNotesPreview("pnpm", publishValidations);
 
 			expect(result.packages).toHaveLength(1);
 			// Should include registry table with stats
@@ -525,7 +525,7 @@ Previous notes`;
 				},
 			];
 
-			await generateReleaseNotesPreview(publishValidations);
+			await generateReleaseNotesPreview("pnpm", publishValidations);
 
 			// Should show warning icon for provenance
 			expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("⚠️"));
@@ -582,7 +582,7 @@ Previous notes`;
 				},
 			];
 
-			await generateReleaseNotesPreview(publishValidations);
+			await generateReleaseNotesPreview("pnpm", publishValidations);
 
 			// Summary should be generated
 			expect(core.summary.addRaw).toHaveBeenCalled();
@@ -617,7 +617,7 @@ Previous notes`;
 				},
 			];
 
-			const result = await generateReleaseNotesPreview(publishValidations);
+			const result = await generateReleaseNotesPreview("pnpm", publishValidations);
 
 			expect(result.packages).toHaveLength(1);
 		});
@@ -640,7 +640,7 @@ Previous notes`;
 				return "";
 			});
 
-			await generateReleaseNotesPreview();
+			await generateReleaseNotesPreview("pnpm");
 
 			// Should show first release indicator
 			expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("First Release"));
@@ -689,7 +689,7 @@ Previous notes`;
 				return "";
 			});
 
-			await generateReleaseNotesPreview();
+			await generateReleaseNotesPreview("pnpm");
 
 			// Should show "Packages Not Releasing" section with pkg-b
 			expect(core.summary.addRaw).toHaveBeenCalledWith(expect.stringContaining("Packages Not Releasing"));
@@ -718,7 +718,7 @@ Previous notes`;
 				return "";
 			});
 
-			await generateReleaseNotesPreview();
+			await generateReleaseNotesPreview("pnpm");
 
 			// Summary table should show changeset count (2)
 			expect(core.summary.addRaw).toHaveBeenCalled();
@@ -765,7 +765,7 @@ Previous notes`;
 				return "";
 			});
 
-			const result = await generateReleaseNotesPreview();
+			const result = await generateReleaseNotesPreview("pnpm");
 
 			expect(result.packages).toHaveLength(2);
 			expect(result.packages[1].name).toBe("@test/pkg-b");
@@ -817,7 +817,7 @@ Previous notes`;
 				return "";
 			});
 
-			const result = await generateReleaseNotesPreview();
+			const result = await generateReleaseNotesPreview("pnpm");
 
 			expect(result.packages).toHaveLength(2);
 
@@ -863,7 +863,7 @@ Previous notes`;
 				return "";
 			});
 
-			const result = await generateReleaseNotesPreview();
+			const result = await generateReleaseNotesPreview("pnpm");
 
 			expect(result.packages).toHaveLength(1);
 			expect(result.packages[0].error).toContain("Could not find version section");
@@ -895,7 +895,7 @@ Previous notes`;
 				return "";
 			});
 
-			const result = await generateReleaseNotesPreview();
+			const result = await generateReleaseNotesPreview("pnpm");
 
 			expect(result.packages).toHaveLength(1);
 			expect(result.packages[0].notes).toContain("New feature");
@@ -932,7 +932,7 @@ Previous notes`;
 				return "";
 			});
 
-			const result = await generateReleaseNotesPreview();
+			const result = await generateReleaseNotesPreview("pnpm");
 
 			expect(result.packages).toHaveLength(1);
 			// Empty notes for non-fixed package should still be empty
@@ -979,7 +979,7 @@ Previous notes`;
 				return "";
 			});
 
-			const result = await generateReleaseNotesPreview();
+			const result = await generateReleaseNotesPreview("pnpm");
 
 			expect(result.packages).toHaveLength(2);
 			expect(result.packages[1].name).toBe("@test/pkg-b");
