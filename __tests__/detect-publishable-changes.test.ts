@@ -416,4 +416,106 @@ describe("detect-publishable-changes", () => {
 		expect(result.packages.length).toBe(1);
 		expect(result.packages[0].name).toBe("@test/root-pkg");
 	});
+
+	it("should use bun x for bun package manager", async () => {
+		await detectPublishableChanges("bun", false);
+		expect(exec.exec).toHaveBeenCalledWith(
+			"bun",
+			["x", "changeset", "status", "--output", expect.stringContaining("changeset-status")],
+			expect.any(Object),
+		);
+	});
+
+	it("should handle findProjectRoot returning undefined", async () => {
+		// Simulate workspace-tools not finding a project root
+		vi.mocked(findProjectRoot).mockReturnValue(undefined as unknown as string);
+		vi.mocked(getWorkspaces).mockReturnValue([]);
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(result.hasChanges).toBe(false);
+		expect(core.debug).toHaveBeenCalledWith("workspace-tools findProjectRoot: null");
+	});
+
+	it("should handle getWorkspaces throwing an error", async () => {
+		vi.mocked(findProjectRoot).mockReturnValue("/test/workspace");
+		vi.mocked(getWorkspaces).mockImplementation(() => {
+			throw new Error("workspace-tools error: unsupported lock file");
+		});
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(result.hasChanges).toBe(false);
+		expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("workspace-tools failed:"));
+	});
+
+	it("should warn when root package.json has no name field", async () => {
+		vi.mocked(getWorkspaces).mockReturnValue([]);
+		vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
+			const pathStr = String(path);
+			if (pathStr.includes("changeset-status")) {
+				return changesetStatusContent;
+			}
+			// Root package.json without name field
+			return JSON.stringify({ version: "1.0.0", publishConfig: { access: "public" } });
+		});
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(result.hasChanges).toBe(false);
+		expect(core.warning).toHaveBeenCalledWith("Root package.json has no 'name' field");
+	});
+
+	it("should warn when root package.json read fails", async () => {
+		vi.mocked(getWorkspaces).mockReturnValue([]);
+		vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
+			const pathStr = String(path);
+			if (pathStr.includes("changeset-status")) {
+				return changesetStatusContent;
+			}
+			// Simulate read error for root package.json
+			throw new Error("EACCES: permission denied");
+		});
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(result.hasChanges).toBe(false);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to read root package.json"));
+	});
+
+	it("should skip adding root package when already in workspaces map", async () => {
+		changesetStatusContent = JSON.stringify({
+			releases: [{ name: "@test/pkg-a", newVersion: "1.0.0", type: "minor" }],
+			changesets: [],
+		});
+
+		// Workspace already contains the package
+		vi.mocked(getWorkspaces).mockReturnValue([
+			{
+				name: "@test/pkg-a",
+				path: "/test/workspace/packages/pkg-a",
+				packageJson: {
+					name: "@test/pkg-a",
+					version: "0.0.0",
+					packageJsonPath: "/test/workspace/packages/pkg-a/package.json",
+					publishConfig: { access: "public" },
+				},
+			},
+		]);
+
+		// Root package.json has the same name
+		vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
+			const pathStr = String(path);
+			if (pathStr.includes("changeset-status")) {
+				return changesetStatusContent;
+			}
+			return JSON.stringify({ name: "@test/pkg-a", publishConfig: { access: "public" } });
+		});
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(result.hasChanges).toBe(true);
+		expect(result.packages.length).toBe(1);
+		expect(core.debug).toHaveBeenCalledWith('Root package "@test/pkg-a" already in package map from workspaces');
+	});
 });

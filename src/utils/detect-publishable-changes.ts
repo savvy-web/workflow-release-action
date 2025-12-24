@@ -206,29 +206,51 @@ export async function detectPublishableChanges(
 
 	// Build a map of package name -> package info using workspace-tools
 	const cwd = process.cwd();
-	const workspaceRoot = findProjectRoot(cwd);
-	const workspaces = workspaceRoot ? getWorkspaces(workspaceRoot) : [];
 
 	// Create lookup map: package name -> { path, packageJson }
 	const packageMap = new Map<string, { path: string; packageJson: PackageJson }>();
 
-	for (const workspace of workspaces) {
-		packageMap.set(workspace.name, {
-			path: workspace.path,
-			packageJson: workspace.packageJson as PackageJson,
-		});
+	// Try to detect workspaces using workspace-tools
+	// Note: workspace-tools may not recognize all lock files (e.g., bun.lock)
+	try {
+		const workspaceRoot = findProjectRoot(cwd);
+		debug(`workspace-tools findProjectRoot: ${workspaceRoot || "null"}`);
+
+		if (workspaceRoot) {
+			const workspaces = getWorkspaces(workspaceRoot);
+			debug(`workspace-tools getWorkspaces returned ${workspaces.length} workspace(s)`);
+
+			for (const workspace of workspaces) {
+				packageMap.set(workspace.name, {
+					path: workspace.path,
+					packageJson: workspace.packageJson as PackageJson,
+				});
+			}
+		}
+	} catch (err) {
+		debug(`workspace-tools failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
-	// Also check root package.json for single-package repos
+	// Always check root package.json for single-package repos
+	// This is the primary detection method when no workspaces are defined
+	const rootPkgPath = `${cwd}/package.json`;
 	try {
-		const rootPkgPath = `${cwd}/package.json`;
 		const rootContent = await readFile(rootPkgPath, "utf-8");
 		const rootPkg = JSON.parse(rootContent) as PackageJson;
+		debug(
+			`Root package.json: name=${rootPkg.name}, private=${rootPkg.private}, publishConfig=${JSON.stringify(rootPkg.publishConfig)}`,
+		);
+
 		if (rootPkg.name && !packageMap.has(rootPkg.name)) {
 			packageMap.set(rootPkg.name, { path: dirname(rootPkgPath), packageJson: rootPkg });
+			debug(`Added root package "${rootPkg.name}" to package map`);
+		} else if (rootPkg.name) {
+			debug(`Root package "${rootPkg.name}" already in package map from workspaces`);
+		} else {
+			warning("Root package.json has no 'name' field");
 		}
-	} catch {
-		// Root package.json may not exist or be readable
+	} catch (err) {
+		warning(`Failed to read root package.json at ${rootPkgPath}: ${err instanceof Error ? err.message : String(err)}`);
 	}
 
 	// Log discovered packages and their publish configurations
