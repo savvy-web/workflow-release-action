@@ -1,4 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
 import { debug, info, warning } from "@actions/core";
 import { getWorkspaces } from "workspace-tools";
 
@@ -24,6 +26,23 @@ function getWorkspaceMap(cwd: string = process.cwd()): Map<string, string> {
 	for (const workspace of workspaces) {
 		cachedWorkspaces.set(workspace.name, workspace.path);
 		debug(`Found workspace: ${workspace.name} at ${workspace.path}`);
+	}
+
+	// Handle single-package repos without workspace configuration
+	// If no workspaces found, check if root package.json exists and use that
+	if (cachedWorkspaces.size === 0) {
+		const rootPkgPath = join(cwd, "package.json");
+		if (existsSync(rootPkgPath)) {
+			try {
+				const rootPkg = JSON.parse(readFileSync(rootPkgPath, "utf-8")) as { name?: string };
+				if (rootPkg.name) {
+					cachedWorkspaces.set(rootPkg.name, cwd);
+					debug(`Single-package repo detected: ${rootPkg.name} at ${cwd}`);
+				}
+			} catch {
+				// Ignore parse errors
+			}
+		}
 	}
 
 	info(`Found ${cachedWorkspaces.size} workspace package(s)`);
