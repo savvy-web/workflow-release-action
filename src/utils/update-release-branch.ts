@@ -409,15 +409,10 @@ async function execWithRetry(
 /**
  * Updates the release branch with changes from target branch
  *
- * @param releaseBranch - Release branch name
- * @param targetBranch - Target branch to merge from
- * @param prNumber - PR number if it exists
- * @param packageManager - Package manager to use
- * @param versionCommand - Custom version command
- * @param dryRun - Whether this is a dry-run
+ * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
  * @returns Update release branch result
  */
-export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> {
+export async function updateReleaseBranch(packageManager: string): Promise<UpdateReleaseBranchResult> {
 	// Read all inputs
 	const token = getState("token");
 	if (!token) {
@@ -425,7 +420,6 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	}
 	const releaseBranch = getInput("release-branch") || "changeset-release/main";
 	const targetBranch = getInput("target-branch") || "main";
-	const packageManager = getState("packageManager") || "pnpm";
 	const versionCommand = getInput("version-command") || "";
 	const dryRun = getBooleanInput("dry-run") || false;
 

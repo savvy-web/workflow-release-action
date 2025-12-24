@@ -105,11 +105,10 @@ function extractReleaseNotes(changelogPath: string, version: string): string | u
 /**
  * Get the pack command for the current package manager
  *
+ * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
  * @returns Command and args for creating a package tarball
  */
-function getPackCommand(): { cmd: string; args: string[] } {
-	const packageManager = getState("packageManager") || "pnpm";
-
+function getPackCommand(packageManager: string): { cmd: string; args: string[] } {
 	// Use each package manager's dlx/npx to run npm pack for consistent behavior
 	// This ensures we use a compatible npm version, not whatever the user has installed
 	// --json flag provides structured output for reliable parsing
@@ -140,9 +139,10 @@ interface NpmPackResult {
  * Find package artifacts to upload
  *
  * @param packagePath - Path to the package directory
+ * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
  * @returns Array of artifact file paths
  */
-async function findPackageArtifacts(packagePath: string): Promise<string[]> {
+async function findPackageArtifacts(packagePath: string, packageManager: string): Promise<string[]> {
 	const artifacts: string[] = [];
 
 	// Check for .tgz files (from npm pack)
@@ -156,7 +156,7 @@ async function findPackageArtifacts(packagePath: string): Promise<string[]> {
 	// If no tgz found, try to create one
 	if (artifacts.length === 0) {
 		try {
-			const { cmd, args } = getPackCommand();
+			const { cmd, args } = getPackCommand(packageManager);
 			let output = "";
 			await exec(cmd, args, {
 				cwd: packagePath,
@@ -246,12 +246,14 @@ async function createGitTag(tagName: string, message: string, dryRun: boolean): 
  *
  * @param tags - Tags to create releases for
  * @param publishResults - Results from publishing packages
+ * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
  * @param dryRun - Whether to skip actual creation
  * @returns Promise resolving to release creation result
  */
 export async function createGitHubReleases(
 	tags: TagInfo[],
 	publishResults: PackagePublishResult[],
+	packageManager: string,
 	dryRun: boolean,
 ): Promise<CreateReleasesResult> {
 	const token = getState("token");
@@ -398,7 +400,7 @@ export async function createGitHubReleases(
 					warning(`Could not find path for package ${pkg.name}, skipping artifact upload`);
 					continue;
 				}
-				const artifacts = await findPackageArtifacts(pkgPath);
+				const artifacts = await findPackageArtifacts(pkgPath, packageManager);
 
 				for (const artifactPath of artifacts) {
 					try {

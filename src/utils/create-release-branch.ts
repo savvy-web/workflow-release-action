@@ -67,19 +67,10 @@ async function execWithRetry(
 /**
  * Creates the release branch and PR
  *
-
- * @param exec - GitHub Actions exec module
-
-
- * @param releaseBranch - Release branch name
- * @param targetBranch - Target branch for PR
- * @param packageManager - Package manager to use
- * @param versionCommand - Custom version command
- * @param prTitlePrefix - Prefix for PR title
- * @param dryRun - Whether this is a dry-run
+ * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
  * @returns Create release branch result
  */
-export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> {
+export async function createReleaseBranch(packageManager: string): Promise<CreateReleaseBranchResult> {
 	// Read all inputs
 	const token = getState("token");
 	if (!token) {
@@ -87,7 +78,6 @@ export async function createReleaseBranch(): Promise<CreateReleaseBranchResult> 
 	}
 	const releaseBranch = getInput("release-branch") || "changeset-release/main";
 	const targetBranch = getInput("target-branch") || "main";
-	const packageManager = getState("packageManager") || "pnpm";
 	const versionCommand = getInput("version-command") || "";
 	const prTitlePrefix = getInput("pr-title-prefix") || "chore: release";
 	const dryRun = getBooleanInput("dry-run") || false;
