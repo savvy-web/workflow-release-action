@@ -79,7 +79,7 @@ function isVersionAlreadyPublished(output: string, error: string): boolean {
  * - npm: `npx npm <args>`
  * - pnpm: `pnpm dlx npm <args>`
  * - yarn: `yarn npm <args>`
- * - bun: `bunx npm <args>`
+ * - bun: `bun x npm <args>`
  *
  * @param packageManager - The package manager being used
  * @returns Command and base args to prepend before npm arguments
@@ -91,7 +91,7 @@ function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[
 		case "yarn":
 			return { cmd: "yarn", baseArgs: ["npm"] };
 		case "bun":
-			return { cmd: "bunx", baseArgs: ["npm"] };
+			return { cmd: "bun", baseArgs: ["x", "npm"] };
 		default:
 			return { cmd: "npx", baseArgs: ["npm"] };
 	}
@@ -108,7 +108,7 @@ function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[
  * - npm: `npx npm publish`
  * - pnpm: `pnpm dlx npm publish`
  * - yarn: `yarn npm publish` (yarn has its own npm wrapper)
- * - bun: `bunx npm publish`
+ * - bun: `bun x npm publish`
  */
 function getPublishCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
 	switch (packageManager) {
@@ -118,7 +118,7 @@ function getPublishCommand(packageManager: string): { cmd: string; baseArgs: str
 			// Yarn uses "yarn npm publish" for publishing to npm registries
 			return { cmd: "yarn", baseArgs: ["npm"] };
 		case "bun":
-			return { cmd: "bunx", baseArgs: ["npm"] };
+			return { cmd: "bun", baseArgs: ["x", "npm"] };
 		default:
 			return { cmd: "npx", baseArgs: ["npm"] };
 	}
@@ -134,7 +134,7 @@ function getNpxCommand(packageManager: string): { cmd: string; args: string[] } 
 		case "yarn":
 			return { cmd: "yarn", args: ["dlx"] };
 		case "bun":
-			return { cmd: "bunx", args: [] };
+			return { cmd: "bun", args: ["x"] };
 		default:
 			return { cmd: "npx", args: [] };
 	}
@@ -620,7 +620,7 @@ async function publishToJsr(target: ResolvedTarget, packageManager: string): Pro
 	let errorOutput = "";
 	let exitCode = 0;
 
-	// JSR uses npx/pnpm dlx/bunx to run jsr publish
+	// JSR uses npx/pnpm dlx/bun x to run jsr publish
 	// --allow-dirty is needed because we're in a git repo with changes
 	const npx = getNpxCommand(packageManager);
 	const args = [...npx.args, "jsr", "publish", "--allow-dirty"];

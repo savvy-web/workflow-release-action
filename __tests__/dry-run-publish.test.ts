@@ -498,7 +498,7 @@ npm notice Publishing to https://registry.npmjs.org/ with tag latest and public 
 	});
 
 	describe("package manager variations", () => {
-		it("uses bunx for bun package manager with npm protocol", async () => {
+		it("uses bun x for bun package manager with npm protocol", async () => {
 			vi.mocked(exec.exec).mockResolvedValue(0);
 
 			const target: ResolvedTarget = {
@@ -514,8 +514,8 @@ npm notice Publishing to https://registry.npmjs.org/ with tag latest and public 
 			await dryRunPublish(target, "bun");
 
 			expect(exec.exec).toHaveBeenCalledWith(
-				"bunx",
-				expect.arrayContaining(["npm", "publish", "--dry-run"]),
+				"bun",
+				expect.arrayContaining(["x", "npm", "publish", "--dry-run"]),
 				expect.anything(),
 			);
 		});
@@ -542,7 +542,7 @@ npm notice Publishing to https://registry.npmjs.org/ with tag latest and public 
 			);
 		});
 
-		it("uses bunx for bun package manager with jsr protocol", async () => {
+		it("uses bun x for bun package manager with jsr protocol", async () => {
 			vi.mocked(exec.exec).mockResolvedValue(0);
 
 			const target: ResolvedTarget = {
@@ -557,7 +557,7 @@ npm notice Publishing to https://registry.npmjs.org/ with tag latest and public 
 
 			await dryRunPublish(target, "bun");
 
-			expect(exec.exec).toHaveBeenCalledWith("bunx", ["jsr", "publish", "--dry-run"], expect.anything());
+			expect(exec.exec).toHaveBeenCalledWith("bun", ["x", "jsr", "publish", "--dry-run"], expect.anything());
 		});
 
 		it("uses npx for npm package manager with jsr protocol", async () => {

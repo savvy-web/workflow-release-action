@@ -889,7 +889,7 @@ describe("create-github-releases", () => {
 			expect(packArgs).toEqual(["dlx", "npm", "pack", "--json"]);
 		});
 
-		it("uses bunx npm pack when package manager is bun", async () => {
+		it("uses bun x npm pack when package manager is bun", async () => {
 			vi.mocked(core.getState).mockImplementation((key: string) => {
 				if (key === "packageManager") return "bun";
 				return "mock-token";
@@ -947,8 +947,8 @@ describe("create-github-releases", () => {
 
 			await createGitHubReleases(tags, publishResults, "bun", false);
 
-			expect(packCmd).toBe("bunx");
-			expect(packArgs).toEqual(["npm", "pack", "--json"]);
+			expect(packCmd).toBe("bun");
+			expect(packArgs).toEqual(["x", "npm", "pack", "--json"]);
 		});
 
 		it("uses npx npm pack when package manager is npm", async () => {

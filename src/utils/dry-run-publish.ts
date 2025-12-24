@@ -28,7 +28,7 @@ function getRegistryDisplayName(registry: string | null): string {
  * - npm: `npx npm publish`
  * - pnpm: `pnpm dlx npm publish`
  * - yarn: `yarn npm publish` (yarn has its own npm wrapper)
- * - bun: `bunx npm publish`
+ * - bun: `bun x npm publish`
  */
 function getPublishCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
 	switch (packageManager) {
@@ -38,7 +38,7 @@ function getPublishCommand(packageManager: string): { cmd: string; baseArgs: str
 			// Yarn uses "yarn npm publish" for publishing to npm registries
 			return { cmd: "yarn", baseArgs: ["npm"] };
 		case "bun":
-			return { cmd: "bunx", baseArgs: ["npm"] };
+			return { cmd: "bun", baseArgs: ["x", "npm"] };
 		default:
 			return { cmd: "npx", baseArgs: ["npm"] };
 	}
@@ -54,7 +54,7 @@ function getNpxCommand(packageManager: string): { cmd: string; args: string[] } 
 		case "yarn":
 			return { cmd: "yarn", args: ["dlx"] };
 		case "bun":
-			return { cmd: "bunx", args: [] };
+			return { cmd: "bun", args: ["x"] };
 		default:
 			return { cmd: "npx", args: [] };
 	}
@@ -172,7 +172,7 @@ async function dryRunJsr(target: ResolvedTarget, packageManager: string): Promis
 	let error = "";
 	let exitCode = 0;
 
-	// JSR uses npx/pnpm dlx/bunx to run jsr publish
+	// JSR uses npx/pnpm dlx/bun x to run jsr publish
 	const npx = getNpxCommand(packageManager);
 	const args = [...npx.args, "jsr", "publish", "--dry-run"];
 

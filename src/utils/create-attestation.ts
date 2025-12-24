@@ -69,7 +69,7 @@ function findTarball(directory: string, packageName: string, version: string): s
  * - npm: `npx npm <args>`
  * - pnpm: `pnpm dlx npm <args>`
  * - yarn: `yarn npm <args>`
- * - bun: `bunx npm <args>`
+ * - bun: `bun x npm <args>`
  */
 function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
 	switch (packageManager) {
@@ -78,7 +78,7 @@ function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[
 		case "yarn":
 			return { cmd: "yarn", baseArgs: ["npm"] };
 		case "bun":
-			return { cmd: "bunx", baseArgs: ["npm"] };
+			return { cmd: "bun", baseArgs: ["x", "npm"] };
 		default:
 			return { cmd: "npx", baseArgs: ["npm"] };
 	}
