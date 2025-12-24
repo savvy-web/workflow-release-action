@@ -1,19 +1,26 @@
+import { readFile } from "node:fs/promises";
+
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import { createApiCommit } from "../src/utils/create-api-commit.js";
 import { createReleaseBranch } from "../src/utils/create-release-branch.js";
+import { isSinglePackage } from "../src/utils/detect-repo-type.js";
 import { getLinkedIssuesFromCommits } from "../src/utils/link-issues-from-commits.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
+
 import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.js";
 
 // Mock modules
+vi.mock("node:fs/promises");
 vi.mock("@actions/core");
 vi.mock("@actions/exec");
 vi.mock("@actions/github");
 vi.mock("../src/utils/create-api-commit.js");
 vi.mock("../src/utils/link-issues-from-commits.js");
+vi.mock("../src/utils/detect-repo-type.js");
 
 describe("create-release-branch", () => {
 	let mockOctokit: MockOctokit;
@@ -81,6 +88,12 @@ describe("create-release-branch", () => {
 
 		// Mock getLinkedIssuesFromCommits to return empty by default
 		vi.mocked(getLinkedIssuesFromCommits).mockResolvedValue({ linkedIssues: [], commits: [] });
+
+		// Mock isSinglePackage to return false by default (multi-package repo)
+		vi.mocked(isSinglePackage).mockReturnValue(false);
+
+		// Mock readFile for package.json reading
+		vi.mocked(readFile).mockResolvedValue(JSON.stringify({ name: "test-package", version: "1.0.0" }));
 	});
 
 	afterEach(() => {
@@ -547,5 +560,54 @@ describe("create-release-branch", () => {
 		expect(core.warning).toHaveBeenCalledWith(
 			expect.stringContaining("Failed to link branch to issues: Failed to fetch linked issues"),
 		);
+	});
+
+	it("should use version-based PR title for single-package repos", async () => {
+		// Mock isSinglePackage to return true
+		vi.mocked(isSinglePackage).mockReturnValue(true);
+
+		// Mock readFile to return package.json with version
+		vi.mocked(readFile).mockResolvedValue(JSON.stringify({ name: "my-package", version: "0.1.0" }));
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		mockOctokit.rest.repos.get.mockResolvedValue({
+			data: { node_id: "test-repo-node-id" },
+		} as never);
+
+		await createReleaseBranch("pnpm");
+
+		// Verify the PR was created with the version-based title
+		expect(core.info).toHaveBeenCalledWith("Single-package repo detected, using PR title: release: 0.1.0");
+	});
+
+	it("should use default PR title for multi-package repos", async () => {
+		// Mock isSinglePackage to return false (multi-package repo)
+		vi.mocked(isSinglePackage).mockReturnValue(false);
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		mockOctokit.rest.repos.get.mockResolvedValue({
+			data: { node_id: "test-repo-node-id" },
+		} as never);
+
+		await createReleaseBranch("pnpm");
+
+		// Should NOT use version-based title
+		expect(core.info).not.toHaveBeenCalledWith(expect.stringContaining("Single-package repo detected"));
 	});
 });

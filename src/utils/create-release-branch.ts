@@ -1,8 +1,12 @@
+import { readFile } from "node:fs/promises";
+
 import { endGroup, getBooleanInput, getInput, getState, info, startGroup, warning } from "@actions/core";
 import type { ExecOptions } from "@actions/exec";
 import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
+
 import { createApiCommit } from "./create-api-commit.js";
+import { isSinglePackage } from "./detect-repo-type.js";
 import { getLinkedIssuesFromCommits } from "./link-issues-from-commits.js";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -188,6 +192,22 @@ export async function createReleaseBranch(packageManager: string): Promise<Creat
 	info("Version changes:");
 	info(versionSummary);
 
+	// Detect single-package repo and get version for PR title
+	let prTitle = prTitlePrefix;
+	const singlePackage = isSinglePackage();
+	if (singlePackage) {
+		try {
+			const packageJsonContent = await readFile("package.json", "utf-8");
+			const packageJson = JSON.parse(packageJsonContent) as { version?: string };
+			if (packageJson.version) {
+				prTitle = `release: ${packageJson.version}`;
+				info(`Single-package repo detected, using PR title: ${prTitle}`);
+			}
+		} catch (error) {
+			warning(`Failed to read version for PR title: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
 	// Get the current local commit SHA to use as parent for the API commit
 	let parentSha = "";
 	if (!dryRun) {
@@ -304,8 +324,6 @@ export async function createReleaseBranch(packageManager: string): Promise<Creat
 
 	let prNumber: number | null = null;
 	let prUrl = "";
-
-	const prTitle = `${prTitlePrefix}`;
 
 	// Build PR body using summaryWriter (markdown, not HTML)
 	const prBodySections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
