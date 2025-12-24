@@ -71,8 +71,16 @@ function detectPackageManager(packageJson: PackageJson): PackageManager {
 }
 
 export function isSinglePackage(): boolean {
-	const workspaces = getWorkspaces(process.cwd());
-	return Object.keys(workspaces).length === 1;
+	try {
+		const workspaces = getWorkspaces(process.cwd());
+		// A single-package repo has 0 or 1 workspace entries
+		// (0 = no workspace config, 1 = only root package)
+		// Multi-package repos have > 1 workspace entry
+		return workspaces.length <= 1;
+	} catch {
+		// If workspace detection fails, assume single-package
+		return true;
+	}
 }
 
 /**

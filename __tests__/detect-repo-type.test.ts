@@ -47,10 +47,20 @@ describe("detect-repo-type", () => {
 			expect(isSinglePackage()).toBe(false);
 		});
 
-		it("should return false when no workspaces exist", () => {
+		it("should return true when no workspaces exist (single-package repo)", () => {
 			vi.mocked(getWorkspaces).mockReturnValue([]);
 
-			expect(isSinglePackage()).toBe(false);
+			// A repo with no workspace config is a single-package repo
+			expect(isSinglePackage()).toBe(true);
+		});
+
+		it("should return true when getWorkspaces throws", () => {
+			vi.mocked(getWorkspaces).mockImplementation(() => {
+				throw new Error("Failed to detect workspaces");
+			});
+
+			// If workspace detection fails, assume single-package
+			expect(isSinglePackage()).toBe(true);
 		});
 	});
 
