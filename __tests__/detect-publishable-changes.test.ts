@@ -463,7 +463,9 @@ describe("detect-publishable-changes", () => {
 		const result = await detectPublishableChanges("pnpm", false);
 
 		expect(result.hasChanges).toBe(false);
-		expect(core.warning).toHaveBeenCalledWith("Root package.json has no 'name' field");
+		expect(core.warning).toHaveBeenCalledWith(
+			"Root package.json has no 'name' field - cannot detect package for release",
+		);
 	});
 
 	it("should warn when root package.json read fails", async () => {

@@ -1,5 +1,5 @@
 import { readFile, unlink } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { debug, error, getState, info, warning } from "@actions/core";
 import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
@@ -233,24 +233,47 @@ export async function detectPublishableChanges(
 
 	// Always check root package.json for single-package repos
 	// This is the primary detection method when no workspaces are defined
-	const rootPkgPath = `${cwd}/package.json`;
+	// NOTE: Using join() instead of string concatenation to prevent ncc bundler
+	// from incorrectly treating "package.json" as a static asset reference
+	const pkgJsonFilename = "package.json";
+	const rootPkgPath = join(cwd, pkgJsonFilename);
+
+	info(`Reading root package.json from: ${rootPkgPath}`);
+	debug(`Current working directory: ${cwd}`);
+
 	try {
 		const rootContent = await readFile(rootPkgPath, "utf-8");
+		debug(`Root package.json content length: ${rootContent.length} bytes`);
+
+		// Log first 200 chars of content for debugging (helps identify wrong file issues)
+		const contentPreview = rootContent.slice(0, 200).replace(/\n/g, " ");
+		debug(`Root package.json preview: ${contentPreview}...`);
+
 		const rootPkg = JSON.parse(rootContent) as PackageJson;
+
+		// Info-level logging for key fields (always visible)
+		info(`Root package.json parsed: name="${rootPkg.name || "(none)"}", private=${rootPkg.private ?? false}`);
+		if (rootPkg.publishConfig) {
+			info(`  publishConfig.access: ${rootPkg.publishConfig.access || "(not set)"}`);
+		}
+
+		// Debug-level for full details
 		debug(
-			`Root package.json: name=${rootPkg.name}, private=${rootPkg.private}, publishConfig=${JSON.stringify(rootPkg.publishConfig)}`,
+			`Root package.json full details: name=${rootPkg.name}, private=${rootPkg.private}, publishConfig=${JSON.stringify(rootPkg.publishConfig)}`,
 		);
 
 		if (rootPkg.name && !packageMap.has(rootPkg.name)) {
 			packageMap.set(rootPkg.name, { path: dirname(rootPkgPath), packageJson: rootPkg });
-			debug(`Added root package "${rootPkg.name}" to package map`);
+			info(`✓ Added root package "${rootPkg.name}" to package map`);
 		} else if (rootPkg.name) {
 			debug(`Root package "${rootPkg.name}" already in package map from workspaces`);
 		} else {
-			warning("Root package.json has no 'name' field");
+			warning("Root package.json has no 'name' field - cannot detect package for release");
+			warning("Ensure your package.json has a 'name' field");
 		}
 	} catch (err) {
 		warning(`Failed to read root package.json at ${rootPkgPath}: ${err instanceof Error ? err.message : String(err)}`);
+		debug(`Read error details: ${err instanceof Error ? err.stack : "no stack"}`);
 	}
 
 	// Log discovered packages and their publish configurations
