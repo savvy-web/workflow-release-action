@@ -60,6 +60,18 @@ describe("get-changeset-status", () => {
 		);
 	});
 
+	it("should use bun x for bun package manager", async () => {
+		vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ releases: [], changesets: [] }));
+
+		await getChangesetStatus("bun", "main");
+
+		expect(exec.exec).toHaveBeenCalledWith(
+			"bun",
+			expect.arrayContaining(["x", "changeset", "status"]),
+			expect.any(Object),
+		);
+	});
+
 	it("should fallback to merge base when no changesets found", async () => {
 		// First call (changeset status on HEAD) - no output, changesets consumed
 		// Git rev-parse HEAD
@@ -473,6 +485,69 @@ describe("get-changeset-status", () => {
 		expect(exec.exec).toHaveBeenCalledWith(
 			"npm",
 			expect.arrayContaining(["run", "changeset", "status"]),
+			expect.any(Object),
+		);
+	});
+
+	it("should use bun x for merge base changeset status", async () => {
+		// Changeset status fails on HEAD (no changesets)
+		// Then succeeds at merge base using bun
+		let callCount = 0;
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			callCount++;
+			// First changeset status call - no changesets
+			if (cmd === "bun" && args?.includes("x") && callCount === 1) {
+				if (options?.listeners?.stderr) {
+					options.listeners.stderr(Buffer.from("no changesets were found"));
+				}
+				return 0;
+			}
+			// git rev-parse HEAD
+			if (cmd === "git" && args?.[0] === "rev-parse") {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("abc123\n"));
+				}
+				return 0;
+			}
+			// git merge-base
+			if (cmd === "git" && args?.[0] === "merge-base") {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("xyz789\n"));
+				}
+				return 0;
+			}
+			// git checkout
+			if (cmd === "git" && args?.[0] === "checkout") {
+				return 0;
+			}
+			// Second changeset status call at merge base using bun
+			if (cmd === "bun" && args?.includes("x")) {
+				return 0;
+			}
+			return 0;
+		});
+
+		// First existsSync returns false (no output from first call)
+		// Then returns true for merge-base output
+		let existsCount = 0;
+		vi.mocked(fs.existsSync).mockImplementation(() => {
+			existsCount++;
+			return existsCount > 1;
+		});
+
+		vi.mocked(fs.readFileSync).mockReturnValue(
+			JSON.stringify({
+				releases: [{ name: "@test/pkg", newVersion: "1.0.0", type: "minor" }],
+				changesets: [],
+			}),
+		);
+
+		const result = await getChangesetStatus("bun", "main");
+
+		expect(result.releases).toHaveLength(1);
+		expect(exec.exec).toHaveBeenCalledWith(
+			"bun",
+			expect.arrayContaining(["x", "changeset", "status"]),
 			expect.any(Object),
 		);
 	});

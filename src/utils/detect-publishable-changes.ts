@@ -99,13 +99,16 @@ export async function detectPublishableChanges(
 	const statusFile = `.changeset-status-${Date.now()}.json`;
 
 	// Determine changeset command based on package manager
-	const changesetCommand = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npx";
+	const changesetCommand =
+		packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : packageManager === "bun" ? "bun" : "npx";
 	const changesetArgs =
 		packageManager === "pnpm"
 			? ["exec", "changeset", "status", "--output", statusFile]
 			: packageManager === "yarn"
 				? ["changeset", "status", "--output", statusFile]
-				: ["changeset", "status", "--output", statusFile];
+				: packageManager === "bun"
+					? ["x", "changeset", "status", "--output", statusFile]
+					: ["changeset", "status", "--output", statusFile];
 
 	// Run changeset status
 	let statusError = "";

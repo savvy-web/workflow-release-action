@@ -47,13 +47,16 @@ export async function getChangesetStatus(
 	const tempFileName = `.changeset-status-${Date.now()}.json`;
 	const tempFile = join(process.cwd(), tempFileName);
 
-	const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
+	const statusCmd =
+		packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : packageManager === "bun" ? "bun" : "npm";
 	const statusArgs =
 		packageManager === "pnpm"
 			? ["changeset", "status", `--output=${tempFileName}`]
 			: packageManager === "yarn"
 				? ["changeset", "status", `--output=${tempFileName}`]
-				: ["run", "changeset", "status", "--", `--output=${tempFileName}`];
+				: packageManager === "bun"
+					? ["x", "changeset", "status", `--output=${tempFileName}`]
+					: ["run", "changeset", "status", "--", `--output=${tempFileName}`];
 
 	const exitCode = await exec(statusCmd, statusArgs, {
 		listeners: {
@@ -166,13 +169,22 @@ async function getChangesetStatusFromMergeBase(
 	const tempFileName = `.changeset-mergebase-${Date.now()}.json`;
 	const tempFile = join(process.cwd(), tempFileName);
 	try {
-		const statusCmd = packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm";
+		const statusCmd =
+			packageManager === "pnpm"
+				? "pnpm"
+				: packageManager === "yarn"
+					? "yarn"
+					: packageManager === "bun"
+						? "bun"
+						: "npm";
 		const statusArgs =
 			packageManager === "pnpm"
 				? ["changeset", "status", `--output=${tempFileName}`]
 				: packageManager === "yarn"
 					? ["changeset", "status", `--output=${tempFileName}`]
-					: ["run", "changeset", "status", "--", `--output=${tempFileName}`];
+					: packageManager === "bun"
+						? ["x", "changeset", "status", `--output=${tempFileName}`]
+						: ["run", "changeset", "status", "--", `--output=${tempFileName}`];
 
 		const exitCode = await exec(statusCmd, statusArgs, {
 			ignoreReturnCode: true,

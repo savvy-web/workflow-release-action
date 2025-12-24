@@ -500,14 +500,23 @@ export async function updateReleaseBranch(): Promise<UpdateReleaseBranchResult> 
 	// Run changeset version to update versions
 	info("Running changeset version");
 	const versionCmd =
-		versionCommand || (packageManager === "pnpm" ? "pnpm" : packageManager === "yarn" ? "yarn" : "npm");
+		versionCommand ||
+		(packageManager === "pnpm"
+			? "pnpm"
+			: packageManager === "yarn"
+				? "yarn"
+				: packageManager === "bun"
+					? "bun"
+					: "npm");
 	const versionArgs =
 		versionCommand === ""
 			? packageManager === "pnpm"
 				? ["ci:version"]
 				: packageManager === "yarn"
 					? ["ci:version"]
-					: ["run", "ci:version"]
+					: packageManager === "bun"
+						? ["run", "ci:version"]
+						: ["run", "ci:version"]
 			: versionCommand.split(" ");
 
 	if (!dryRun) {

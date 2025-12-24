@@ -194,7 +194,7 @@
 			"Bash(yarn config:*)"
 		]
 	},
-	"model": "sonnet",
+	"model": "claude-opus-4-5-20251101",
 	"enableAllProjectMcpServers": true,
 	"enabledPlugins": {
 		"workflow@savvy-web-claude-tools": true
