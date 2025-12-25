@@ -227,6 +227,10 @@ export interface PublishResult {
 	localIntegrity?: string;
 	/** Remote tarball integrity (shasum) from registry */
 	remoteIntegrity?: string;
+	/** Path to the tarball that was published */
+	tarballPath?: string;
+	/** SHA-256 digest of the published tarball (format: "sha256:hex") */
+	tarballDigest?: string;
 }
 
 /**

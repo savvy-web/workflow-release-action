@@ -512,6 +512,8 @@ export async function publishPackages(
 					exitCode: publishResult.exitCode,
 					alreadyPublished: publishResult.alreadyPublished,
 					alreadyPublishedReason: publishResult.alreadyPublishedReason,
+					tarballPath: publishResult.tarballPath,
+					tarballDigest: publishResult.tarballDigest,
 				};
 
 				targetResults.push(result);
@@ -570,17 +572,19 @@ export async function publishPackages(
 		const hasProvenanceAttestation = targetResults.some((t) => t.success && t.attestationUrl);
 
 		if (allTargetsSuccess && !hasProvenanceAttestation) {
-			const firstSuccessfulTarget = targetResults.find((t) => t.success);
-			if (firstSuccessfulTarget) {
+			// Find a successful target that has a tarball digest (from npm pack + publish)
+			const targetWithDigest = targetResults.find((t) => t.success && t.tarballDigest);
+			if (targetWithDigest) {
 				info("Creating GitHub attestation for package (no npm provenance available)...");
-				const attestationDir = firstSuccessfulTarget.target.directory;
-				const attestationResult = await createPackageAttestation(
-					name,
-					packageInfo.version,
-					attestationDir,
+				const attestationResult = await createPackageAttestation({
+					packageName: name,
+					version: packageInfo.version,
+					directory: targetWithDigest.target.directory,
 					dryRun,
 					packageManager,
-				);
+					tarballDigest: targetWithDigest.tarballDigest,
+					registry: targetWithDigest.target.registry ?? undefined,
+				});
 				if (attestationResult.success && attestationResult.attestationUrl) {
 					githubAttestationUrl = attestationResult.attestationUrl;
 					info(`  ✓ Created GitHub attestation: ${githubAttestationUrl}`);
