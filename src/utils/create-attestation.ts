@@ -266,6 +266,33 @@ export async function createReleaseAssetAttestation(
 }
 
 /**
+ * Options for creating a package attestation
+ */
+export interface CreatePackageAttestationOptions {
+	/** Name of the package */
+	packageName: string;
+	/** Version of the package */
+	version: string;
+	/** Directory containing the package */
+	directory: string;
+	/** Whether to skip actual attestation creation */
+	dryRun: boolean;
+	/** Package manager to use for creating tarball if needed */
+	packageManager?: string;
+	/**
+	 * Pre-computed SHA-256 digest from the published tarball (format: "sha256:hex").
+	 * If provided, this digest is used directly instead of computing from a local tarball.
+	 * This ensures the attestation matches the exact artifact published to the registry.
+	 */
+	tarballDigest?: string;
+	/**
+	 * Registry URL where the package was published.
+	 * Used to determine if artifact metadata linking is applicable (GitHub Packages only).
+	 */
+	registry?: string;
+}
+
+/**
  * Create a GitHub attestation for a published package
  *
  * @remarks
@@ -273,24 +300,23 @@ export async function createReleaseAssetAttestation(
  * The attestation is signed using Sigstore and stored on GitHub, making it
  * verifiable via `gh attestation verify`.
  *
+ * When `tarballDigest` is provided, it uses that digest directly. This is the
+ * preferred approach for published packages as it ensures the attestation
+ * matches the exact artifact in the registry.
+ *
+ * When `tarballDigest` is not provided, it falls back to finding or creating
+ * a local tarball and computing its digest.
+ *
  * Requires:
  * - `id-token: write` permission for OIDC signing
  * - `attestations: write` permission for storing attestations
  *
- * @param packageName - Name of the package
- * @param version - Version of the package
- * @param directory - Directory containing the package (with tarball)
- * @param dryRun - Whether to skip actual attestation creation
- * @param packageManager - Package manager to use for creating tarball if needed (defaults to "npm")
+ * @param options - Attestation creation options
  * @returns Promise resolving to attestation result
  */
-export async function createPackageAttestation(
-	packageName: string,
-	version: string,
-	directory: string,
-	dryRun: boolean,
-	packageManager: string = "npm",
-): Promise<AttestationResult> {
+export async function createPackageAttestation(options: CreatePackageAttestationOptions): Promise<AttestationResult> {
+	const { packageName, version, directory, dryRun, packageManager = "npm", tarballDigest, registry } = options;
+
 	if (dryRun) {
 		info(`[DRY RUN] Would create attestation for ${packageName}@${version}`);
 		return {
@@ -309,32 +335,43 @@ export async function createPackageAttestation(
 		};
 	}
 
-	// Find the tarball, or create one if it doesn't exist
-	let tarballPath = findTarball(directory, packageName, version);
-	if (!tarballPath) {
-		debug(`No tarball found in ${directory} for ${packageName}@${version}, creating one...`);
-		tarballPath = await createTarball(directory, packageManager);
+	// Use provided digest or compute from local tarball
+	let digest: string;
+	let tarballName: string;
+
+	if (tarballDigest) {
+		// Use the pre-computed digest from the published tarball
+		digest = tarballDigest;
+		tarballName = `${packageName}@${version}`;
+		debug(`Using provided tarball digest: ${digest}`);
+	} else {
+		// Fall back to finding or creating a local tarball
+		let tarballPath = findTarball(directory, packageName, version);
 		if (!tarballPath) {
-			debug(`Failed to create tarball in ${directory}`);
-			return {
-				success: false,
-				error: `No tarball found and could not create one for ${packageName}@${version}`,
-			};
+			debug(`No tarball found in ${directory} for ${packageName}@${version}, creating one...`);
+			tarballPath = await createTarball(directory, packageManager);
+			if (!tarballPath) {
+				debug(`Failed to create tarball in ${directory}`);
+				return {
+					success: false,
+					error: `No tarball found and could not create one for ${packageName}@${version}`,
+				};
+			}
+			debug(`Created tarball: ${tarballPath}`);
 		}
-		debug(`Created tarball: ${tarballPath}`);
+		tarballName = basename(tarballPath);
+		digest = computeFileDigest(tarballPath);
+		debug(`Computed tarball digest: ${digest}`);
 	}
 
-	const tarballName = basename(tarballPath);
 	// Use PURL format for npm packages to link with GitHub Packages
 	// Format: pkg:npm/@scope/name@version or pkg:npm/name@version
 	const purlName = `pkg:npm/${packageName}@${version}`;
 	info(`Creating attestation for ${purlName}...`);
 
 	try {
-		// Compute digest
-		const digest = computeFileDigest(tarballPath);
-		debug(`Tarball digest: ${digest}`);
 		debug(`Subject name (PURL): ${purlName}`);
+		debug(`Subject digest: ${digest}`);
 
 		// Create the attestation
 		const attestation = await attestProvenance({
@@ -356,9 +393,18 @@ export async function createPackageAttestation(
 		}
 
 		// Link attestation to GitHub Packages artifact via metadata API
-		const metadataLinked = await createArtifactMetadataRecord(context.repo.owner, packageName, version, digest, token);
-		if (metadataLinked) {
-			info(`  ✓ Linked attestation to GitHub Packages artifact`);
+		// Only applicable for GitHub Packages registry
+		if (registry?.includes("pkg.github.com")) {
+			const metadataLinked = await createArtifactMetadataRecord(
+				context.repo.owner,
+				packageName,
+				version,
+				digest,
+				token,
+			);
+			if (metadataLinked) {
+				info(`  ✓ Linked attestation to GitHub Packages artifact`);
+			}
 		}
 
 		return {

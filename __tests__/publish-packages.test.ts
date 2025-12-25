@@ -810,6 +810,8 @@ describe("publish-packages", () => {
 				output: "Published successfully",
 				error: "",
 				registryUrl: "https://www.npmjs.com/package/@org/pkg-a",
+				tarballPath: "/path/to/pkg-a/org-pkg-a-1.0.0.tgz",
+				tarballDigest: "sha256:abc123def456",
 			});
 			// Mock attestation to return a URL
 			vi.mocked(createPackageAttestation).mockResolvedValue({
@@ -821,7 +823,16 @@ describe("publish-packages", () => {
 
 			expect(result.success).toBe(true);
 			expect(result.packages[0].githubAttestationUrl).toBe("https://github.com/attestations/12345");
-			expect(createPackageAttestation).toHaveBeenCalledWith("@org/pkg-a", "1.0.0", "/path/to/pkg-a", false, "pnpm");
+			expect(createPackageAttestation).toHaveBeenCalledWith(
+				expect.objectContaining({
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+					directory: "/path/to/pkg-a",
+					dryRun: false,
+					packageManager: "pnpm",
+					tarballDigest: "sha256:abc123def456",
+				}),
+			);
 		});
 	});
 });

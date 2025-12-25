@@ -39,7 +39,12 @@ describe("create-attestation", () => {
 
 	describe("createPackageAttestation", () => {
 		it("returns dry-run result when dryRun is true", async () => {
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", true);
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: true,
+			});
 
 			expect(result.success).toBe(true);
 			expect(result.attestationUrl).toBe(
@@ -49,7 +54,12 @@ describe("create-attestation", () => {
 		});
 
 		it("returns error when no GITHUB_TOKEN is available", async () => {
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(result.success).toBe(false);
 			expect(result.error).toBe("No GITHUB_TOKEN available for attestation creation");
@@ -62,7 +72,12 @@ describe("create-attestation", () => {
 			// Mock npm pack to fail
 			vi.mocked(exec.exec).mockRejectedValue(new Error("npm pack failed"));
 
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(result.success).toBe(false);
 			expect(result.error).toBe("No tarball found and could not create one for @org/pkg@1.0.0");
@@ -98,7 +113,12 @@ describe("create-attestation", () => {
 			});
 
 			// Default package manager is npm, which uses npx npm
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(result.success).toBe(true);
 			expect(exec.exec).toHaveBeenCalledWith("npx", ["npm", "pack", "--json"], expect.any(Object));
@@ -131,7 +151,13 @@ describe("create-attestation", () => {
 			});
 
 			// Use pnpm as package manager, which uses pnpm dlx npm
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false, "pnpm");
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				packageManager: "pnpm",
+			});
 
 			expect(result.success).toBe(true);
 			expect(exec.exec).toHaveBeenCalledWith("pnpm", ["dlx", "npm", "pack", "--json"], expect.any(Object));
@@ -164,7 +190,13 @@ describe("create-attestation", () => {
 			});
 
 			// Use yarn as package manager, which uses yarn npm
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false, "yarn");
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				packageManager: "yarn",
+			});
 
 			expect(result.success).toBe(true);
 			expect(exec.exec).toHaveBeenCalledWith("yarn", ["npm", "pack", "--json"], expect.any(Object));
@@ -197,7 +229,13 @@ describe("create-attestation", () => {
 			});
 
 			// Use bun as package manager, which uses bun x npm
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false, "bun");
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				packageManager: "bun",
+			});
 
 			expect(result.success).toBe(true);
 			expect(exec.exec).toHaveBeenCalledWith("bun", ["x", "npm", "pack", "--json"], expect.any(Object));
@@ -218,7 +256,12 @@ describe("create-attestation", () => {
 				tlogID: "67890",
 			});
 
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(result.success).toBe(true);
 			expect(result.attestationUrl).toBe("https://github.com/test-owner/test-repo/attestations/12345");
@@ -239,7 +282,12 @@ describe("create-attestation", () => {
 				attestationID: "12345",
 			});
 
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(result.success).toBe(true);
 			expect(result.attestationUrl).toBe("https://github.com/test-owner/test-repo/attestations/12345");
@@ -257,7 +305,12 @@ describe("create-attestation", () => {
 				attestationID: "12345",
 			});
 
-			await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(attestProvenance).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -278,7 +331,12 @@ describe("create-attestation", () => {
 				attestationID: "12345",
 			});
 
-			await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(attestProvenance).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -295,7 +353,12 @@ describe("create-attestation", () => {
 			const { attestProvenance } = await import("@actions/attest");
 			vi.mocked(attestProvenance).mockRejectedValue(new Error("Attestation API error"));
 
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(result.success).toBe(false);
 			expect(result.error).toBe("Attestation API error");
@@ -316,7 +379,12 @@ describe("create-attestation", () => {
 				// No attestationID
 			});
 
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(result.success).toBe(true);
 			expect(result.attestationUrl).toBeUndefined();
@@ -336,7 +404,12 @@ describe("create-attestation", () => {
 				attestationID: "12345",
 			});
 
-			await createPackageAttestation("pkg", "1.0.0", "/path/to/pkg", false);
+			await createPackageAttestation({
+				packageName: "pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(attestProvenance).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -360,7 +433,12 @@ describe("create-attestation", () => {
 				tlogID: "67890",
 			});
 
-			await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(vi.mocked(core.info)).toHaveBeenCalledWith(
 				"  Transparency log: https://search.sigstore.dev/?logIndex=67890",
@@ -380,7 +458,12 @@ describe("create-attestation", () => {
 			});
 
 			// Test scoped package
-			await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(attestProvenance).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -391,7 +474,12 @@ describe("create-attestation", () => {
 			vi.mocked(attestProvenance).mockClear();
 
 			// Test unscoped package
-			await createPackageAttestation("my-package", "2.0.0", "/path/to/pkg", false);
+			await createPackageAttestation({
+				packageName: "my-package",
+				version: "2.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(attestProvenance).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -419,10 +507,113 @@ describe("create-attestation", () => {
 			} as never);
 
 			// Should still succeed even if metadata linking fails
-			const result = await createPackageAttestation("@org/pkg", "1.0.0", "/path/to/pkg", false);
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
 
 			expect(result.success).toBe(true);
 			expect(result.attestationId).toBe("12345");
+		});
+
+		it("uses provided tarballDigest instead of computing from local file", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			// Should NOT call fs operations when tarballDigest is provided
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123def456",
+			});
+
+			expect(result.success).toBe(true);
+			// Should use the provided digest directly
+			expect(attestProvenance).toHaveBeenCalledWith(
+				expect.objectContaining({
+					subjectDigest: { sha256: "abc123def456" },
+				}),
+			);
+			// fs.existsSync should not be called for finding/creating tarball
+			expect(vi.mocked(fs.existsSync)).not.toHaveBeenCalled();
+		});
+
+		it("links attestation to GitHub Packages when registry is npm.pkg.github.com", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			const { getOctokit } = await import("@actions/github");
+			const mockRequest = vi.fn().mockResolvedValue({ status: 200 });
+			vi.mocked(getOctokit).mockReturnValue({
+				request: mockRequest,
+			} as never);
+
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123def456",
+				registry: "https://npm.pkg.github.com",
+			});
+
+			expect(result.success).toBe(true);
+			// Should call the artifact metadata API
+			expect(mockRequest).toHaveBeenCalledWith(
+				"POST /orgs/{org}/artifacts/metadata/storage-record",
+				expect.objectContaining({
+					org: "test-owner",
+					name: "pkg:npm/@org/pkg@1.0.0",
+					digest: "sha256:abc123def456",
+				}),
+			);
+			expect(vi.mocked(core.info)).toHaveBeenCalledWith("  ✓ Linked attestation to GitHub Packages artifact");
+		});
+
+		it("does not link to GitHub Packages for non-GitHub registries", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const { attestProvenance } = await import("@actions/attest");
+			vi.mocked(attestProvenance).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			const { getOctokit } = await import("@actions/github");
+			const mockRequest = vi.fn().mockResolvedValue({ status: 200 });
+			vi.mocked(getOctokit).mockReturnValue({
+				request: mockRequest,
+			} as never);
+
+			const result = await createPackageAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123def456",
+				registry: "https://registry.npmjs.org",
+			});
+
+			expect(result.success).toBe(true);
+			// Should NOT call the artifact metadata API for non-GitHub registry
+			expect(mockRequest).not.toHaveBeenCalled();
 		});
 	});
 

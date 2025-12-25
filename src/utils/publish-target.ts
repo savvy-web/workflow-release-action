@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { debug, error, info, warning } from "@actions/core";
@@ -164,6 +165,73 @@ export async function getLocalTarballIntegrity(directory: string, packageManager
 		return parsed[0]?.shasum;
 	} catch {
 		debug(`Failed to get local tarball integrity: ${output}`);
+		return undefined;
+	}
+}
+
+/**
+ * Result of packing a tarball
+ */
+interface PackResult {
+	/** Path to the created tarball */
+	tarballPath: string;
+	/** SHA-256 digest in format "sha256:hex" */
+	digest: string;
+	/** Filename of the tarball */
+	filename: string;
+}
+
+/**
+ * Pack a package into a tarball and compute its SHA-256 digest
+ *
+ * @remarks
+ * This creates a tarball using `npm pack --json` and computes its SHA-256 digest.
+ * The digest can be used for attestations and linking to GitHub Packages.
+ *
+ * @param directory - Directory containing the package
+ * @param packageManager - Package manager to use
+ * @returns Pack result with tarball path and digest, or undefined if failed
+ */
+async function packAndComputeDigest(directory: string, packageManager: string): Promise<PackResult | undefined> {
+	let output = "";
+	const npmCmd = getNpmCommand(packageManager);
+
+	try {
+		await exec(npmCmd.cmd, [...npmCmd.baseArgs, "pack", "--json"], {
+			cwd: directory,
+			silent: true,
+			listeners: {
+				stdout: (data: Buffer) => {
+					output += data.toString();
+				},
+			},
+		});
+
+		// Parse JSON output to get filename
+		const packInfo = JSON.parse(output) as Array<{ filename: string }>;
+		if (packInfo.length === 0 || !packInfo[0].filename) {
+			debug("npm pack did not return filename");
+			return undefined;
+		}
+
+		const filename = packInfo[0].filename;
+		const tarballPath = join(directory, filename);
+
+		if (!existsSync(tarballPath)) {
+			debug(`Tarball not found at expected path: ${tarballPath}`);
+			return undefined;
+		}
+
+		// Compute SHA-256 digest
+		const content = readFileSync(tarballPath);
+		const hash = createHash("sha256").update(content).digest("hex");
+		const digest = `sha256:${hash}`;
+
+		debug(`Packed tarball: ${filename}, digest: ${digest}`);
+
+		return { tarballPath, digest, filename };
+	} catch (err) {
+		debug(`Failed to pack tarball: ${err instanceof Error ? err.message : String(err)}`);
 		return undefined;
 	}
 }
@@ -513,12 +581,28 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 		info(`✓ Version ${version} not found on ${registryName} - proceeding with publish`);
 	}
 
-	// Build publish command
+	// Step 1: Pack the tarball first so we have a consistent artifact to publish and attest
+	info(`Packing ${packageName}@${version}...`);
+	const packResult = await packAndComputeDigest(target.directory, packageManager);
+	if (!packResult) {
+		return {
+			success: false,
+			output: "",
+			error: "Failed to create tarball with npm pack",
+			exitCode: 1,
+		};
+	}
+
+	info(`✓ Created tarball: ${packResult.filename}`);
+	debug(`  Digest: ${packResult.digest}`);
+
+	// Step 2: Build publish command with the specific tarball
 	let output = "";
 	let errorOutput = "";
 	let exitCode = 0;
 
-	const args = ["publish"];
+	// Publish the specific tarball file to ensure digest consistency
+	const args = ["publish", packResult.tarballPath];
 
 	if (target.registry) {
 		args.push("--registry", target.registry);
@@ -598,6 +682,8 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 		exitCode,
 		registryUrl,
 		attestationUrl,
+		tarballPath: packResult.tarballPath,
+		tarballDigest: packResult.digest,
 	};
 }
 

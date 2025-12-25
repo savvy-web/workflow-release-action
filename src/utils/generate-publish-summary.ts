@@ -382,6 +382,10 @@ export interface TargetPublishResult {
 	alreadyPublished?: boolean;
 	/** Reason for already published state */
 	alreadyPublishedReason?: AlreadyPublishedReason;
+	/** Path to the tarball that was published */
+	tarballPath?: string;
+	/** SHA-256 digest of the published tarball (format: "sha256:hex") */
+	tarballDigest?: string;
 }
 
 /**
