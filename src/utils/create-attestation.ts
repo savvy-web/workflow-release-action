@@ -107,15 +107,30 @@ async function createArtifactMetadataRecord(
 	// Use PURL format for the artifact name
 	const purlName = `pkg:npm/${packageName}@${version}`;
 
+	// Extract the unscoped package name for the repository field
+	// e.g., "@savvy-web/fixed-2" -> "fixed-2"
+	const unscopedName = packageName.replace(/^@[^/]+\//, "");
+
+	// Build the artifact URL pointing to the package in GitHub Packages
+	// Format: https://github.com/{owner}/{repo}/pkgs/npm/{package-name}
+	const artifactUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/pkgs/npm/${unscopedName}`;
+
 	try {
+		// The @actions/attest library passes extra properties through to the API
+		// We use github_repository (the actual API field name) instead of repo
+		// to properly link the artifact to the source repository
 		const storageRecordIds = await createStorageRecord(
 			{
 				name: purlName,
 				digest,
+				version,
 			},
 			{
 				registryUrl: "https://npm.pkg.github.com/",
-			},
+				artifactUrl,
+				// Use the API field name directly - gets passed through via ...rest
+				github_repository: `${context.repo.owner}/${context.repo.repo}`,
+			} as Parameters<typeof createStorageRecord>[1],
 			token,
 		);
 
