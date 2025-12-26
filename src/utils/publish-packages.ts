@@ -481,20 +481,33 @@ export async function publishPackages(
 		const npmTargets = packageInfo.targets.filter((t) => t.protocol === "npm");
 		const needsPacking = npmTargets.some((t) => !skipTargetKeys.has(`${name}:${t.registry || "jsr"}`));
 
-		// Pack ONCE for all npm targets to ensure consistent digest across all registries
-		// This is critical for attestation linking - all targets must receive the same tarball
-		let prePackedTarball: Awaited<ReturnType<typeof packAndComputeDigest>> | undefined;
+		// Pack once PER UNIQUE DIRECTORY to handle multi-target scenarios where
+		// different targets publish from different directories (e.g., dist/npm vs dist/github)
+		// This ensures consistent digest for attestation linking while supporting different content per target
+		const prePackedTarballs = new Map<string, Awaited<ReturnType<typeof packAndComputeDigest>>>();
+
 		if (needsPacking && npmTargets.length > 0) {
-			// Use the first npm target's directory (they should all be the same)
-			const packDirectory = npmTargets[0].directory;
-			info(`Packing ${name}@${packageInfo.version}...`);
-			prePackedTarball = await packAndComputeDigest(packDirectory, packageManager);
-			if (prePackedTarball) {
-				info(`✓ Created tarball: ${prePackedTarball.filename}`);
-				info(`  Digest: ${prePackedTarball.digest}`);
-			} else {
-				error(`Failed to pack tarball for ${name}`);
-				allTargetsSuccess = false;
+			// Group targets by directory and pack each unique directory once
+			const uniqueDirectories = [...new Set(npmTargets.map((t) => t.directory))];
+
+			for (const directory of uniqueDirectories) {
+				// Skip directories where all targets are already published
+				const targetsForDir = npmTargets.filter((t) => t.directory === directory);
+				const allSkipped = targetsForDir.every((t) => skipTargetKeys.has(`${name}:${t.registry || "jsr"}`));
+				if (allSkipped) {
+					continue;
+				}
+
+				info(`Packing ${name}@${packageInfo.version} from ${directory}...`);
+				const packed = await packAndComputeDigest(directory, packageManager);
+				if (packed) {
+					prePackedTarballs.set(directory, packed);
+					info(`✓ Created tarball: ${packed.filename}`);
+					info(`  Digest: ${packed.digest}`);
+				} else {
+					error(`Failed to pack tarball for ${name} from ${directory}`);
+					allTargetsSuccess = false;
+				}
 			}
 		}
 
@@ -516,13 +529,16 @@ export async function publishPackages(
 				continue;
 			}
 
-			// Skip npm targets if packing failed
-			if (target.protocol === "npm" && needsPacking && !prePackedTarball) {
-				error(`✗ Skipping ${registryName} - tarball packing failed`);
+			// Get pre-packed tarball for this target's directory
+			const targetTarball = target.protocol === "npm" ? prePackedTarballs.get(target.directory) : undefined;
+
+			// Skip npm targets if packing failed for this directory
+			if (target.protocol === "npm" && needsPacking && !targetTarball) {
+				error(`✗ Skipping ${registryName} - tarball packing failed for ${target.directory}`);
 				targetResults.push({
 					target,
 					success: false,
-					error: "Tarball packing failed",
+					error: `Tarball packing failed for ${target.directory}`,
 					exitCode: 1,
 				});
 				continue;
@@ -532,12 +548,7 @@ export async function publishPackages(
 
 			try {
 				// Pass pre-packed tarball to npm targets for consistent digest
-				const publishResult = await publishToTarget(
-					target,
-					dryRun,
-					packageManager,
-					target.protocol === "npm" ? prePackedTarball : undefined,
-				);
+				const publishResult = await publishToTarget(target, dryRun, packageManager, targetTarball);
 
 				// Determine if this is a safe skip or an error
 				// "different" means tarball content mismatch - this is an error
@@ -615,27 +626,30 @@ export async function publishPackages(
 		let githubAttestationUrl: string | undefined;
 		const hasProvenanceAttestation = targetResults.some((t) => t.success && t.attestationUrl);
 
-		if (allTargetsSuccess && !hasProvenanceAttestation) {
-			// Use the pre-packed tarball digest for the attestation
-			// This ensures the attestation matches the exact tarball sent to all registries
-			if (prePackedTarball) {
-				// Find a GitHub Packages target for linking, fall back to first npm target
-				const githubPackagesTarget = npmTargets.find((t) => t.registry?.includes("pkg.github.com"));
-				const attestationTarget = githubPackagesTarget || npmTargets[0];
+		if (allTargetsSuccess && !hasProvenanceAttestation && prePackedTarballs.size > 0) {
+			// Find a GitHub Packages target for linking, fall back to first npm target
+			const githubPackagesTarget = npmTargets.find((t) => t.registry?.includes("pkg.github.com"));
+			const attestationTarget = githubPackagesTarget || npmTargets[0];
 
-				info("Creating GitHub attestation for package (no npm provenance available)...");
-				const attestationResult = await createPackageAttestation({
-					packageName: name,
-					version: packageInfo.version,
-					directory: attestationTarget?.directory || packageInfo.path,
-					dryRun,
-					packageManager,
-					tarballDigest: prePackedTarball.digest,
-					registry: githubPackagesTarget?.registry ?? undefined,
-				});
-				if (attestationResult.success && attestationResult.attestationUrl) {
-					githubAttestationUrl = attestationResult.attestationUrl;
-					info(`  ✓ Created GitHub attestation: ${githubAttestationUrl}`);
+			if (attestationTarget) {
+				// Get the tarball for the attestation target's directory
+				const attestationTarball = prePackedTarballs.get(attestationTarget.directory);
+
+				if (attestationTarball) {
+					info("Creating GitHub attestation for package (no npm provenance available)...");
+					const attestationResult = await createPackageAttestation({
+						packageName: name,
+						version: packageInfo.version,
+						directory: attestationTarget.directory,
+						dryRun,
+						packageManager,
+						tarballDigest: attestationTarball.digest,
+						registry: githubPackagesTarget?.registry ?? undefined,
+					});
+					if (attestationResult.success && attestationResult.attestationUrl) {
+						githubAttestationUrl = attestationResult.attestationUrl;
+						info(`  ✓ Created GitHub attestation: ${githubAttestationUrl}`);
+					}
 				}
 			}
 		} else if (hasProvenanceAttestation) {

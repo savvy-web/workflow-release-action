@@ -721,6 +721,268 @@ describe("publish-packages", () => {
 		});
 	});
 
+	describe("multi-directory target handling", () => {
+		it("packs once per unique directory when targets have different directories", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					publishConfig: {
+						access: "public",
+						targets: [
+							{ protocol: "npm", registry: "https://registry.npmjs.org/", directory: "dist/npm" },
+							{ protocol: "npm", registry: "https://npm.pkg.github.com/", directory: "dist/github" },
+						],
+					},
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			// Mock packAndComputeDigest to return different digests per directory
+			vi.mocked(packAndComputeDigest).mockImplementation(async (directory) => {
+				if (directory.includes("dist/npm")) {
+					return {
+						path: "/path/to/pkg-a/dist/npm/org-pkg-a-1.0.0.tgz",
+						digest: "sha256:npm-digest-123",
+						filename: "org-pkg-a-1.0.0.tgz",
+					};
+				}
+				if (directory.includes("dist/github")) {
+					return {
+						path: "/path/to/pkg-a/dist/github/org-pkg-a-1.0.0.tgz",
+						digest: "sha256:github-digest-456",
+						filename: "org-pkg-a-1.0.0.tgz",
+					};
+				}
+				return undefined;
+			});
+
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: true,
+				output: "Published successfully",
+				error: "",
+			});
+
+			const result = await publishPackages("pnpm", "main", false);
+
+			expect(result.success).toBe(true);
+			// packAndComputeDigest should be called twice - once per unique directory
+			expect(packAndComputeDigest).toHaveBeenCalledTimes(2);
+			expect(packAndComputeDigest).toHaveBeenCalledWith(expect.stringContaining("dist/npm"), expect.any(String));
+			expect(packAndComputeDigest).toHaveBeenCalledWith(expect.stringContaining("dist/github"), expect.any(String));
+			// publishToTarget should be called twice
+			expect(publishToTarget).toHaveBeenCalledTimes(2);
+		});
+
+		it("passes correct tarball to each target based on directory", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					publishConfig: {
+						access: "public",
+						targets: [
+							{ protocol: "npm", registry: "https://registry.npmjs.org/", directory: "dist/npm" },
+							{ protocol: "npm", registry: "https://npm.pkg.github.com/", directory: "dist/github" },
+						],
+					},
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			// Track which tarball is passed to which registry
+			const tarballsByRegistry: Record<string, string | undefined> = {};
+
+			vi.mocked(packAndComputeDigest).mockImplementation(async (directory) => {
+				if (directory.includes("dist/npm")) {
+					return {
+						path: "/path/to/pkg-a/dist/npm/org-pkg-a-1.0.0.tgz",
+						digest: "sha256:npm-digest-123",
+						filename: "org-pkg-a-1.0.0.tgz",
+					};
+				}
+				if (directory.includes("dist/github")) {
+					return {
+						path: "/path/to/pkg-a/dist/github/org-pkg-a-1.0.0.tgz",
+						digest: "sha256:github-digest-456",
+						filename: "org-pkg-a-1.0.0.tgz",
+					};
+				}
+				return undefined;
+			});
+
+			vi.mocked(publishToTarget).mockImplementation(async (target, _dryRun, _pm, tarball) => {
+				tarballsByRegistry[target.registry ?? "unknown"] = tarball?.digest;
+				return {
+					success: true,
+					output: "Published successfully",
+					error: "",
+				};
+			});
+
+			await publishPackages("pnpm", "main", false);
+
+			// Verify each registry received the correct tarball digest
+			expect(tarballsByRegistry["https://registry.npmjs.org/"]).toBe("sha256:npm-digest-123");
+			expect(tarballsByRegistry["https://npm.pkg.github.com/"]).toBe("sha256:github-digest-456");
+		});
+
+		it("only packs once when all targets share the same directory", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					publishConfig: {
+						access: "public",
+						directory: "dist", // Shared directory for all targets
+						targets: ["npm", "github"],
+					},
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: true,
+				output: "Published successfully",
+				error: "",
+			});
+
+			await publishPackages("pnpm", "main", false);
+
+			// packAndComputeDigest should only be called once for the shared directory
+			expect(packAndComputeDigest).toHaveBeenCalledTimes(1);
+			expect(packAndComputeDigest).toHaveBeenCalledWith(expect.stringContaining("dist"), expect.any(String));
+		});
+
+		it("skips packing for directories where all targets are already published", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					publishConfig: {
+						access: "public",
+						targets: [
+							{ protocol: "npm", registry: "https://registry.npmjs.org/", directory: "dist/npm" },
+							{ protocol: "npm", registry: "https://npm.pkg.github.com/", directory: "dist/github" },
+						],
+					},
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			// First target (npm) already published with identical content
+			vi.mocked(checkVersionExists)
+				.mockResolvedValueOnce({
+					success: true,
+					versionExists: true,
+					versionInfo: {
+						name: "@org/pkg-a",
+						version: "1.0.0",
+						versions: ["1.0.0"],
+						distTags: { latest: "1.0.0" },
+						dist: { shasum: "abc123def456" },
+					},
+				})
+				// Second target (github) not yet published
+				.mockResolvedValueOnce({
+					success: true,
+					versionExists: false,
+				});
+
+			vi.mocked(packAndComputeDigest).mockResolvedValue({
+				path: "/path/to/pkg-a/dist/github/org-pkg-a-1.0.0.tgz",
+				digest: "sha256:github-digest-456",
+				filename: "org-pkg-a-1.0.0.tgz",
+			});
+
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: true,
+				output: "Published successfully",
+				error: "",
+			});
+
+			await publishPackages("pnpm", "main", false);
+
+			// packAndComputeDigest should only be called for dist/github (npm was skipped)
+			expect(packAndComputeDigest).toHaveBeenCalledTimes(1);
+			expect(packAndComputeDigest).toHaveBeenCalledWith(expect.stringContaining("dist/github"), expect.any(String));
+		});
+
+		it("handles packing failure for one directory while others succeed", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					publishConfig: {
+						access: "public",
+						targets: [
+							{ protocol: "npm", registry: "https://registry.npmjs.org/", directory: "dist/npm" },
+							{ protocol: "npm", registry: "https://npm.pkg.github.com/", directory: "dist/github" },
+						],
+					},
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			// Packing fails for dist/npm but succeeds for dist/github
+			vi.mocked(packAndComputeDigest).mockImplementation(async (directory) => {
+				if (directory.includes("dist/npm")) {
+					return undefined; // Packing failed
+				}
+				if (directory.includes("dist/github")) {
+					return {
+						path: "/path/to/pkg-a/dist/github/org-pkg-a-1.0.0.tgz",
+						digest: "sha256:github-digest-456",
+						filename: "org-pkg-a-1.0.0.tgz",
+					};
+				}
+				return undefined;
+			});
+
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: true,
+				output: "Published successfully",
+				error: "",
+			});
+
+			const result = await publishPackages("pnpm", "main", false);
+
+			// Overall should fail because npm target failed
+			expect(result.success).toBe(false);
+			// Error should mention the specific directory that failed
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("dist/npm"));
+		});
+	});
+
 	describe("post-publish result handling", () => {
 		it("handles publish returning alreadyPublished with identical content", async () => {
 			vi.mocked(getChangesetStatus).mockResolvedValue({
