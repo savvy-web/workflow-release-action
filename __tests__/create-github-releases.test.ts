@@ -1284,4 +1284,187 @@ describe("create-github-releases", () => {
 			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to update release notes"));
 		});
 	});
+
+	describe("multi-directory asset uploads", () => {
+		it("uploads assets with directory prefix when multiple directories exist", async () => {
+			const tags: TagInfo[] = [{ name: "v1.0.0", packageName: "@org/pkg-a", version: "1.0.0" }];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [
+						{
+							target: {
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/pkg-a/dist/npm",
+							} as never,
+							success: true,
+							tarballPath: "/path/to/pkg-a/dist/npm/org-pkg-a-1.0.0.tgz",
+						},
+						{
+							target: {
+								registry: "https://npm.pkg.github.com/",
+								directory: "/path/to/pkg-a/dist/github",
+							} as never,
+							success: true,
+							tarballPath: "/path/to/pkg-a/dist/github/org-pkg-a-1.0.0.tgz",
+						},
+					],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("tarball content"));
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: { id: 123, html_url: "https://github.com/test/releases/1" },
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
+				data: { browser_download_url: "https://download/asset", size: 1234 },
+			});
+			mockOctokit.rest.repos.updateRelease.mockResolvedValue({ data: {} });
+			// Mock attestation with URL to cover line 513
+			vi.mocked(createReleaseAssetAttestation).mockResolvedValue({
+				success: true,
+				attestationUrl: "https://github.com/test-owner/test-repo/attestations/multi-dir-123",
+			});
+
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
+
+			expect(result.success).toBe(true);
+			// Should upload both tarballs with directory prefix
+			expect(mockOctokit.rest.repos.uploadReleaseAsset).toHaveBeenCalledTimes(2);
+			expect(mockOctokit.rest.repos.uploadReleaseAsset).toHaveBeenCalledWith(
+				expect.objectContaining({ name: "npm-org-pkg-a-1.0.0.tgz" }),
+			);
+			expect(mockOctokit.rest.repos.uploadReleaseAsset).toHaveBeenCalledWith(
+				expect.objectContaining({ name: "github-org-pkg-a-1.0.0.tgz" }),
+			);
+			// Verify attestation success message was logged
+			expect(core.info).toHaveBeenCalledWith(
+				"  ✓ Created attestation: https://github.com/test-owner/test-repo/attestations/multi-dir-123",
+			);
+		});
+
+		it("uploads single asset without prefix when all targets share directory", async () => {
+			const tags: TagInfo[] = [{ name: "v1.0.0", packageName: "@org/pkg-a", version: "1.0.0" }];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [
+						{
+							target: {
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/pkg-a/dist",
+							} as never,
+							success: true,
+							tarballPath: "/path/to/pkg-a/dist/org-pkg-a-1.0.0.tgz",
+						},
+						{
+							target: {
+								registry: "https://npm.pkg.github.com/",
+								directory: "/path/to/pkg-a/dist",
+							} as never,
+							success: true,
+							tarballPath: "/path/to/pkg-a/dist/org-pkg-a-1.0.0.tgz",
+						},
+					],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("tarball content"));
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: { id: 123, html_url: "https://github.com/test/releases/1" },
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
+				data: { browser_download_url: "https://download/asset", size: 1234 },
+			});
+
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
+
+			expect(result.success).toBe(true);
+			// Should upload only once (de-duplicated) without prefix
+			expect(mockOctokit.rest.repos.uploadReleaseAsset).toHaveBeenCalledTimes(1);
+			expect(mockOctokit.rest.repos.uploadReleaseAsset).toHaveBeenCalledWith(
+				expect.objectContaining({ name: "org-pkg-a-1.0.0.tgz" }),
+			);
+		});
+
+		it("falls back to old behavior when no tarballPath in results", async () => {
+			const tags: TagInfo[] = [{ name: "v1.0.0", packageName: "@org/pkg-a", version: "1.0.0" }];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [
+						{
+							target: { registry: "https://registry.npmjs.org/" } as never,
+							success: true,
+							// No tarballPath
+						},
+					],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readdirSync).mockReturnValue(["org-pkg-a-1.0.0.tgz"] as never);
+			// Mock readFileSync to return appropriate types based on the path
+			vi.mocked(fs.readFileSync).mockImplementation((path: fs.PathOrFileDescriptor) => {
+				const pathStr = String(path);
+				if (pathStr.includes("CHANGELOG")) {
+					return "# Changelog\n\n## 1.0.0\n\nRelease notes";
+				}
+				return Buffer.from("tarball content");
+			});
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: { id: 123, html_url: "https://github.com/test/releases/1" },
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
+				data: { browser_download_url: "https://download/asset", size: 1234 },
+			});
+
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
+
+			expect(result.success).toBe(true);
+			// Should upload via fallback path (found tgz in package dir)
+			expect(mockOctokit.rest.repos.uploadReleaseAsset).toHaveBeenCalledTimes(1);
+		});
+
+		it("handles upload failure gracefully in tarballPath code path", async () => {
+			const tags: TagInfo[] = [{ name: "v1.0.0", packageName: "@org/pkg-a", version: "1.0.0" }];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [
+						{
+							target: {
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/pkg-a/dist/npm",
+							} as never,
+							success: true,
+							tarballPath: "/path/to/pkg-a/dist/npm/org-pkg-a-1.0.0.tgz",
+						},
+					],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.readFileSync).mockImplementation(() => {
+				throw new Error("ENOENT: no such file or directory");
+			});
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: { id: 123, html_url: "https://github.com/test/releases/1" },
+			});
+
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
+
+			expect(result.success).toBe(true); // Release still succeeds
+			expect(core.warning).toHaveBeenCalledWith(
+				expect.stringContaining("Failed to upload artifact /path/to/pkg-a/dist/npm/org-pkg-a-1.0.0.tgz"),
+			);
+		});
+	});
 });

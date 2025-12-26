@@ -48,6 +48,8 @@ export interface AssetInfo {
 	size: number;
 	/** Attestation URL if attestation was created */
 	attestationUrl?: string;
+	/** Registry this tarball was published to (if multi-target) */
+	registry?: string;
 }
 
 /**
@@ -100,6 +102,19 @@ function extractReleaseNotes(changelogPath: string, version: string): string | u
 	}
 
 	return sectionLines.join("\n");
+}
+
+/**
+ * Get prefix for asset name from target directory
+ *
+ * Uses the last segment of the directory path (e.g., "dist/npm" -> "npm")
+ *
+ * @param directory - Target directory path
+ * @returns Directory suffix for asset name prefix
+ */
+function getDirectoryPrefix(directory: string): string {
+	const parts = directory.split("/").filter(Boolean);
+	return parts[parts.length - 1] || "dist";
 }
 
 /**
@@ -393,21 +408,86 @@ export async function createGitHubReleases(
 				assets: [],
 			};
 
-			// Upload artifacts for each package
+			// Upload artifacts for each package using tarball paths from publish results
 			for (const pkg of associatedPackages) {
-				const pkgPath = findPackagePath(pkg.name);
-				if (!pkgPath) {
-					warning(`Could not find path for package ${pkg.name}, skipping artifact upload`);
+				// Collect successful targets with tarball paths
+				const targetsWithTarballs = pkg.targets.filter((t) => t.success && t.tarballPath);
+
+				if (targetsWithTarballs.length === 0) {
+					// Fallback to old behavior for packages without tarball info
+					const pkgPath = findPackagePath(pkg.name);
+					if (!pkgPath) {
+						warning(`Could not find path for package ${pkg.name}, skipping artifact upload`);
+						continue;
+					}
+					const artifacts = await findPackageArtifacts(pkgPath, packageManager);
+
+					for (const artifactPath of artifacts) {
+						try {
+							const fileName = basename(artifactPath);
+							const fileContent = readFileSync(artifactPath);
+
+							info(`Uploading asset: ${fileName}`);
+
+							const asset = await octokit.rest.repos.uploadReleaseAsset({
+								owner: context.repo.owner,
+								repo: context.repo.repo,
+								release_id: release.data.id,
+								name: fileName,
+								data: fileContent as unknown as string,
+							});
+
+							info(`Uploaded: ${asset.data.browser_download_url}`);
+
+							const attestationResult = await createReleaseAssetAttestation(
+								artifactPath,
+								pkg.name,
+								pkg.version,
+								dryRun,
+							);
+
+							releaseInfo.assets.push({
+								name: fileName,
+								downloadUrl: asset.data.browser_download_url,
+								size: asset.data.size,
+								attestationUrl: attestationResult.success ? attestationResult.attestationUrl : undefined,
+							});
+
+							if (attestationResult.success && attestationResult.attestationUrl) {
+								info(`  ✓ Created attestation: ${attestationResult.attestationUrl}`);
+							}
+						} catch (err) {
+							warning(`Failed to upload artifact ${artifactPath}: ${err instanceof Error ? err.message : String(err)}`);
+						}
+					}
 					continue;
 				}
-				const artifacts = await findPackageArtifacts(pkgPath, packageManager);
 
-				for (const artifactPath of artifacts) {
+				// Check if we have multiple unique directories (multi-target with different content)
+				const uniqueDirectories = new Set(targetsWithTarballs.map((t) => t.target.directory));
+				const needsPrefix = uniqueDirectories.size > 1;
+
+				// Track uploaded paths to avoid duplicates (same tarball for multiple targets)
+				const uploadedPaths = new Set<string>();
+
+				for (const targetResult of targetsWithTarballs) {
+					const artifactPath = targetResult.tarballPath;
+					if (!artifactPath) continue; // Type guard (already filtered but TS doesn't know)
+
+					// Skip if already uploaded (same tarball used for multiple targets sharing directory)
+					if (uploadedPaths.has(artifactPath)) continue;
+					uploadedPaths.add(artifactPath);
+
 					try {
-						const fileName = basename(artifactPath);
+						const originalFileName = basename(artifactPath);
+						// Prefix with directory name if multiple directories (e.g., "npm-my-package-1.0.0.tgz")
+						const fileName = needsPrefix
+							? `${getDirectoryPrefix(targetResult.target.directory)}-${originalFileName}`
+							: originalFileName;
+
 						const fileContent = readFileSync(artifactPath);
 
-						info(`Uploading asset: ${fileName}`);
+						info(`Uploading asset: ${fileName}${needsPrefix ? ` (from ${targetResult.target.directory})` : ""}`);
 
 						const asset = await octokit.rest.repos.uploadReleaseAsset({
 							owner: context.repo.owner,
@@ -419,17 +499,15 @@ export async function createGitHubReleases(
 
 						info(`Uploaded: ${asset.data.browser_download_url}`);
 
-						// Create attestation for the uploaded release asset
 						const attestationResult = await createReleaseAssetAttestation(artifactPath, pkg.name, pkg.version, dryRun);
 
-						const assetInfo: AssetInfo = {
+						releaseInfo.assets.push({
 							name: fileName,
 							downloadUrl: asset.data.browser_download_url,
 							size: asset.data.size,
 							attestationUrl: attestationResult.success ? attestationResult.attestationUrl : undefined,
-						};
-
-						releaseInfo.assets.push(assetInfo);
+							registry: targetResult.target.registry ?? undefined,
+						});
 
 						if (attestationResult.success && attestationResult.attestationUrl) {
 							info(`  ✓ Created attestation: ${attestationResult.attestationUrl}`);
