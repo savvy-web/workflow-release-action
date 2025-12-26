@@ -137,18 +137,65 @@ describe("detect-workflow-phase", () => {
 			expect(result.reason).toContain("Not on main or changeset-release/main");
 		});
 
-		it("should return branch-management when API fails (no commit message fallback)", async () => {
+		it("should return branch-management when both APIs fail", async () => {
 			mockContext.payload = {
 				head_commit: { message: "chore: release v1.0.0\n\nVersion Packages" },
 			};
 			mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockRejectedValue(new Error("API Error"));
+			mockOctokit.rest.pulls.list.mockRejectedValue(new Error("Pulls API Error"));
 
 			const result = await detectWorkflowPhase(createOptions());
 
-			// Without commit message fallback, API failure means we can't detect release commit
+			// Without API success, we can't detect release commit
 			expect(result.phase).toBe("branch-management");
 			expect(result.isReleaseCommit).toBe(false);
 			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to check for associated PRs"));
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to check for merged PRs"));
+		});
+
+		it("should detect publishing phase via merge_commit_sha fallback when primary API fails", async () => {
+			// Primary API returns empty (no PRs found via commit association)
+			mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({ data: [] });
+			// Fallback API finds the merged PR via merge_commit_sha
+			mockOctokit.rest.pulls.list.mockResolvedValue({
+				data: [
+					{
+						number: 137,
+						merged_at: "2024-01-01T00:00:00Z",
+						merge_commit_sha: "abc123", // Matches context.sha
+						head: { ref: "changeset-release/main" },
+						base: { ref: "main" },
+					},
+				],
+			});
+
+			const result = await detectWorkflowPhase(createOptions());
+
+			expect(result.phase).toBe("publishing");
+			expect(result.isReleaseCommit).toBe(true);
+			expect(result.mergedReleasePRNumber).toBe(137);
+			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("via merge_commit_sha match"));
+		});
+
+		it("should return branch-management when merge_commit_sha does not match", async () => {
+			mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({ data: [] });
+			mockOctokit.rest.pulls.list.mockResolvedValue({
+				data: [
+					{
+						number: 100,
+						merged_at: "2024-01-01T00:00:00Z",
+						merge_commit_sha: "different-sha", // Does NOT match context.sha
+						head: { ref: "changeset-release/main" },
+						base: { ref: "main" },
+					},
+				],
+			});
+
+			const result = await detectWorkflowPhase(createOptions());
+
+			expect(result.phase).toBe("branch-management");
+			expect(result.isReleaseCommit).toBe(false);
+			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("No merged release PR found matching commit"));
 		});
 
 		it("should use custom branch names", async () => {

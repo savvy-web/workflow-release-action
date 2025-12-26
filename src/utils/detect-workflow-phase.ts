@@ -209,9 +209,12 @@ interface ReleaseCommitDetectionOptions {
  * Detects if the current commit is a release commit (from merged release PR)
  *
  * @remarks
- * Uses GitHub API to query for PRs associated with the commit.
- * Returns false if the API call fails (no fallback to commit message patterns
- * since those are not stable across different merge strategies and user configurations).
+ * Uses two strategies to detect release commits:
+ * 1. Primary: Query for PRs associated with the commit SHA
+ * 2. Fallback: Query merged PRs from release branch and match merge_commit_sha
+ *
+ * The fallback is necessary because the association API can fail to find
+ * PRs immediately after merge, especially when branches are auto-deleted.
  *
  * @param options - Detection options
  * @returns Whether this is a release commit and the merged PR if found
@@ -221,6 +224,7 @@ async function detectReleaseCommit(
 ): Promise<{ isReleaseCommit: boolean; mergedPR?: { number: number } }> {
 	const { context, octokit, releaseBranch, targetBranch } = options;
 
+	// Strategy 1: Query PRs associated with this commit
 	try {
 		const { data: associatedPRs } = await octokit.rest.repos.listPullRequestsAssociatedWithCommit({
 			owner: context.repo.owner,
@@ -234,13 +238,41 @@ async function detectReleaseCommit(
 		);
 
 		if (mergedReleasePR) {
-			info(`Detected merged release PR #${mergedReleasePR.number} from ${releaseBranch}`);
+			info(`Detected merged release PR #${mergedReleasePR.number} from ${releaseBranch} (via commit association)`);
 			return { isReleaseCommit: true, mergedPR: { number: mergedReleasePR.number } };
 		}
-
-		return { isReleaseCommit: false };
 	} catch (err) {
 		warning(`Failed to check for associated PRs: ${err instanceof Error ? err.message : String(err)}`);
+	}
+
+	// Strategy 2: Query recently merged PRs from release branch and check merge_commit_sha
+	// This works even when the branch is deleted and association API fails
+	try {
+		info(`Checking for merged release PRs with merge_commit_sha matching ${context.sha}`);
+
+		const { data: mergedPRs } = await octokit.rest.pulls.list({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			state: "closed",
+			head: `${context.repo.owner}:${releaseBranch}`,
+			base: targetBranch,
+			sort: "updated",
+			direction: "desc",
+			per_page: 10,
+		});
+
+		// Find a PR whose merge_commit_sha matches the current commit
+		const matchingPR = mergedPRs.find((pr) => pr.merged_at !== null && pr.merge_commit_sha === context.sha);
+
+		if (matchingPR) {
+			info(`Detected merged release PR #${matchingPR.number} from ${releaseBranch} (via merge_commit_sha match)`);
+			return { isReleaseCommit: true, mergedPR: { number: matchingPR.number } };
+		}
+
+		info(`No merged release PR found matching commit ${context.sha}`);
+		return { isReleaseCommit: false };
+	} catch (err) {
+		warning(`Failed to check for merged PRs: ${err instanceof Error ? err.message : String(err)}`);
 		return { isReleaseCommit: false };
 	}
 }
