@@ -6,6 +6,7 @@ import { exec } from "@actions/exec";
 import type {
 	AlreadyPublishedReason,
 	NpmVersionInfo,
+	PrePackedTarball,
 	PublishResult,
 	ResolvedTarget,
 	VersionCheckResult,
@@ -170,29 +171,23 @@ export async function getLocalTarballIntegrity(directory: string, packageManager
 }
 
 /**
- * Result of packing a tarball
- */
-interface PackResult {
-	/** Path to the created tarball */
-	tarballPath: string;
-	/** SHA-256 digest in format "sha256:hex" */
-	digest: string;
-	/** Filename of the tarball */
-	filename: string;
-}
-
-/**
  * Pack a package into a tarball and compute its SHA-256 digest
  *
  * @remarks
  * This creates a tarball using `npm pack --json` and computes its SHA-256 digest.
  * The digest can be used for attestations and linking to GitHub Packages.
  *
+ * When publishing to multiple targets, call this ONCE and pass the result to
+ * each `publishToTarget` call to ensure all targets receive identical content.
+ *
  * @param directory - Directory containing the package
  * @param packageManager - Package manager to use
  * @returns Pack result with tarball path and digest, or undefined if failed
  */
-async function packAndComputeDigest(directory: string, packageManager: string): Promise<PackResult | undefined> {
+export async function packAndComputeDigest(
+	directory: string,
+	packageManager: string,
+): Promise<PrePackedTarball | undefined> {
 	let output = "";
 	const npmCmd = getNpmCommand(packageManager);
 
@@ -229,7 +224,7 @@ async function packAndComputeDigest(directory: string, packageManager: string): 
 
 		debug(`Packed tarball: ${filename}, digest: ${digest}`);
 
-		return { tarballPath, digest, filename };
+		return { path: tarballPath, digest, filename };
 	} catch (err) {
 		debug(`Failed to pack tarball: ${err instanceof Error ? err.message : String(err)}`);
 		return undefined;
@@ -470,8 +465,16 @@ async function compareTarballIntegrity(
  * 3. If exists with identical content, skip publishing
  * 4. If exists with different content, fail with clear error
  * 5. If doesn't exist, proceed with publish
+ *
+ * @param target - Resolved target to publish to
+ * @param packageManager - Package manager to use
+ * @param prePackedTarball - Optional pre-packed tarball to use instead of packing fresh
  */
-async function publishToNpmCompatible(target: ResolvedTarget, packageManager: string): Promise<PublishResult> {
+async function publishToNpmCompatible(
+	target: ResolvedTarget,
+	packageManager: string,
+	prePackedTarball?: PrePackedTarball,
+): Promise<PublishResult> {
 	const registryName = getRegistryDisplayName(target.registry);
 
 	// Read package.json to get name and version
@@ -581,19 +584,30 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 		info(`✓ Version ${version} not found on ${registryName} - proceeding with publish`);
 	}
 
-	// Step 1: Pack the tarball first so we have a consistent artifact to publish and attest
-	info(`Packing ${packageName}@${version}...`);
-	const packResult = await packAndComputeDigest(target.directory, packageManager);
-	if (!packResult) {
-		return {
-			success: false,
-			output: "",
-			error: "Failed to create tarball with npm pack",
-			exitCode: 1,
-		};
+	// Step 1: Use pre-packed tarball if provided, otherwise pack fresh
+	// Using a pre-packed tarball ensures all targets receive identical content with the same digest
+	let packResult: PrePackedTarball;
+
+	if (prePackedTarball) {
+		// Reuse the pre-packed tarball for consistent multi-target publishing
+		debug(`Using pre-packed tarball: ${prePackedTarball.filename}`);
+		packResult = prePackedTarball;
+	} else {
+		// Pack fresh (single-target or legacy mode)
+		info(`Packing ${packageName}@${version}...`);
+		const freshPackResult = await packAndComputeDigest(target.directory, packageManager);
+		if (!freshPackResult) {
+			return {
+				success: false,
+				output: "",
+				error: "Failed to create tarball with npm pack",
+				exitCode: 1,
+			};
+		}
+		packResult = freshPackResult;
+		info(`✓ Created tarball: ${packResult.filename}`);
 	}
 
-	info(`✓ Created tarball: ${packResult.filename}`);
 	debug(`  Digest: ${packResult.digest}`);
 
 	// Step 2: Build publish command with the specific tarball
@@ -602,7 +616,7 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 	let exitCode = 0;
 
 	// Publish the specific tarball file to ensure digest consistency
-	const args = ["publish", packResult.tarballPath];
+	const args = ["publish", packResult.path];
 
 	if (target.registry) {
 		args.push("--registry", target.registry);
@@ -682,7 +696,7 @@ async function publishToNpmCompatible(target: ResolvedTarget, packageManager: st
 		exitCode,
 		registryUrl,
 		attestationUrl,
-		tarballPath: packResult.tarballPath,
+		tarballPath: packResult.path,
 		tarballDigest: packResult.digest,
 	};
 }
@@ -753,12 +767,14 @@ async function publishToJsr(target: ResolvedTarget, packageManager: string): Pro
  * @param target - Resolved target to publish to
  * @param dryRun - Whether this is a dry-run (skip actual publish)
  * @param packageManager - Package manager to use (defaults to "npm")
+ * @param prePackedTarball - Optional pre-packed tarball for consistent multi-target publishing
  * @returns Publish result
  */
 export async function publishToTarget(
 	target: ResolvedTarget,
 	dryRun: boolean,
 	packageManager: string = "npm",
+	prePackedTarball?: PrePackedTarball,
 ): Promise<PublishResult> {
 	if (dryRun) {
 		const registryName = target.protocol === "jsr" ? "JSR" : getRegistryDisplayName(target.registry);
@@ -773,7 +789,7 @@ export async function publishToTarget(
 
 	switch (target.protocol) {
 		case "npm":
-			return publishToNpmCompatible(target, packageManager);
+			return publishToNpmCompatible(target, packageManager, prePackedTarball);
 		case "jsr":
 			return publishToJsr(target, packageManager);
 		default:

@@ -291,3 +291,19 @@ export interface VersionCheckResult {
 	/** Raw output from npm view */
 	rawOutput?: string;
 }
+
+/**
+ * Pre-packed tarball info for consistent multi-target publishing
+ *
+ * When publishing to multiple targets, we pack ONCE and reuse the same tarball
+ * to ensure all targets receive identical content with the same digest.
+ * This is critical for attestation linking to work correctly.
+ */
+export interface PrePackedTarball {
+	/** Absolute path to the tarball file */
+	path: string;
+	/** SHA-256 digest in format "sha256:hex" */
+	digest: string;
+	/** Filename of the tarball (e.g., "scope-package-1.0.0.tgz") */
+	filename: string;
+}
