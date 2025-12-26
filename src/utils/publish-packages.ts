@@ -12,7 +12,12 @@ import type {
 	TargetPublishResult,
 } from "./generate-publish-summary.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
-import { checkVersionExists, getLocalTarballIntegrity, publishToTarget } from "./publish-target.js";
+import {
+	checkVersionExists,
+	getLocalTarballIntegrity,
+	packAndComputeDigest,
+	publishToTarget,
+} from "./publish-target.js";
 import { setupRegistryAuth } from "./registry-auth.js";
 import { getRegistryDisplayName, resolveTargets } from "./resolve-targets.js";
 
@@ -472,6 +477,27 @@ export async function publishPackages(
 		const targetResults: TargetPublishResult[] = [];
 		let allTargetsSuccess = true;
 
+		// Check if we have npm targets that need packing
+		const npmTargets = packageInfo.targets.filter((t) => t.protocol === "npm");
+		const needsPacking = npmTargets.some((t) => !skipTargetKeys.has(`${name}:${t.registry || "jsr"}`));
+
+		// Pack ONCE for all npm targets to ensure consistent digest across all registries
+		// This is critical for attestation linking - all targets must receive the same tarball
+		let prePackedTarball: Awaited<ReturnType<typeof packAndComputeDigest>> | undefined;
+		if (needsPacking && npmTargets.length > 0) {
+			// Use the first npm target's directory (they should all be the same)
+			const packDirectory = npmTargets[0].directory;
+			info(`Packing ${name}@${packageInfo.version}...`);
+			prePackedTarball = await packAndComputeDigest(packDirectory, packageManager);
+			if (prePackedTarball) {
+				info(`✓ Created tarball: ${prePackedTarball.filename}`);
+				info(`  Digest: ${prePackedTarball.digest}`);
+			} else {
+				error(`Failed to pack tarball for ${name}`);
+				allTargetsSuccess = false;
+			}
+		}
+
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
 			const targetKey = `${name}:${target.registry || "jsr"}`;
@@ -490,10 +516,28 @@ export async function publishPackages(
 				continue;
 			}
 
+			// Skip npm targets if packing failed
+			if (target.protocol === "npm" && needsPacking && !prePackedTarball) {
+				error(`✗ Skipping ${registryName} - tarball packing failed`);
+				targetResults.push({
+					target,
+					success: false,
+					error: "Tarball packing failed",
+					exitCode: 1,
+				});
+				continue;
+			}
+
 			info(`Publishing to ${registryName}...`);
 
 			try {
-				const publishResult = await publishToTarget(target, dryRun, packageManager);
+				// Pass pre-packed tarball to npm targets for consistent digest
+				const publishResult = await publishToTarget(
+					target,
+					dryRun,
+					packageManager,
+					target.protocol === "npm" ? prePackedTarball : undefined,
+				);
 
 				// Determine if this is a safe skip or an error
 				// "different" means tarball content mismatch - this is an error
@@ -572,18 +616,22 @@ export async function publishPackages(
 		const hasProvenanceAttestation = targetResults.some((t) => t.success && t.attestationUrl);
 
 		if (allTargetsSuccess && !hasProvenanceAttestation) {
-			// Find a successful target that has a tarball digest (from npm pack + publish)
-			const targetWithDigest = targetResults.find((t) => t.success && t.tarballDigest);
-			if (targetWithDigest) {
+			// Use the pre-packed tarball digest for the attestation
+			// This ensures the attestation matches the exact tarball sent to all registries
+			if (prePackedTarball) {
+				// Find a GitHub Packages target for linking, fall back to first npm target
+				const githubPackagesTarget = npmTargets.find((t) => t.registry?.includes("pkg.github.com"));
+				const attestationTarget = githubPackagesTarget || npmTargets[0];
+
 				info("Creating GitHub attestation for package (no npm provenance available)...");
 				const attestationResult = await createPackageAttestation({
 					packageName: name,
 					version: packageInfo.version,
-					directory: targetWithDigest.target.directory,
+					directory: attestationTarget?.directory || packageInfo.path,
 					dryRun,
 					packageManager,
-					tarballDigest: targetWithDigest.tarballDigest,
-					registry: targetWithDigest.target.registry ?? undefined,
+					tarballDigest: prePackedTarball.digest,
+					registry: githubPackagesTarget?.registry ?? undefined,
 				});
 				if (attestationResult.success && attestationResult.attestationUrl) {
 					githubAttestationUrl = attestationResult.attestationUrl;

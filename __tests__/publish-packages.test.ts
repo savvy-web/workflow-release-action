@@ -34,6 +34,7 @@ vi.mock("../src/utils/publish-target.js", () => ({
 	publishToTarget: vi.fn(),
 	checkVersionExists: vi.fn(),
 	getLocalTarballIntegrity: vi.fn(),
+	packAndComputeDigest: vi.fn(),
 }));
 
 vi.mock("../src/utils/create-attestation.js", () => ({
@@ -45,7 +46,12 @@ import * as exec from "@actions/exec";
 import { createPackageAttestation } from "../src/utils/create-attestation.js";
 import { findPackagePath } from "../src/utils/find-package-path.js";
 import { getChangesetStatus } from "../src/utils/get-changeset-status.js";
-import { checkVersionExists, getLocalTarballIntegrity, publishToTarget } from "../src/utils/publish-target.js";
+import {
+	checkVersionExists,
+	getLocalTarballIntegrity,
+	packAndComputeDigest,
+	publishToTarget,
+} from "../src/utils/publish-target.js";
 import { setupRegistryAuth } from "../src/utils/registry-auth.js";
 
 describe("publish-packages", () => {
@@ -65,6 +71,12 @@ describe("publish-packages", () => {
 		});
 		// Default: return a shasum for local tarball
 		vi.mocked(getLocalTarballIntegrity).mockResolvedValue("abc123def456");
+		// Default: pack succeeds with tarball info
+		vi.mocked(packAndComputeDigest).mockResolvedValue({
+			path: "/path/to/pkg-a/org-pkg-a-1.0.0.tgz",
+			digest: "sha256:abc123def456789",
+			filename: "org-pkg-a-1.0.0.tgz",
+		});
 		// Default: attestation succeeds but no URL
 		vi.mocked(createPackageAttestation).mockResolvedValue({
 			success: true,
@@ -805,6 +817,12 @@ describe("publish-packages", () => {
 				}),
 			);
 			vi.mocked(exec.exec).mockResolvedValue(0);
+			// Mock packAndComputeDigest to return specific tarball info
+			vi.mocked(packAndComputeDigest).mockResolvedValue({
+				path: "/path/to/pkg-a/org-pkg-a-1.0.0.tgz",
+				digest: "sha256:abc123def456",
+				filename: "org-pkg-a-1.0.0.tgz",
+			});
 			vi.mocked(publishToTarget).mockResolvedValue({
 				success: true,
 				output: "Published successfully",
@@ -823,6 +841,7 @@ describe("publish-packages", () => {
 
 			expect(result.success).toBe(true);
 			expect(result.packages[0].githubAttestationUrl).toBe("https://github.com/attestations/12345");
+			// Attestation uses digest from pre-packed tarball, not from publishToTarget
 			expect(createPackageAttestation).toHaveBeenCalledWith(
 				expect.objectContaining({
 					packageName: "@org/pkg-a",
