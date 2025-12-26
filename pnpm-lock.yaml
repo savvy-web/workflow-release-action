@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@actions/attest':
-        specifier: ^2.0.0
-        version: 2.0.0(@octokit/core@7.0.6)
+        specifier: ^2.1.0
+        version: 2.1.0(@octokit/core@7.0.6)
       '@actions/cache':
         specifier: ^4.1.0
         version: 4.1.0(encoding@0.1.13)
@@ -35,9 +35,6 @@ importers:
       '@actions/tool-cache':
         specifier: ^2.0.2
         version: 2.0.2
-      '@anthropic-ai/sdk':
-        specifier: ^0.71.0
-        version: 0.71.0
       '@octokit/auth-app':
         specifier: ^8.1.2
         version: 8.1.2
@@ -132,8 +129,8 @@ importers:
 
 packages:
 
-  '@actions/attest@2.0.0':
-    resolution: {integrity: sha512-9dy7ad6B98JnXPEcXlg372fWWRKPWct1d3FSzu1/h7QtrgqE9uRlgrrx9DIHuwojJ63aaDSciXkX53Tf1Swmpw==}
+  '@actions/attest@2.1.0':
+    resolution: {integrity: sha512-MQOaqBL1uYMZXNYUKf2aBr7Exgs2OkGIhWY3BB4hz5eIvV1x/JulQ58sz4haHYjJxcvNd5/GzuCaycfiHLLL+g==}
 
   '@actions/cache@4.1.0':
     resolution: {integrity: sha512-z3Opg+P4Y7baq+g1dODXgdtsvPLSewr3ZKpp3U0HQR1A/vWCoJFS52XSezjdngo4SIOdR5oHtyK3a3Arar+X9A==}
@@ -167,15 +164,6 @@ packages:
 
   '@actions/tool-cache@2.0.2':
     resolution: {integrity: sha512-fBhNNOWxuoLxztQebpOaWu6WeVmuwa77Z+DxIZ1B+OYvGkGQon6kTVg6Z32Cb13WCuw0szqonK+hh03mJV7Z6w==}
-
-  '@anthropic-ai/sdk@0.71.0':
-    resolution: {integrity: sha512-go1XeWXmpxuiTkosSXpb8tokLk2ZLkIRcXpbWVwJM6gH5OBtHOVsfPfGuqI1oW7RRt4qc59EmYbrXRZ0Ng06Jw==}
-    hasBin: true
-    peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
-    peerDependenciesMeta:
-      zod:
-        optional: true
 
   '@ast-grep/napi-darwin-arm64@0.37.0':
     resolution: {integrity: sha512-QAiIiaAbLvMEg/yBbyKn+p1gX2/FuaC0SMf7D7capm/oG4xGMzdeaQIcSosF4TCxxV+hIH4Bz9e4/u7w6Bnk3Q==}
@@ -2068,10 +2056,6 @@ packages:
   json-parse-even-better-errors@2.3.1:
     resolution: {integrity: sha512-xyFwyhro/JEof6Ghe2iz2NcXoj2sloNsWr/XsERDK/oiPCfaNhl5ONfp+jQdAZRQQ0IJWNzH9zIZF7li91kh2w==}
 
-  json-schema-to-ts@3.1.1:
-    resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
-    engines: {node: '>=16'}
-
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
 
@@ -2755,9 +2739,6 @@ packages:
   tr46@0.0.3:
     resolution: {integrity: sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw==}
 
-  ts-algebra@2.0.0:
-    resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
-
   ts-markdown@1.3.0:
     resolution: {integrity: sha512-0A4vh4xUQfcLK17cmiNmDPu4CE0nBk5Yjk7QJPwVaqPpoKDssG2/cuev6KDymbqj8cfUBmEhN6BxP9Mwi+dz6w==}
 
@@ -3020,7 +3001,7 @@ packages:
 
 snapshots:
 
-  '@actions/attest@2.0.0(@octokit/core@7.0.6)':
+  '@actions/attest@2.1.0(@octokit/core@7.0.6)':
     dependencies:
       '@actions/core': 1.11.1
       '@actions/github': 6.0.1
@@ -3099,10 +3080,6 @@ snapshots:
       '@actions/http-client': 2.2.3
       '@actions/io': 1.1.3
       semver: 6.3.1
-
-  '@anthropic-ai/sdk@0.71.0':
-    dependencies:
-      json-schema-to-ts: 3.1.1
 
   '@ast-grep/napi-darwin-arm64@0.37.0':
     optional: true
@@ -5033,11 +5010,6 @@ snapshots:
 
   json-parse-even-better-errors@2.3.1: {}
 
-  json-schema-to-ts@3.1.1:
-    dependencies:
-      '@babel/runtime': 7.28.4
-      ts-algebra: 2.0.0
-
   json-schema-traverse@1.0.0: {}
 
   jsonc-parser@3.3.1: {}
@@ -5793,8 +5765,6 @@ snapshots:
   toad-cache@3.7.0: {}
 
   tr46@0.0.3: {}
-
-  ts-algebra@2.0.0: {}
 
   ts-markdown@1.3.0:
     dependencies:

@@ -23,6 +23,7 @@ vi.mock("@actions/github", () => ({
 
 vi.mock("@actions/attest", () => ({
 	attestProvenance: vi.fn(),
+	createStorageRecord: vi.fn(),
 }));
 
 describe("create-attestation", () => {
@@ -493,18 +494,15 @@ describe("create-attestation", () => {
 			vi.mocked(fs.existsSync).mockReturnValue(true);
 			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
 
-			const { attestProvenance } = await import("@actions/attest");
+			const { attestProvenance, createStorageRecord } = await import("@actions/attest");
 			vi.mocked(attestProvenance).mockResolvedValue({
 				bundle: {} as never,
 				certificate: "cert",
 				attestationID: "12345",
 			});
 
-			// Mock getOctokit to throw an error for the metadata API call
-			const { getOctokit } = await import("@actions/github");
-			vi.mocked(getOctokit).mockReturnValue({
-				request: vi.fn().mockRejectedValue(new Error("API error")),
-			} as never);
+			// Mock createStorageRecord to throw an error
+			vi.mocked(createStorageRecord).mockRejectedValue(new Error("Storage record API error"));
 
 			// Should still succeed even if metadata linking fails
 			const result = await createPackageAttestation({
@@ -512,10 +510,15 @@ describe("create-attestation", () => {
 				version: "1.0.0",
 				directory: "/path/to/pkg",
 				dryRun: false,
+				registry: "https://npm.pkg.github.com",
 			});
 
 			expect(result.success).toBe(true);
 			expect(result.attestationId).toBe("12345");
+			// Should log a warning about the storage record failure
+			expect(vi.mocked(core.warning)).toHaveBeenCalledWith(
+				expect.stringContaining("Failed to create artifact metadata storage record"),
+			);
 		});
 
 		it("uses provided tarballDigest instead of computing from local file", async () => {
@@ -551,18 +554,15 @@ describe("create-attestation", () => {
 		it("links attestation to GitHub Packages when registry is npm.pkg.github.com", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 
-			const { attestProvenance } = await import("@actions/attest");
+			const { attestProvenance, createStorageRecord } = await import("@actions/attest");
 			vi.mocked(attestProvenance).mockResolvedValue({
 				bundle: {} as never,
 				certificate: "cert",
 				attestationID: "12345",
 			});
 
-			const { getOctokit } = await import("@actions/github");
-			const mockRequest = vi.fn().mockResolvedValue({ status: 200 });
-			vi.mocked(getOctokit).mockReturnValue({
-				request: mockRequest,
-			} as never);
+			// Mock createStorageRecord to return storage record IDs
+			vi.mocked(createStorageRecord).mockResolvedValue([123, 456]);
 
 			const result = await createPackageAttestation({
 				packageName: "@org/pkg",
@@ -574,33 +574,31 @@ describe("create-attestation", () => {
 			});
 
 			expect(result.success).toBe(true);
-			// Should call the artifact metadata API
-			expect(mockRequest).toHaveBeenCalledWith(
-				"POST /orgs/{org}/artifacts/metadata/storage-record",
-				expect.objectContaining({
-					org: "test-owner",
+			// Should call createStorageRecord with correct parameters
+			expect(createStorageRecord).toHaveBeenCalledWith(
+				{
 					name: "pkg:npm/@org/pkg@1.0.0",
 					digest: "sha256:abc123def456",
-				}),
+				},
+				{
+					registryUrl: "https://npm.pkg.github.com/",
+				},
+				"test-token",
 			);
-			expect(vi.mocked(core.info)).toHaveBeenCalledWith("  ✓ Linked attestation to GitHub Packages artifact");
+			expect(vi.mocked(core.info)).toHaveBeenCalledWith(
+				"  ✓ Linked attestation to GitHub Packages artifact (storage record IDs: 123,456)",
+			);
 		});
 
 		it("does not link to GitHub Packages for non-GitHub registries", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 
-			const { attestProvenance } = await import("@actions/attest");
+			const { attestProvenance, createStorageRecord } = await import("@actions/attest");
 			vi.mocked(attestProvenance).mockResolvedValue({
 				bundle: {} as never,
 				certificate: "cert",
 				attestationID: "12345",
 			});
-
-			const { getOctokit } = await import("@actions/github");
-			const mockRequest = vi.fn().mockResolvedValue({ status: 200 });
-			vi.mocked(getOctokit).mockReturnValue({
-				request: mockRequest,
-			} as never);
 
 			const result = await createPackageAttestation({
 				packageName: "@org/pkg",
@@ -612,8 +610,8 @@ describe("create-attestation", () => {
 			});
 
 			expect(result.success).toBe(true);
-			// Should NOT call the artifact metadata API for non-GitHub registry
-			expect(mockRequest).not.toHaveBeenCalled();
+			// Should NOT call createStorageRecord for non-GitHub registry
+			expect(createStorageRecord).not.toHaveBeenCalled();
 		});
 	});
 
