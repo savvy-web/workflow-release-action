@@ -575,7 +575,7 @@ describe("create-attestation", () => {
 
 			expect(result.success).toBe(true);
 			// Should call createStorageRecord with correct parameters
-			// Note: github_repository is the actual API field name for linking to the source repo
+			// Note: github_repository only accepts the repo name, not owner/repo
 			expect(createStorageRecord).toHaveBeenCalledWith(
 				{
 					name: "pkg:npm/@org/pkg@1.0.0",
@@ -585,7 +585,7 @@ describe("create-attestation", () => {
 				{
 					registryUrl: "https://npm.pkg.github.com/",
 					artifactUrl: "https://github.com/test-owner/test-repo/pkgs/npm/pkg",
-					github_repository: "test-owner/test-repo",
+					github_repository: "test-repo",
 				},
 				"test-token",
 			);

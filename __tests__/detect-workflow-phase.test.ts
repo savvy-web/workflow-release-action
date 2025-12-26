@@ -56,6 +56,7 @@ describe("detect-workflow-phase", () => {
 
 	afterEach(() => {
 		cleanupTestEnvironment();
+		vi.useRealTimers(); // Reset timers after each test
 	});
 
 	describe("detectWorkflowPhase (async)", () => {
@@ -67,9 +68,13 @@ describe("detect-workflow-phase", () => {
 		});
 
 		it("should detect branch-management phase on push to main with no release commit", async () => {
+			vi.useFakeTimers(); // Use fake timers to avoid real delays during retry
 			mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({ data: [] });
+			mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
 
-			const result = await detectWorkflowPhase(createOptions());
+			const resultPromise = detectWorkflowPhase(createOptions());
+			await vi.advanceTimersByTimeAsync(30000); // Advance past all retry delays
+			const result = await resultPromise;
 
 			expect(result.phase).toBe("branch-management");
 			expect(result.isMainBranch).toBe(true);
@@ -138,13 +143,16 @@ describe("detect-workflow-phase", () => {
 		});
 
 		it("should return branch-management when both APIs fail", async () => {
+			vi.useFakeTimers();
 			mockContext.payload = {
 				head_commit: { message: "chore: release v1.0.0\n\nVersion Packages" },
 			};
 			mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockRejectedValue(new Error("API Error"));
 			mockOctokit.rest.pulls.list.mockRejectedValue(new Error("Pulls API Error"));
 
-			const result = await detectWorkflowPhase(createOptions());
+			const resultPromise = detectWorkflowPhase(createOptions());
+			await vi.advanceTimersByTimeAsync(30000);
+			const result = await resultPromise;
 
 			// Without API success, we can't detect release commit
 			expect(result.phase).toBe("branch-management");
@@ -178,6 +186,7 @@ describe("detect-workflow-phase", () => {
 		});
 
 		it("should return branch-management when merge_commit_sha does not match", async () => {
+			vi.useFakeTimers();
 			mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({ data: [] });
 			mockOctokit.rest.pulls.list.mockResolvedValue({
 				data: [
@@ -191,7 +200,9 @@ describe("detect-workflow-phase", () => {
 				],
 			});
 
-			const result = await detectWorkflowPhase(createOptions());
+			const resultPromise = detectWorkflowPhase(createOptions());
+			await vi.advanceTimersByTimeAsync(30000);
+			const result = await resultPromise;
 
 			expect(result.phase).toBe("branch-management");
 			expect(result.isReleaseCommit).toBe(false);
@@ -213,6 +224,7 @@ describe("detect-workflow-phase", () => {
 		});
 
 		it("should not treat non-release PR merges as release commits", async () => {
+			vi.useFakeTimers();
 			mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({
 				data: [
 					{
@@ -223,8 +235,11 @@ describe("detect-workflow-phase", () => {
 					},
 				],
 			});
+			mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
 
-			const result = await detectWorkflowPhase(createOptions());
+			const resultPromise = detectWorkflowPhase(createOptions());
+			await vi.advanceTimersByTimeAsync(30000);
+			const result = await resultPromise;
 
 			expect(result.phase).toBe("branch-management");
 			expect(result.isReleaseCommit).toBe(false);
@@ -249,22 +264,30 @@ describe("detect-workflow-phase", () => {
 		});
 
 		it("should truncate long commit messages", async () => {
+			vi.useFakeTimers();
 			mockContext.payload = {
 				head_commit: { message: "a".repeat(200) },
 			};
 			mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({ data: [] });
+			mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
 
-			const result = await detectWorkflowPhase(createOptions());
+			const resultPromise = detectWorkflowPhase(createOptions());
+			await vi.advanceTimersByTimeAsync(30000);
+			const result = await resultPromise;
 
 			expect(result.commitMessage.length).toBe(103); // 100 chars + "..."
 			expect(result.commitMessage.endsWith("...")).toBe(true);
 		});
 
 		it("should handle workflow_dispatch event on main branch", async () => {
+			vi.useFakeTimers();
 			mockContext.eventName = "workflow_dispatch";
 			mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({ data: [] });
+			mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
 
-			const result = await detectWorkflowPhase(createOptions());
+			const resultPromise = detectWorkflowPhase(createOptions());
+			await vi.advanceTimersByTimeAsync(30000);
+			const result = await resultPromise;
 
 			// workflow_dispatch on main with no release commit should be branch-management
 			expect(result.phase).toBe("branch-management");
@@ -359,12 +382,16 @@ describe("detect-workflow-phase", () => {
 			});
 
 			it("should handle explicit publishing when API returns no merged PR", async () => {
+				vi.useFakeTimers();
 				mockOctokit.rest.repos.listPullRequestsAssociatedWithCommit.mockResolvedValue({ data: [] });
+				mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
 
-				const result = await detectWorkflowPhase({
+				const resultPromise = detectWorkflowPhase({
 					...createOptions(),
 					explicitPhase: "publishing",
 				});
+				await vi.advanceTimersByTimeAsync(30000);
+				const result = await resultPromise;
 
 				expect(result.phase).toBe("publishing");
 				expect(result.mergedReleasePRNumber).toBeUndefined();

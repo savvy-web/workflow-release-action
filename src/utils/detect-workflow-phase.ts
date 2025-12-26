@@ -206,6 +206,13 @@ interface ReleaseCommitDetectionOptions {
 }
 
 /**
+ * Sleep for a specified number of milliseconds
+ */
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
  * Detects if the current commit is a release commit (from merged release PR)
  *
  * @remarks
@@ -216,10 +223,45 @@ interface ReleaseCommitDetectionOptions {
  * The fallback is necessary because the association API can fail to find
  * PRs immediately after merge, especially when branches are auto-deleted.
  *
+ * Includes retry logic with delays to handle GitHub API eventual consistency
+ * issues where the merge may not be immediately visible after the push event.
+ *
  * @param options - Detection options
  * @returns Whether this is a release commit and the merged PR if found
  */
 async function detectReleaseCommit(
+	options: ReleaseCommitDetectionOptions,
+): Promise<{ isReleaseCommit: boolean; mergedPR?: { number: number } }> {
+	// Retry configuration for eventual consistency
+	const maxRetries = 3;
+	const retryDelayMs = 5000; // 5 seconds between retries
+
+	for (let attempt = 1; attempt <= maxRetries; attempt++) {
+		const result = await attemptReleaseCommitDetection(options);
+
+		if (result.isReleaseCommit) {
+			return result;
+		}
+
+		// If not found and we have retries left, wait and try again
+		// This handles GitHub API eventual consistency after PR merge
+		if (attempt < maxRetries) {
+			info(
+				`Release commit not detected on attempt ${attempt}/${maxRetries}, waiting ${retryDelayMs / 1000}s before retry...`,
+			);
+			await sleep(retryDelayMs);
+		}
+	}
+
+	// Final attempt failed
+	info(`No merged release PR found after ${maxRetries} attempts`);
+	return { isReleaseCommit: false };
+}
+
+/**
+ * Single attempt to detect release commit
+ */
+async function attemptReleaseCommitDetection(
 	options: ReleaseCommitDetectionOptions,
 ): Promise<{ isReleaseCommit: boolean; mergedPR?: { number: number } }> {
 	const { context, octokit, releaseBranch, targetBranch } = options;

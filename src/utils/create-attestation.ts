@@ -117,8 +117,9 @@ async function createArtifactMetadataRecord(
 
 	try {
 		// The @actions/attest library passes extra properties through to the API
-		// We use github_repository (the actual API field name) instead of repo
-		// to properly link the artifact to the source repository
+		// We use github_repository (the actual API field name) to link the artifact
+		// to the source repository. Note: this field only accepts the repo name,
+		// not the full owner/repo format.
 		const storageRecordIds = await createStorageRecord(
 			{
 				name: purlName,
@@ -129,7 +130,8 @@ async function createArtifactMetadataRecord(
 				registryUrl: "https://npm.pkg.github.com/",
 				artifactUrl,
 				// Use the API field name directly - gets passed through via ...rest
-				github_repository: `${context.repo.owner}/${context.repo.repo}`,
+				// Only the repo name is accepted (no owner prefix)
+				github_repository: context.repo.repo,
 			} as Parameters<typeof createStorageRecord>[1],
 			token,
 		);
