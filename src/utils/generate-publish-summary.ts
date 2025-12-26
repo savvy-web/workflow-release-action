@@ -23,6 +23,39 @@ function getRegistryDisplayName(registry: string | null): string {
 }
 
 /**
+ * Get the web URL for a package on a registry
+ *
+ * @param registry - Registry URL (e.g., https://registry.npmjs.org)
+ * @param packageName - Package name (e.g., @savvy-web/standalone-package)
+ * @param version - Package version (e.g., 1.0.0)
+ * @returns URL to the package page, or undefined if registry doesn't have a web UI
+ */
+export function getPackagePageUrl(registry: string | null, packageName: string, version: string): string | undefined {
+	if (!registry) {
+		// JSR
+		return `https://jsr.io/${packageName}@${version}`;
+	}
+
+	if (registry.includes("npmjs.org")) {
+		// npm public registry
+		return `https://www.npmjs.com/package/${packageName}/v/${version}`;
+	}
+
+	if (registry.includes("pkg.github.com")) {
+		// GitHub Packages - URL format: https://github.com/orgs/{owner}/packages/npm/package/{package-name-without-scope}
+		// For user packages: https://github.com/{owner}/packages/npm/package/{package-name-without-scope}
+		const { owner } = context.repo;
+		// Remove scope from package name (e.g., @savvy-web/standalone-package -> standalone-package)
+		const pkgNameWithoutScope = packageName.startsWith("@") ? packageName.split("/")[1] : packageName;
+		// Use orgs URL for organization accounts
+		return `https://github.com/orgs/${owner}/packages/npm/package/${pkgNameWithoutScope}`;
+	}
+
+	// Custom registries - no standard web UI
+	return undefined;
+}
+
+/**
  * Get an icon for a protocol
  */
 function getProtocolIcon(protocol: string): string {
@@ -386,6 +419,10 @@ export interface TargetPublishResult {
 	tarballPath?: string;
 	/** SHA-256 digest of the published tarball (format: "sha256:hex") */
 	tarballDigest?: string;
+	/** Path to the SBOM JSON file for this target */
+	sbomPath?: string;
+	/** URL to SBOM attestation for this target */
+	sbomAttestationUrl?: string;
 }
 
 /**

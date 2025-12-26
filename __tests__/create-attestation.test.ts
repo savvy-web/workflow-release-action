@@ -3,7 +3,11 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPackageAttestation, createReleaseAssetAttestation } from "../src/utils/create-attestation.js";
+import {
+	createPackageAttestation,
+	createReleaseAssetAttestation,
+	createSBOMAttestation,
+} from "../src/utils/create-attestation.js";
 
 // Mock dependencies
 vi.mock("node:fs");
@@ -22,6 +26,7 @@ vi.mock("@actions/github", () => ({
 }));
 
 vi.mock("@actions/attest", () => ({
+	attest: vi.fn(),
 	attestProvenance: vi.fn(),
 	createStorageRecord: vi.fn(),
 }));
@@ -766,6 +771,367 @@ describe("create-attestation", () => {
 				expect.objectContaining({
 					token: "state-token",
 				}),
+			);
+		});
+	});
+
+	describe("createSBOMAttestation", () => {
+		it("returns dry-run result when dryRun is true", async () => {
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: true,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.attestationUrl).toBe(
+				`https://github.com/${context.repo.owner}/${context.repo.repo}/attestations/dry-run-sbom`,
+			);
+			expect(vi.mocked(core.info)).toHaveBeenCalledWith("[DRY RUN] Would create SBOM attestation for @org/pkg@1.0.0");
+		});
+
+		it("returns error when no GITHUB_TOKEN is available", async () => {
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("No GITHUB_TOKEN available for SBOM attestation creation");
+		});
+
+		it("returns error when SBOM generation fails", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+			// Mock npm sbom to fail
+			vi.mocked(exec.exec).mockRejectedValue(new Error("npm sbom failed"));
+
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("Failed to generate SBOM for @org/pkg@1.0.0");
+		});
+
+		it("generates SBOM and creates attestation successfully", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			// Mock CycloneDX SBOM generation
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2024-01-01T00:00:00Z",
+					component: { name: "@org/pkg", version: "1.0.0" },
+				},
+				components: [{ type: "library", name: "@org/pkg", version: "1.0.0" }],
+			};
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+				}
+				return 0;
+			});
+
+			// Mock tarball finding
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "sbom-12345",
+				tlogID: "sbom-67890",
+			});
+
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.attestationId).toBe("sbom-12345");
+			expect(result.tlogId).toBe("sbom-67890");
+			expect(result.attestationUrl).toBe("https://github.com/test-owner/test-repo/attestations/sbom-12345");
+		});
+
+		it("uses correct predicate type for CycloneDX SBOM", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2024-01-01T00:00:00Z",
+					component: { name: "@org/pkg", version: "1.0.0" },
+				},
+				components: [],
+			};
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
+
+			expect(attest).toHaveBeenCalledWith(
+				expect.objectContaining({
+					predicateType: "https://cyclonedx.org/bom",
+					predicate: mockSBOM,
+				}),
+			);
+		});
+
+		it("uses provided tarballDigest for subject", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2024-01-01T00:00:00Z",
+					component: { name: "@org/pkg", version: "1.0.0" },
+				},
+				components: [],
+			};
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+				}
+				return 0;
+			});
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123def456",
+			});
+
+			expect(attest).toHaveBeenCalledWith(
+				expect.objectContaining({
+					subjects: [
+						{
+							name: "pkg:npm/@org/pkg@1.0.0",
+							digest: { sha256: "abc123def456" },
+						},
+					],
+				}),
+			);
+			// Should NOT call fs operations when tarballDigest is provided
+			expect(vi.mocked(fs.existsSync)).not.toHaveBeenCalled();
+		});
+
+		it("uses specified package manager for SBOM generation", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2024-01-01T00:00:00Z",
+					component: { name: "@org/pkg", version: "1.0.0" },
+				},
+				components: [],
+			};
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				packageManager: "pnpm",
+			});
+
+			expect(exec.exec).toHaveBeenCalledWith(
+				"pnpm",
+				["dlx", "npm", "sbom", "--sbom-format=cyclonedx"],
+				expect.any(Object),
+			);
+		});
+
+		it("handles attest errors gracefully", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2024-01-01T00:00:00Z",
+					component: { name: "@org/pkg", version: "1.0.0" },
+				},
+				components: [],
+			};
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockRejectedValue(new Error("SBOM attestation API error"));
+
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("SBOM attestation API error");
+			expect(vi.mocked(core.warning)).toHaveBeenCalledWith(
+				"Failed to create SBOM attestation for @org/pkg@1.0.0: SBOM attestation API error",
+			);
+		});
+
+		it("returns error when no tarball found and cannot be created", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2024-01-01T00:00:00Z",
+					component: { name: "@org/pkg", version: "1.0.0" },
+				},
+				components: [],
+			};
+
+			let execCallCount = 0;
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				execCallCount++;
+				// First call is SBOM generation
+				if (execCallCount === 1) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+					}
+					return 0;
+				}
+				// Second call is npm pack - fail it
+				throw new Error("npm pack failed");
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(false);
+			vi.mocked(fs.readdirSync).mockReturnValue([]);
+
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("No tarball found for SBOM attestation of @org/pkg@1.0.0");
+		});
+
+		it("logs transparency log URL when tlogID is returned", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2024-01-01T00:00:00Z",
+					component: { name: "@org/pkg", version: "1.0.0" },
+				},
+				components: [],
+			};
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+				tlogID: "67890",
+			});
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+			});
+
+			expect(vi.mocked(core.info)).toHaveBeenCalledWith(
+				"  Transparency log: https://search.sigstore.dev/?logIndex=67890",
 			);
 		});
 	});

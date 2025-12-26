@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { endGroup, error, info, startGroup, warning } from "@actions/core";
 import { exec } from "@actions/exec";
 import type { PackageJson, ResolvedTarget, VersionCheckResult } from "../types/publish-config.js";
-import { createPackageAttestation } from "./create-attestation.js";
+import { createPackageAttestation, createSBOMAttestation } from "./create-attestation.js";
 import { findPackagePath } from "./find-package-path.js";
 import type {
 	PackagePublishResult,
@@ -654,6 +654,55 @@ export async function publishPackages(
 			}
 		} else if (hasProvenanceAttestation) {
 			info("✓ Package attestation already created via npm provenance");
+		}
+
+		// Create SBOM attestations per target directory
+		// Each directory can have different dependencies, so we generate separate SBOMs
+		if (allTargetsSuccess && prePackedTarballs.size > 0) {
+			const processedDirectories = new Set<string>();
+
+			for (const result of targetResults) {
+				const dir = result.target.directory;
+				// Skip if we already processed this directory (multiple targets can share a directory)
+				if (processedDirectories.has(dir)) {
+					// Find the already-processed result and copy SBOM info
+					const existingResult = targetResults.find(
+						(r) => r.target.directory === dir && r.sbomPath && processedDirectories.has(dir),
+					);
+					if (existingResult) {
+						result.sbomPath = existingResult.sbomPath;
+						result.sbomAttestationUrl = existingResult.sbomAttestationUrl;
+					}
+					continue;
+				}
+				processedDirectories.add(dir);
+
+				const tarball = prePackedTarballs.get(dir);
+				if (!tarball) continue;
+
+				// Extract target name from directory (e.g., "dist/npm" -> "npm")
+				const targetName = dir.split("/").filter(Boolean).pop() || "dist";
+
+				info(`Creating SBOM attestation for ${name} (${targetName})...`);
+				const sbomResult = await createSBOMAttestation({
+					packageName: name,
+					version: packageInfo.version,
+					directory: dir,
+					dryRun,
+					packageManager,
+					tarballDigest: tarball.digest,
+					targetName,
+				});
+
+				if (sbomResult.success) {
+					result.sbomPath = sbomResult.sbomPath;
+					result.sbomAttestationUrl = sbomResult.attestationUrl;
+					info(`  ✓ Created SBOM: ${sbomResult.sbomPath}`);
+					if (sbomResult.attestationUrl) {
+						info(`  ✓ Created SBOM attestation: ${sbomResult.attestationUrl}`);
+					}
+				}
+			}
 		}
 
 		results.push({

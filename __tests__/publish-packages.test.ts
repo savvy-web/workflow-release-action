@@ -39,11 +39,12 @@ vi.mock("../src/utils/publish-target.js", () => ({
 
 vi.mock("../src/utils/create-attestation.js", () => ({
 	createPackageAttestation: vi.fn(),
+	createSBOMAttestation: vi.fn(),
 }));
 
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
-import { createPackageAttestation } from "../src/utils/create-attestation.js";
+import { createPackageAttestation, createSBOMAttestation } from "../src/utils/create-attestation.js";
 import { findPackagePath } from "../src/utils/find-package-path.js";
 import { getChangesetStatus } from "../src/utils/get-changeset-status.js";
 import {
@@ -79,6 +80,10 @@ describe("publish-packages", () => {
 		});
 		// Default: attestation succeeds but no URL
 		vi.mocked(createPackageAttestation).mockResolvedValue({
+			success: true,
+		});
+		// Default: SBOM attestation succeeds but no URL
+		vi.mocked(createSBOMAttestation).mockResolvedValue({
 			success: true,
 		});
 	});

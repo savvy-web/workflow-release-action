@@ -6,7 +6,8 @@ import { context, getOctokit } from "@actions/github";
 import { createReleaseAssetAttestation } from "./create-attestation.js";
 import type { TagInfo } from "./determine-tag-strategy.js";
 import { findPackagePath } from "./find-package-path.js";
-import type { PackagePublishResult } from "./generate-publish-summary.js";
+import type { PackagePublishResult, TargetPublishResult } from "./generate-publish-summary.js";
+import { getPackagePageUrl } from "./generate-publish-summary.js";
 
 /**
  * Result of creating GitHub releases
@@ -336,32 +337,57 @@ export async function createGitHubReleases(
 			releaseNotes += "\n\n";
 		}
 
-		// Add publish information
-		releaseNotes += "---\n\n";
-		releaseNotes += "### Published to:\n\n";
+		// Build publish summary table
+		// Collect all successful targets with their info
+		const publishedTargets: Array<{
+			pkg: PackagePublishResult;
+			target: TargetPublishResult;
+			registryName: string;
+			packageUrl: string | undefined;
+		}> = [];
 
 		for (const pkg of associatedPackages) {
 			for (const target of pkg.targets.filter((t) => t.success)) {
-				const registry = target.target.registry?.includes("npmjs.org")
+				const registryName = target.target.registry?.includes("npmjs.org")
 					? "npm"
 					: target.target.registry?.includes("pkg.github.com")
 						? "GitHub Packages"
-						: target.target.registry || "registry";
+						: target.target.registry
+							? new URL(target.target.registry).hostname
+							: "jsr.io";
 
-				if (target.registryUrl) {
-					releaseNotes += `- **${registry}**: [${pkg.name}@${pkg.version}](${target.registryUrl})\n`;
-				} else {
-					releaseNotes += `- **${registry}**: ${pkg.name}@${pkg.version}\n`;
-				}
+				const packageUrl = getPackagePageUrl(target.target.registry ?? null, pkg.name, pkg.version);
 
-				if (target.attestationUrl) {
-					releaseNotes += `  - [Sigstore provenance](${target.attestationUrl})\n`;
-				}
+				publishedTargets.push({ pkg, target, registryName, packageUrl });
 			}
+		}
 
-			// Add GitHub attestation if available (per-package, not per-target)
-			if (pkg.githubAttestationUrl) {
-				releaseNotes += `  - [GitHub attestation](${pkg.githubAttestationUrl})\n`;
+		if (publishedTargets.length > 0) {
+			releaseNotes += "---\n\n";
+			releaseNotes += "### Publish Summary\n\n";
+			releaseNotes += "| Registry | Package | SBOM | Provenance |\n";
+			releaseNotes += "|----------|---------|------|------------|\n";
+
+			for (const { pkg, target, registryName, packageUrl } of publishedTargets) {
+				const packageCell = packageUrl ? `[${pkg.name}@${pkg.version}](${packageUrl})` : `${pkg.name}@${pkg.version}`;
+
+				// SBOM cell - will be updated after assets are uploaded
+				const sbomCell = target.sbomPath ? "📦" : "—";
+
+				// Provenance cell - combine npm provenance and GitHub attestation
+				const provenanceParts: string[] = [];
+				if (target.attestationUrl) {
+					provenanceParts.push(`[Sigstore](${target.attestationUrl})`);
+				}
+				if (pkg.githubAttestationUrl) {
+					provenanceParts.push(`[GitHub](${pkg.githubAttestationUrl})`);
+				}
+				if (target.sbomAttestationUrl) {
+					provenanceParts.push(`[SBOM](${target.sbomAttestationUrl})`);
+				}
+				const provenanceCell = provenanceParts.length > 0 ? provenanceParts.join(", ") : "—";
+
+				releaseNotes += `| ${registryName} | ${packageCell} | ${sbomCell} | ${provenanceCell} |\n`;
 			}
 		}
 
@@ -470,6 +496,9 @@ export async function createGitHubReleases(
 				// Track uploaded paths to avoid duplicates (same tarball for multiple targets)
 				const uploadedPaths = new Set<string>();
 
+				// Track SBOM URLs for release notes update
+				const sbomAssetUrls = new Map<string, string>();
+
 				for (const targetResult of targetsWithTarballs) {
 					const artifactPath = targetResult.tarballPath;
 					if (!artifactPath) continue; // Type guard (already filtered but TS doesn't know)
@@ -512,33 +541,69 @@ export async function createGitHubReleases(
 						if (attestationResult.success && attestationResult.attestationUrl) {
 							info(`  ✓ Created attestation: ${attestationResult.attestationUrl}`);
 						}
+
+						// Upload SBOM if available
+						if (targetResult.sbomPath && existsSync(targetResult.sbomPath)) {
+							try {
+								const sbomFileName = basename(targetResult.sbomPath);
+								const sbomContent = readFileSync(targetResult.sbomPath);
+
+								info(`Uploading SBOM: ${sbomFileName}`);
+
+								const sbomAsset = await octokit.rest.repos.uploadReleaseAsset({
+									owner: context.repo.owner,
+									repo: context.repo.repo,
+									release_id: release.data.id,
+									name: sbomFileName,
+									data: sbomContent as unknown as string,
+								});
+
+								info(`Uploaded SBOM: ${sbomAsset.data.browser_download_url}`);
+
+								// Track SBOM URL for release notes
+								sbomAssetUrls.set(targetResult.target.directory, sbomAsset.data.browser_download_url);
+
+								releaseInfo.assets.push({
+									name: sbomFileName,
+									downloadUrl: sbomAsset.data.browser_download_url,
+									size: sbomAsset.data.size,
+								});
+							} catch (sbomErr) {
+								warning(
+									`Failed to upload SBOM ${targetResult.sbomPath}: ${sbomErr instanceof Error ? sbomErr.message : String(sbomErr)}`,
+								);
+							}
+						}
 					} catch (err) {
 						warning(`Failed to upload artifact ${artifactPath}: ${err instanceof Error ? err.message : String(err)}`);
 					}
 				}
+
+				// Update release notes with SBOM links
+				if (sbomAssetUrls.size > 0) {
+					// Replace the placeholder SBOM cells with actual links
+					for (const [_dir, sbomUrl] of sbomAssetUrls) {
+						// Update release notes to replace "📦" with actual link for this target
+						releaseNotes = releaseNotes.replace(
+							/\| 📦 \| (\[Sigstore\]|\[GitHub\]|\[SBOM\]|—)/,
+							`| [📦](${sbomUrl}) | $1`,
+						);
+					}
+				}
 			}
 
-			// Update release notes to include asset attestations
+			// Update the release body with SBOM links
 			if (releaseInfo.assets.length > 0) {
-				const assetAttestations = releaseInfo.assets.filter((a) => a.attestationUrl);
-				if (assetAttestations.length > 0) {
-					releaseNotes += "\n\n### Release Asset Attestations:\n\n";
-					for (const asset of assetAttestations) {
-						releaseNotes += `- **${asset.name}**: [Attestation](${asset.attestationUrl})\n`;
-					}
-
-					// Update the release body with asset attestations
-					try {
-						await octokit.rest.repos.updateRelease({
-							owner: context.repo.owner,
-							repo: context.repo.repo,
-							release_id: release.data.id,
-							body: releaseNotes.trim(),
-						});
-						info(`Updated release notes with asset attestations`);
-					} catch (err) {
-						warning(`Failed to update release notes: ${err instanceof Error ? err.message : String(err)}`);
-					}
+				try {
+					await octokit.rest.repos.updateRelease({
+						owner: context.repo.owner,
+						repo: context.repo.repo,
+						release_id: release.data.id,
+						body: releaseNotes.trim(),
+					});
+					info(`Updated release notes with asset links`);
+				} catch (err) {
+					warning(`Failed to update release notes: ${err instanceof Error ? err.message : String(err)}`);
 				}
 			}
 

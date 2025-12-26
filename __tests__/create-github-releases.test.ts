@@ -483,13 +483,13 @@ describe("create-github-releases", () => {
 			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
-			expect(createReleaseCall.body).toContain("Published to:");
-			expect(createReleaseCall.body).toContain("npm");
-			expect(createReleaseCall.body).toContain("https://www.npmjs.com/package/@org/pkg-a");
-			expect(createReleaseCall.body).toContain("Sigstore provenance");
+			expect(createReleaseCall.body).toContain("Publish Summary");
+			expect(createReleaseCall.body).toContain("| npm |");
+			expect(createReleaseCall.body).toContain("https://www.npmjs.com/package/@org/pkg-a/v/1.0.0");
+			expect(createReleaseCall.body).toContain("[Sigstore]");
 		});
 
-		it("includes GitHub attestation URL in release notes", async () => {
+		it("includes all attestation URLs in release notes", async () => {
 			const tags: TagInfo[] = [
 				{
 					name: "v1.0.0",
@@ -514,6 +514,7 @@ describe("create-github-releases", () => {
 							},
 							success: true,
 							registryUrl: "https://www.npmjs.com/package/@org/pkg-a",
+							sbomAttestationUrl: "https://github.com/test-owner/test-repo/attestations/sbom-456",
 						},
 					],
 					githubAttestationUrl: "https://github.com/test-owner/test-repo/attestations/12345",
@@ -531,8 +532,13 @@ describe("create-github-releases", () => {
 			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
 			const createReleaseCall = mockOctokit.rest.repos.createRelease.mock.calls[0][0];
-			expect(createReleaseCall.body).toContain("GitHub attestation");
+			expect(createReleaseCall.body).toContain("Publish Summary");
+			// Check for GitHub attestation link
+			expect(createReleaseCall.body).toContain("[GitHub]");
 			expect(createReleaseCall.body).toContain("https://github.com/test-owner/test-repo/attestations/12345");
+			// Check for SBOM attestation link
+			expect(createReleaseCall.body).toContain("[SBOM]");
+			expect(createReleaseCall.body).toContain("https://github.com/test-owner/test-repo/attestations/sbom-456");
 		});
 
 		it("marks prerelease for versions with hyphen", async () => {
@@ -1168,7 +1174,7 @@ describe("create-github-releases", () => {
 			);
 		});
 
-		it("updates release notes with asset attestations", async () => {
+		it("handles attestation failure gracefully", async () => {
 			// Reset getState mock to return token
 			vi.mocked(core.getState).mockReturnValue("mock-token");
 
@@ -1183,7 +1189,21 @@ describe("create-github-releases", () => {
 				{
 					name: "@org/pkg-a",
 					version: "1.0.0",
-					targets: [{ target: {} as never, success: true }],
+					targets: [
+						{
+							target: {
+								protocol: "npm",
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/pkg-a",
+								access: "public",
+								provenance: true,
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							success: true,
+							tarballPath: "/path/to/pkg-a/pkg-a-1.0.0.tgz",
+						},
+					],
 				},
 			];
 
@@ -1192,7 +1212,6 @@ describe("create-github-releases", () => {
 				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
 				return true;
 			});
-			vi.mocked(fs.readdirSync).mockReturnValue(["pkg.tgz"] as never);
 			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
 
 			mockOctokit.rest.repos.createRelease.mockResolvedValue({
@@ -1203,10 +1222,93 @@ describe("create-github-releases", () => {
 			});
 			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
 				data: {
-					name: "pkg.tgz",
-					browser_download_url: "https://example.com/pkg.tgz",
+					name: "pkg-a-1.0.0.tgz",
+					browser_download_url: "https://example.com/pkg-a-1.0.0.tgz",
 					size: 1234,
 				},
+			});
+
+			// Mock attestation to fail
+			vi.mocked(createReleaseAssetAttestation).mockResolvedValue({
+				success: false,
+			});
+
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
+
+			// Release should still succeed even if attestation fails
+			expect(result.success).toBe(true);
+			// The attestation log message should NOT be called
+			expect(core.info).not.toHaveBeenCalledWith(expect.stringContaining("Created attestation"));
+		});
+
+		it("updates release notes with SBOM links", async () => {
+			// Reset getState mock to return token
+			vi.mocked(core.getState).mockReturnValue("mock-token");
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [
+						{
+							target: {
+								protocol: "npm",
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/pkg-a",
+								access: "public",
+								provenance: true,
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							success: true,
+							tarballPath: "/path/to/pkg-a/pkg-a-1.0.0.tgz",
+							sbomPath: "/path/to/pkg-a/pkg-a-1.0.0-npm.sbom.json",
+						},
+					],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				return true;
+			});
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
+
+			let uploadCallCount = 0;
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockImplementation(async () => {
+				uploadCallCount++;
+				if (uploadCallCount === 1) {
+					// First call is tarball
+					return {
+						data: {
+							name: "pkg-a-1.0.0.tgz",
+							browser_download_url: "https://example.com/pkg-a-1.0.0.tgz",
+							size: 1234,
+						},
+					};
+				}
+				// Second call is SBOM
+				return {
+					data: {
+						name: "pkg-a-1.0.0-npm.sbom.json",
+						browser_download_url: "https://example.com/pkg-a-1.0.0-npm.sbom.json",
+						size: 500,
+					},
+				};
 			});
 			mockOctokit.rest.repos.updateRelease.mockResolvedValue({ data: {} });
 
@@ -1217,16 +1319,97 @@ describe("create-github-releases", () => {
 
 			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
-			// Verify updateRelease was called with attestation info
+			// Verify SBOM was uploaded
+			expect(mockOctokit.rest.repos.uploadReleaseAsset).toHaveBeenCalledTimes(2);
+			expect(core.info).toHaveBeenCalledWith("Uploading SBOM: pkg-a-1.0.0-npm.sbom.json");
+
+			// Verify updateRelease was called to update SBOM links
 			expect(mockOctokit.rest.repos.updateRelease).toHaveBeenCalledWith(
 				expect.objectContaining({
 					owner: "test-owner",
 					repo: "test-repo",
 					release_id: 123,
-					body: expect.stringContaining("Release Asset Attestations"),
 				}),
 			);
-			expect(core.info).toHaveBeenCalledWith("Updated release notes with asset attestations");
+			expect(core.info).toHaveBeenCalledWith("Updated release notes with asset links");
+		});
+
+		it("handles SBOM upload failure gracefully", async () => {
+			// Reset getState mock to return token
+			vi.mocked(core.getState).mockReturnValue("mock-token");
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [
+						{
+							target: {
+								protocol: "npm",
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/pkg-a",
+								access: "public",
+								provenance: true,
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							success: true,
+							tarballPath: "/path/to/pkg-a/pkg-a-1.0.0.tgz",
+							sbomPath: "/path/to/pkg-a/pkg-a-1.0.0-npm.sbom.json",
+						},
+					],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				return true;
+			});
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
+
+			let uploadCallCount = 0;
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockImplementation(async () => {
+				uploadCallCount++;
+				if (uploadCallCount === 1) {
+					// First call is tarball - succeeds
+					return {
+						data: {
+							name: "pkg-a-1.0.0.tgz",
+							browser_download_url: "https://example.com/pkg-a-1.0.0.tgz",
+							size: 1234,
+						},
+					};
+				}
+				// Second call is SBOM - fails
+				throw new Error("SBOM upload failed");
+			});
+
+			vi.mocked(createReleaseAssetAttestation).mockResolvedValue({
+				success: true,
+				attestationUrl: "https://github.com/test-owner/test-repo/attestations/asset-123",
+			});
+
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
+
+			// Should still succeed even if SBOM upload fails
+			expect(result.success).toBe(true);
+			expect(core.warning).toHaveBeenCalledWith(
+				expect.stringContaining("Failed to upload SBOM /path/to/pkg-a/pkg-a-1.0.0-npm.sbom.json"),
+			);
 		});
 
 		it("handles release notes update failure gracefully", async () => {
@@ -1244,7 +1427,22 @@ describe("create-github-releases", () => {
 				{
 					name: "@org/pkg-a",
 					version: "1.0.0",
-					targets: [{ target: {} as never, success: true }],
+					targets: [
+						{
+							target: {
+								protocol: "npm",
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/pkg-a",
+								access: "public",
+								provenance: true,
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							success: true,
+							tarballPath: "/path/to/pkg-a/pkg-a-1.0.0.tgz",
+							sbomPath: "/path/to/pkg-a/pkg-a-1.0.0-npm.sbom.json",
+						},
+					],
 				},
 			];
 
@@ -1253,21 +1451,35 @@ describe("create-github-releases", () => {
 				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
 				return true;
 			});
-			vi.mocked(fs.readdirSync).mockReturnValue(["pkg.tgz"] as never);
 			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
 
+			let uploadCallCount = 0;
 			mockOctokit.rest.repos.createRelease.mockResolvedValue({
 				data: {
 					id: 123,
 					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
 				},
 			});
-			mockOctokit.rest.repos.uploadReleaseAsset.mockResolvedValue({
-				data: {
-					name: "pkg.tgz",
-					browser_download_url: "https://example.com/pkg.tgz",
-					size: 1234,
-				},
+			mockOctokit.rest.repos.uploadReleaseAsset.mockImplementation(async () => {
+				uploadCallCount++;
+				if (uploadCallCount === 1) {
+					// First call is tarball
+					return {
+						data: {
+							name: "pkg-a-1.0.0.tgz",
+							browser_download_url: "https://example.com/pkg-a-1.0.0.tgz",
+							size: 1234,
+						},
+					};
+				}
+				// Second call is SBOM
+				return {
+					data: {
+						name: "pkg-a-1.0.0-npm.sbom.json",
+						browser_download_url: "https://example.com/pkg-a-1.0.0-npm.sbom.json",
+						size: 500,
+					},
+				};
 			});
 			// Make updateRelease fail
 			mockOctokit.rest.repos.updateRelease.mockRejectedValue(new Error("Update failed"));

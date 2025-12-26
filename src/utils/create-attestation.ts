@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { attestProvenance, createStorageRecord } from "@actions/attest";
+import type { Attestation } from "@actions/attest";
+import { attest, attestProvenance, createStorageRecord } from "@actions/attest";
 import { debug, getState, info, warning } from "@actions/core";
 import { exec } from "@actions/exec";
 import { context } from "@actions/github";
@@ -20,6 +21,8 @@ export interface AttestationResult {
 	tlogId?: string;
 	/** Error message if failed */
 	error?: string;
+	/** Path to the SBOM JSON file (for SBOM attestations) */
+	sbomPath?: string;
 }
 
 /**
@@ -432,6 +435,241 @@ export async function createPackageAttestation(options: CreatePackageAttestation
 		warning(`Failed to create attestation for ${packageName}@${version}: ${message}`);
 
 		// Don't fail the publish for attestation errors
+		return {
+			success: false,
+			error: message,
+		};
+	}
+}
+
+/**
+ * CycloneDX predicate type URI for SBOM attestations
+ * @see https://cyclonedx.org/specification/overview/
+ * @see https://github.com/in-toto/attestation/issues/82
+ */
+const CYCLONEDX_PREDICATE_TYPE = "https://cyclonedx.org/bom";
+
+/**
+ * CycloneDX SBOM document structure (subset of fields we care about)
+ *
+ * @remarks
+ * CycloneDX is recommended for JavaScript/npm projects because it has
+ * better support for npm-specific metadata like package managers, registries,
+ * and JavaScript-specific vulnerability information.
+ *
+ * @see https://sbomgenerator.com/guides/javascript
+ */
+interface CycloneDXDocument {
+	bomFormat: "CycloneDX";
+	specVersion: string;
+	version: number;
+	metadata?: {
+		timestamp?: string;
+		component?: {
+			name: string;
+			version?: string;
+		};
+	};
+	components?: Array<{
+		type: string;
+		name: string;
+		version?: string;
+		purl?: string;
+	}>;
+	[key: string]: unknown;
+}
+
+/**
+ * Options for creating an SBOM attestation
+ */
+export interface CreateSBOMAttestationOptions {
+	/** Name of the package */
+	packageName: string;
+	/** Version of the package */
+	version: string;
+	/** Directory containing the package */
+	directory: string;
+	/** Whether to skip actual attestation creation */
+	dryRun: boolean;
+	/** Package manager to use for generating SBOM */
+	packageManager?: string;
+	/**
+	 * Pre-computed SHA-256 digest of the package tarball (format: "sha256:hex").
+	 * Used to link the SBOM to the specific artifact it describes.
+	 */
+	tarballDigest?: string;
+	/**
+	 * Target name for multi-directory builds (e.g., "npm", "github").
+	 * Used in the SBOM filename to distinguish between targets.
+	 */
+	targetName?: string;
+}
+
+/**
+ * Generate a CycloneDX SBOM for a package using npm sbom
+ *
+ * @remarks
+ * CycloneDX is preferred over SPDX for JavaScript/npm projects because it has
+ * better support for npm-specific metadata and vulnerability information.
+ *
+ * @param directory - Directory containing the package
+ * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
+ * @returns Parsed CycloneDX document or undefined if generation failed
+ */
+async function generateSBOM(directory: string, packageManager: string): Promise<CycloneDXDocument | undefined> {
+	try {
+		let output = "";
+		const npmCmd = getNpmCommand(packageManager);
+		const sbomArgs = [...npmCmd.baseArgs, "sbom", "--sbom-format=cyclonedx"];
+
+		await exec(npmCmd.cmd, sbomArgs, {
+			cwd: directory,
+			silent: true,
+			listeners: {
+				stdout: (data: Buffer) => {
+					output += data.toString();
+				},
+			},
+		});
+
+		const sbom = JSON.parse(output) as CycloneDXDocument;
+		debug(`Generated SBOM: ${sbom.bomFormat} v${sbom.specVersion}`);
+		return sbom;
+	} catch (error) {
+		debug(`Failed to generate SBOM: ${error instanceof Error ? error.message : String(error)}`);
+		return undefined;
+	}
+}
+
+/**
+ * Create a GitHub SBOM attestation for a published package
+ *
+ * @remarks
+ * This creates a CycloneDX SBOM attestation using GitHub's attestation API.
+ * The attestation binds the SBOM to the package artifact, allowing consumers
+ * to verify what dependencies were included in the build.
+ *
+ * The SBOM is generated using `npm sbom --sbom-format=cyclonedx` and then attested
+ * using the in-toto CycloneDX predicate type. CycloneDX is preferred over SPDX
+ * for JavaScript/npm projects due to better npm-specific metadata support.
+ *
+ * Requires:
+ * - `id-token: write` permission for OIDC signing
+ * - `attestations: write` permission for storing attestations
+ *
+ * @param options - SBOM attestation creation options
+ * @returns Promise resolving to attestation result
+ *
+ * @see https://cyclonedx.org/specification/overview/
+ * @see https://github.com/actions/attest-sbom
+ */
+export async function createSBOMAttestation(options: CreateSBOMAttestationOptions): Promise<AttestationResult> {
+	const { packageName, version, directory, dryRun, packageManager = "npm", tarballDigest } = options;
+
+	if (dryRun) {
+		info(`[DRY RUN] Would create SBOM attestation for ${packageName}@${version}`);
+		return {
+			success: true,
+			attestationUrl: `https://github.com/${context.repo.owner}/${context.repo.repo}/attestations/dry-run-sbom`,
+		};
+	}
+
+	// Get the GITHUB_TOKEN for attestation API
+	const token = process.env.GITHUB_TOKEN || getState("githubToken");
+	if (!token) {
+		return {
+			success: false,
+			error: "No GITHUB_TOKEN available for SBOM attestation creation",
+		};
+	}
+
+	// Generate the SBOM
+	info(`Generating SBOM for ${packageName}@${version}...`);
+	const sbom = await generateSBOM(directory, packageManager);
+	if (!sbom) {
+		return {
+			success: false,
+			error: `Failed to generate SBOM for ${packageName}@${version}`,
+		};
+	}
+
+	// Save the SBOM to a file for later upload as a release asset
+	// Naming convention: {package-name-without-scope}-{version}[-{target}].sbom.json
+	const pkgNameWithoutScope = packageName.startsWith("@") ? packageName.split("/")[1] : packageName;
+	const sbomFileName = options.targetName
+		? `${pkgNameWithoutScope}-${version}-${options.targetName}.sbom.json`
+		: `${pkgNameWithoutScope}-${version}.sbom.json`;
+	const sbomPath = join(directory, sbomFileName);
+	writeFileSync(sbomPath, JSON.stringify(sbom, null, 2));
+	info(`  Saved SBOM to ${sbomPath}`);
+
+	// Determine the digest to use for the subject
+	let digest: string;
+	if (tarballDigest) {
+		digest = tarballDigest;
+		debug(`Using provided tarball digest for SBOM subject: ${digest}`);
+	} else {
+		// Try to find or create a tarball to compute digest
+		let tarballPath = findTarball(directory, packageName, version);
+		if (!tarballPath) {
+			tarballPath = await createTarball(directory, packageManager);
+		}
+		if (!tarballPath) {
+			return {
+				success: false,
+				error: `No tarball found for SBOM attestation of ${packageName}@${version}`,
+			};
+		}
+		digest = computeFileDigest(tarballPath);
+		debug(`Computed tarball digest for SBOM subject: ${digest}`);
+	}
+
+	// Use PURL format for npm packages
+	const purlName = `pkg:npm/${packageName}@${version}`;
+	info(`Creating SBOM attestation for ${purlName}...`);
+
+	try {
+		debug(`Subject name (PURL): ${purlName}`);
+		debug(`Subject digest: ${digest}`);
+		debug(`Predicate type: ${CYCLONEDX_PREDICATE_TYPE}`);
+
+		// Create the SBOM attestation using the generic attest function
+		const attestation: Attestation = await attest({
+			subjects: [
+				{
+					name: purlName,
+					digest: { sha256: digest.replace("sha256:", "") },
+				},
+			],
+			predicateType: CYCLONEDX_PREDICATE_TYPE,
+			predicate: sbom,
+			token,
+		});
+
+		const attestationUrl = attestation.attestationID
+			? `https://github.com/${context.repo.owner}/${context.repo.repo}/attestations/${attestation.attestationID}`
+			: undefined;
+
+		info(`✓ Created SBOM attestation for ${packageName}@${version}`);
+		if (attestationUrl) {
+			info(`  Attestation URL: ${attestationUrl}`);
+		}
+		if (attestation.tlogID) {
+			info(`  Transparency log: https://search.sigstore.dev/?logIndex=${attestation.tlogID}`);
+		}
+
+		return {
+			success: true,
+			attestationUrl,
+			attestationId: attestation.attestationID,
+			tlogId: attestation.tlogID,
+			sbomPath,
+		};
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		warning(`Failed to create SBOM attestation for ${packageName}@${version}: ${message}`);
+
+		// Don't fail the publish for SBOM attestation errors
 		return {
 			success: false,
 			error: message,
