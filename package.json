@@ -52,7 +52,7 @@
 		"@octokit/types": "^16.0.0",
 		"@rslib/core": "^0.18.2",
 		"@types/node": "^24.10.1",
-		"@typescript/native-preview": "7.0.0-dev.20251201.1",
+		"@typescript/native-preview": "7.0.0-dev.20251226.1",
 		"@vercel/ncc": "^0.38.4",
 		"@vitest/coverage-v8": "^4.0.14",
 		"husky": "^9.1.7",
