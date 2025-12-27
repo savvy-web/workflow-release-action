@@ -487,7 +487,7 @@ export interface CreateSBOMAttestationOptions {
 	packageName: string;
 	/** Version of the package */
 	version: string;
-	/** Directory containing the package */
+	/** Directory where the SBOM will be saved (e.g., dist/npm) */
 	directory: string;
 	/** Whether to skip actual attestation creation */
 	dryRun: boolean;
@@ -503,6 +503,12 @@ export interface CreateSBOMAttestationOptions {
 	 * Used in the SBOM filename to distinguish between targets.
 	 */
 	targetName?: string;
+	/**
+	 * Source package directory where node_modules exists.
+	 * Required for `npm sbom` to resolve dependencies correctly.
+	 * If not provided, falls back to `directory`.
+	 */
+	sourceDirectory?: string;
 }
 
 /**
@@ -564,7 +570,7 @@ async function generateSBOM(directory: string, packageManager: string): Promise<
  * @see https://github.com/actions/attest-sbom
  */
 export async function createSBOMAttestation(options: CreateSBOMAttestationOptions): Promise<AttestationResult> {
-	const { packageName, version, directory, dryRun, packageManager = "npm", tarballDigest } = options;
+	const { packageName, version, directory, dryRun, packageManager = "npm", tarballDigest, sourceDirectory } = options;
 
 	if (dryRun) {
 		info(`[DRY RUN] Would create SBOM attestation for ${packageName}@${version}`);
@@ -583,9 +589,11 @@ export async function createSBOMAttestation(options: CreateSBOMAttestationOption
 		};
 	}
 
-	// Generate the SBOM
+	// Generate the SBOM from the source directory where node_modules exists
+	// This is required because npm sbom needs to resolve dependencies
+	const sbomSourceDir = sourceDirectory || directory;
 	info(`Generating SBOM for ${packageName}@${version}...`);
-	const sbom = await generateSBOM(directory, packageManager);
+	const sbom = await generateSBOM(sbomSourceDir, packageManager);
 	if (!sbom) {
 		return {
 			success: false,

@@ -20,6 +20,7 @@ import {
 } from "./publish-target.js";
 import { setupRegistryAuth } from "./registry-auth.js";
 import { getRegistryDisplayName, resolveTargets } from "./resolve-targets.js";
+import { sortPackageMapTopologically } from "./topological-sort.js";
 
 /**
  * Result of the publish packages operation
@@ -466,12 +467,17 @@ export async function publishPackages(
 	);
 
 	// Publish each package to each target
+	// Sort packages topologically so dependencies are published before dependents
+	// This is required for registries like JSR that validate dependencies exist
+	const sortedPackages = sortPackageMapTopologically(packageTargetsMap);
+	info(`Publishing ${sortedPackages.length} package(s) in dependency order`);
+
 	const results: PackagePublishResult[] = [];
 	let successfulPackages = 0;
 	let successfulTargets = 0;
 	const totalTargets = allTargets.length;
 
-	for (const [name, packageInfo] of packageTargetsMap) {
+	for (const [name, packageInfo] of sortedPackages) {
 		startGroup(`Publishing ${name}@${packageInfo.version}`);
 
 		const targetResults: TargetPublishResult[] = [];
@@ -692,6 +698,8 @@ export async function publishPackages(
 					packageManager,
 					tarballDigest: tarball.digest,
 					targetName,
+					// Use source directory for SBOM generation (has node_modules)
+					sourceDirectory: packageInfo.path,
 				});
 
 				if (sbomResult.success) {

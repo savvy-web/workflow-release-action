@@ -541,6 +541,9 @@ async function publishToNpmCompatible(
 					alreadyPublishedReason: "identical",
 					localIntegrity,
 					remoteIntegrity,
+					// Include tarball path so SBOM can still be uploaded
+					tarballPath: prePackedTarball?.path,
+					tarballDigest: prePackedTarball?.digest,
 				};
 			}
 
@@ -578,6 +581,9 @@ async function publishToNpmCompatible(
 			alreadyPublishedReason: "unknown",
 			localIntegrity,
 			remoteIntegrity,
+			// Include tarball path so SBOM can still be uploaded
+			tarballPath: prePackedTarball?.path,
+			tarballDigest: prePackedTarball?.digest,
 		};
 	} else {
 		// Version doesn't exist - show available versions for context
