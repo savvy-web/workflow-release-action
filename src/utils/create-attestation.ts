@@ -487,7 +487,11 @@ export interface CreateSBOMAttestationOptions {
 	packageName: string;
 	/** Version of the package */
 	version: string;
-	/** Directory where the SBOM will be saved (e.g., dist/npm) */
+	/**
+	 * Directory containing the package (e.g., dist/npm).
+	 * Must have package.json with resolved dependency versions.
+	 * If node_modules doesn't exist, dependencies will be installed first.
+	 */
 	directory: string;
 	/** Whether to skip actual attestation creation */
 	dryRun: boolean;
@@ -503,12 +507,69 @@ export interface CreateSBOMAttestationOptions {
 	 * Used in the SBOM filename to distinguish between targets.
 	 */
 	targetName?: string;
-	/**
-	 * Source package directory where node_modules exists.
-	 * Required for `npm sbom` to resolve dependencies correctly.
-	 * If not provided, falls back to `directory`.
-	 */
-	sourceDirectory?: string;
+}
+
+/**
+ * Ensure .npmignore exists in directory to exclude SBOM artifacts from npm pack
+ *
+ * @remarks
+ * When we install dependencies for SBOM generation, we create node_modules
+ * in the dist directory. This must be excluded from any future npm pack
+ * operations to prevent polluting the published package.
+ *
+ * Only creates the file if it doesn't already exist - does not modify
+ * existing .npmignore files to respect user configuration.
+ *
+ * @param directory - Directory to create .npmignore in
+ */
+function ensureNpmIgnore(directory: string): void {
+	const npmignorePath = join(directory, ".npmignore");
+
+	// Don't overwrite existing .npmignore - respect user configuration
+	if (existsSync(npmignorePath)) {
+		return;
+	}
+
+	try {
+		const content = `${["node_modules", "*.tgz", "*.sbom.json"].join("\n")}\n`;
+		writeFileSync(npmignorePath, content);
+		debug(`Created .npmignore in ${directory}`);
+	} catch (error) {
+		debug(`Failed to create .npmignore: ${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+
+/**
+ * Install production dependencies in a directory
+ *
+ * @remarks
+ * This is needed before running npm sbom in dist directories, which have
+ * resolved package.json versions but no node_modules installed.
+ *
+ * @param directory - Directory containing package.json
+ * @param packageManager - Package manager to use for installation
+ * @returns Whether installation succeeded
+ */
+async function installDependencies(directory: string, packageManager: string): Promise<boolean> {
+	try {
+		// Ensure .npmignore excludes installed dependencies from future npm pack
+		ensureNpmIgnore(directory);
+
+		const npmCmd = getNpmCommand(packageManager);
+		// Install production dependencies only (omit dev dependencies)
+		const installArgs = [...npmCmd.baseArgs, "install", "--omit=dev", "--ignore-scripts"];
+
+		await exec(npmCmd.cmd, installArgs, {
+			cwd: directory,
+			silent: true,
+		});
+
+		debug(`Installed dependencies in ${directory}`);
+		return true;
+	} catch (error) {
+		debug(`Failed to install dependencies: ${error instanceof Error ? error.message : String(error)}`);
+		return false;
+	}
 }
 
 /**
@@ -518,13 +579,28 @@ export interface CreateSBOMAttestationOptions {
  * CycloneDX is preferred over SPDX for JavaScript/npm projects because it has
  * better support for npm-specific metadata and vulnerability information.
  *
+ * If no node_modules exists in the directory, this function will first install
+ * production dependencies to ensure npm sbom has the dependency tree to analyze.
+ *
  * @param directory - Directory containing the package
  * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
  * @returns Parsed CycloneDX document or undefined if generation failed
  */
 async function generateSBOM(directory: string, packageManager: string): Promise<CycloneDXDocument | undefined> {
 	try {
+		// Check if node_modules exists, if not install dependencies first
+		const nodeModulesPath = join(directory, "node_modules");
+		if (!existsSync(nodeModulesPath)) {
+			debug(`No node_modules in ${directory}, installing dependencies...`);
+			const installed = await installDependencies(directory, packageManager);
+			if (!installed) {
+				warning(`Failed to install dependencies in ${directory} for SBOM generation`);
+				return undefined;
+			}
+		}
+
 		let output = "";
+		let stderr = "";
 		const npmCmd = getNpmCommand(packageManager);
 		const sbomArgs = [...npmCmd.baseArgs, "sbom", "--sbom-format=cyclonedx"];
 
@@ -535,14 +611,22 @@ async function generateSBOM(directory: string, packageManager: string): Promise<
 				stdout: (data: Buffer) => {
 					output += data.toString();
 				},
+				stderr: (data: Buffer) => {
+					stderr += data.toString();
+				},
 			},
 		});
+
+		if (!output.trim()) {
+			warning(`npm sbom produced no output for ${directory}${stderr ? `: ${stderr}` : ""}`);
+			return undefined;
+		}
 
 		const sbom = JSON.parse(output) as CycloneDXDocument;
 		debug(`Generated SBOM: ${sbom.bomFormat} v${sbom.specVersion}`);
 		return sbom;
 	} catch (error) {
-		debug(`Failed to generate SBOM: ${error instanceof Error ? error.message : String(error)}`);
+		warning(`Failed to generate SBOM for ${directory}: ${error instanceof Error ? error.message : String(error)}`);
 		return undefined;
 	}
 }
@@ -570,7 +654,7 @@ async function generateSBOM(directory: string, packageManager: string): Promise<
  * @see https://github.com/actions/attest-sbom
  */
 export async function createSBOMAttestation(options: CreateSBOMAttestationOptions): Promise<AttestationResult> {
-	const { packageName, version, directory, dryRun, packageManager = "npm", tarballDigest, sourceDirectory } = options;
+	const { packageName, version, directory, dryRun, packageManager = "npm", tarballDigest } = options;
 
 	if (dryRun) {
 		info(`[DRY RUN] Would create SBOM attestation for ${packageName}@${version}`);
@@ -589,11 +673,11 @@ export async function createSBOMAttestation(options: CreateSBOMAttestationOption
 		};
 	}
 
-	// Generate the SBOM from the source directory where node_modules exists
-	// This is required because npm sbom needs to resolve dependencies
-	const sbomSourceDir = sourceDirectory || directory;
+	// Generate the SBOM from the dist directory where package.json has resolved versions
+	// (workspace:* dependencies are transformed to real versions during build)
+	// generateSBOM will install dependencies if node_modules doesn't exist
 	info(`Generating SBOM for ${packageName}@${version}...`);
-	const sbom = await generateSBOM(sbomSourceDir, packageManager);
+	const sbom = await generateSBOM(directory, packageManager);
 	if (!sbom) {
 		return {
 			success: false,

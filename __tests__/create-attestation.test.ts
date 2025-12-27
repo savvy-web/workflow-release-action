@@ -958,8 +958,11 @@ describe("create-attestation", () => {
 					],
 				}),
 			);
-			// Should NOT call fs operations when tarballDigest is provided
-			expect(vi.mocked(fs.existsSync)).not.toHaveBeenCalled();
+			// existsSync is called to check for node_modules, but when tarballDigest is provided
+			// we should NOT search for tarball files (findTarball/createTarball)
+			// Verify only node_modules check was made
+			expect(vi.mocked(fs.existsSync)).toHaveBeenCalledWith("/path/to/pkg/node_modules");
+			expect(vi.mocked(fs.readdirSync)).not.toHaveBeenCalled();
 		});
 
 		it("uses specified package manager for SBOM generation", async () => {
@@ -1049,6 +1052,187 @@ describe("create-attestation", () => {
 			);
 		});
 
+		it("installs dependencies when node_modules does not exist", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2024-01-01T00:00:00Z",
+					component: { name: "@org/pkg", version: "1.0.0" },
+				},
+				components: [],
+			};
+
+			const execCalls: string[][] = [];
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				execCalls.push(args || []);
+				if (args?.includes("sbom")) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+					}
+				}
+				return 0;
+			});
+
+			// First call for node_modules check returns false (doesn't exist)
+			// After install, tarball exists
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				if (String(path).includes("node_modules")) return false;
+				return true; // tarball exists
+			});
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+			});
+
+			// Should have called npm install first
+			expect(execCalls[0]).toContain("install");
+			expect(execCalls[0]).toContain("--omit=dev");
+			expect(execCalls[0]).toContain("--ignore-scripts");
+			// Then npm sbom
+			expect(execCalls[1]).toContain("sbom");
+		});
+
+		it("does not overwrite existing .npmignore when installing dependencies", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2024-01-01T00:00:00Z",
+					component: { name: "@org/pkg", version: "1.0.0" },
+				},
+				components: [],
+			};
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				if (args?.includes("sbom")) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+					}
+				}
+				return 0;
+			});
+
+			// .npmignore already exists, node_modules doesn't
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				if (String(path).includes(".npmignore")) return true;
+				if (String(path).includes("node_modules")) return false;
+				return true;
+			});
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+			});
+
+			// Should NOT have written to .npmignore since it already exists
+			expect(vi.mocked(fs.writeFileSync)).not.toHaveBeenCalledWith(
+				expect.stringContaining(".npmignore"),
+				expect.any(String),
+			);
+		});
+
+		it("returns error when dependency installation fails", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			vi.mocked(exec.exec).mockRejectedValue(new Error("npm install failed"));
+
+			// node_modules doesn't exist
+			vi.mocked(fs.existsSync).mockReturnValue(false);
+
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("Failed to generate SBOM for @org/pkg@1.0.0");
+		});
+
+		it("returns error when npm sbom produces no output", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				// Return empty output
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(""));
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(true); // node_modules exists
+
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("Failed to generate SBOM for @org/pkg@1.0.0");
+		});
+
+		it("includes stderr in warning when npm sbom produces no output", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				// Return empty stdout but with stderr
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from(""));
+				}
+				if (options?.listeners?.stderr) {
+					options.listeners.stderr(Buffer.from("npm WARN some warning message"));
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(true); // node_modules exists
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+			});
+
+			expect(vi.mocked(core.warning)).toHaveBeenCalledWith(expect.stringContaining("npm WARN some warning message"));
+		});
+
 		it("returns error when no tarball found and cannot be created", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 
@@ -1063,21 +1247,27 @@ describe("create-attestation", () => {
 				components: [],
 			};
 
-			let execCallCount = 0;
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				execCallCount++;
-				// First call is SBOM generation
-				if (execCallCount === 1) {
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				// First call: npm sbom (node_modules exists so no install needed)
+				if (args?.includes("sbom")) {
 					if (options?.listeners?.stdout) {
 						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
 					}
 					return 0;
 				}
-				// Second call is npm pack - fail it
-				throw new Error("npm pack failed");
+				// npm pack call - fail it
+				if (args?.includes("pack")) {
+					throw new Error("npm pack failed");
+				}
+				return 0;
 			});
 
-			vi.mocked(fs.existsSync).mockReturnValue(false);
+			// node_modules exists, so no install needed
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				if (String(path).includes("node_modules")) return true;
+				// No tarball exists
+				return false;
+			});
 			vi.mocked(fs.readdirSync).mockReturnValue([]);
 
 			const result = await createSBOMAttestation({

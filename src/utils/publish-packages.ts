@@ -698,8 +698,6 @@ export async function publishPackages(
 					packageManager,
 					tarballDigest: tarball.digest,
 					targetName,
-					// Use source directory for SBOM generation (has node_modules)
-					sourceDirectory: packageInfo.path,
 				});
 
 				if (sbomResult.success) {
