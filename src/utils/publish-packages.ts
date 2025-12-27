@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { endGroup, error, info, startGroup, warning } from "@actions/core";
 import { exec } from "@actions/exec";
 import type { PackageJson, ResolvedTarget, VersionCheckResult } from "../types/publish-config.js";
+import type { WorkspacePackageInfo } from "./create-attestation.js";
 import { createPackageAttestation, createSBOMAttestation } from "./create-attestation.js";
 import { findPackagePath } from "./find-package-path.js";
 import type {
@@ -667,6 +668,20 @@ export async function publishPackages(
 		if (allTargetsSuccess && prePackedTarballs.size > 0) {
 			const processedDirectories = new Set<string>();
 
+			// Build a map of all workspace packages for file: linking during npm install
+			// This allows npm to resolve workspace dependencies that may not yet be on the registry
+			const workspacePackages = new Map<string, WorkspacePackageInfo>();
+			for (const [pkgName, pkgInfo] of packageTargetsMap) {
+				// Use the first target's directory as the workspace package location
+				const firstTarget = pkgInfo.targets[0];
+				if (firstTarget) {
+					workspacePackages.set(pkgName, {
+						directory: firstTarget.directory,
+						version: pkgInfo.version,
+					});
+				}
+			}
+
 			for (const result of targetResults) {
 				const dir = result.target.directory;
 				// Skip if we already processed this directory (multiple targets can share a directory)
@@ -698,6 +713,7 @@ export async function publishPackages(
 					packageManager,
 					tarballDigest: tarball.digest,
 					targetName,
+					workspacePackages,
 				});
 
 				if (sbomResult.success) {

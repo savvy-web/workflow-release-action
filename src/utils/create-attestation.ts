@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Attestation } from "@actions/attest";
 import { attest, attestProvenance, createStorageRecord } from "@actions/attest";
@@ -480,6 +480,11 @@ interface CycloneDXDocument {
 }
 
 /**
+ * Workspace package info for SBOM generation (exported for use by publish-packages)
+ */
+export type { WorkspacePackageInfo };
+
+/**
  * Options for creating an SBOM attestation
  */
 export interface CreateSBOMAttestationOptions {
@@ -507,6 +512,12 @@ export interface CreateSBOMAttestationOptions {
 	 * Used in the SBOM filename to distinguish between targets.
 	 */
 	targetName?: string;
+	/**
+	 * Map of workspace package names to their info (directory and version).
+	 * Used to create file: links for packages being published in the same batch,
+	 * which may not yet be available on the registry.
+	 */
+	workspacePackages?: Map<string, WorkspacePackageInfo>;
 }
 
 /**
@@ -540,20 +551,133 @@ function ensureNpmIgnore(directory: string): void {
 }
 
 /**
+ * Workspace package information for file: linking
+ */
+interface WorkspacePackageInfo {
+	/** Path to the package's dist directory */
+	directory: string;
+	/** Version of the package */
+	version: string;
+}
+
+/**
+ * Rewrite workspace dependencies in package.json to use file: references
+ *
+ * @remarks
+ * When publishing multiple workspace packages in the same batch, some may
+ * depend on others that haven't been published yet. By using file: references,
+ * npm can resolve these dependencies locally instead of trying to fetch from
+ * the registry.
+ *
+ * This function modifies the package.json in place, backing up the original.
+ * The backup should be restored after SBOM generation.
+ *
+ * @param directory - Directory containing package.json
+ * @param workspacePackages - Map of package names to their info
+ * @returns Path to backup file if changes were made, undefined otherwise
+ */
+function rewriteWorkspaceDeps(
+	directory: string,
+	workspacePackages: Map<string, WorkspacePackageInfo>,
+): string | undefined {
+	const pkgJsonPath = join(directory, "package.json");
+	if (!existsSync(pkgJsonPath)) {
+		debug(`No package.json in ${directory}, skipping dep rewrite`);
+		return undefined;
+	}
+
+	const originalContent = readFileSync(pkgJsonPath, "utf-8");
+	const pkgJson = JSON.parse(originalContent) as {
+		dependencies?: Record<string, string>;
+		peerDependencies?: Record<string, string>;
+		optionalDependencies?: Record<string, string>;
+	};
+
+	let modified = false;
+
+	// Check each dependency type for workspace packages
+	for (const depType of ["dependencies", "peerDependencies", "optionalDependencies"] as const) {
+		const deps = pkgJson[depType];
+		if (!deps) continue;
+
+		for (const [depName, depVersion] of Object.entries(deps)) {
+			const workspacePkg = workspacePackages.get(depName);
+			if (workspacePkg) {
+				// Replace with file: reference to the workspace package's dist directory
+				const fileRef = `file:${workspacePkg.directory}`;
+				if (deps[depName] !== fileRef) {
+					debug(`Rewriting ${depName}: ${depVersion} -> ${fileRef}`);
+					deps[depName] = fileRef;
+					modified = true;
+				}
+			}
+		}
+	}
+
+	if (!modified) {
+		return undefined;
+	}
+
+	// Backup original and write modified version
+	const backupPath = `${pkgJsonPath}.backup`;
+	writeFileSync(backupPath, originalContent);
+	writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2));
+	debug(`Rewrote workspace deps in ${directory}, backup at ${backupPath}`);
+
+	return backupPath;
+}
+
+/**
+ * Restore package.json from backup
+ *
+ * @param backupPath - Path to the backup file
+ */
+function restorePackageJson(backupPath: string): void {
+	const originalPath = backupPath.replace(".backup", "");
+	if (existsSync(backupPath)) {
+		const content = readFileSync(backupPath, "utf-8");
+		writeFileSync(originalPath, content);
+		// Remove backup file
+		try {
+			unlinkSync(backupPath);
+		} catch {
+			// Ignore cleanup errors
+		}
+		debug(`Restored package.json from ${backupPath}`);
+	}
+}
+
+/**
  * Install production dependencies in a directory
  *
  * @remarks
  * This is needed before running npm sbom in dist directories, which have
  * resolved package.json versions but no node_modules installed.
  *
+ * If workspacePackages is provided, dependencies on those packages will be
+ * rewritten to use file: references before installation, allowing npm to
+ * resolve dependencies that may not yet be published to the registry.
+ *
  * @param directory - Directory containing package.json
  * @param packageManager - Package manager to use for installation
+ * @param workspacePackages - Optional map of workspace package names to their info
  * @returns Whether installation succeeded
  */
-async function installDependencies(directory: string, packageManager: string): Promise<boolean> {
+async function installDependencies(
+	directory: string,
+	packageManager: string,
+	workspacePackages?: Map<string, WorkspacePackageInfo>,
+): Promise<boolean> {
+	let backupPath: string | undefined;
+
 	try {
 		// Ensure .npmignore excludes installed dependencies from future npm pack
 		ensureNpmIgnore(directory);
+
+		// Rewrite workspace dependencies to use file: references if provided
+		if (workspacePackages && workspacePackages.size > 0) {
+			backupPath = rewriteWorkspaceDeps(directory, workspacePackages);
+		}
 
 		const npmCmd = getNpmCommand(packageManager);
 		// Install production dependencies only (omit dev dependencies)
@@ -569,6 +693,11 @@ async function installDependencies(directory: string, packageManager: string): P
 	} catch (error) {
 		debug(`Failed to install dependencies: ${error instanceof Error ? error.message : String(error)}`);
 		return false;
+	} finally {
+		// Always restore the original package.json if we modified it
+		if (backupPath) {
+			restorePackageJson(backupPath);
+		}
 	}
 }
 
@@ -584,15 +713,20 @@ async function installDependencies(directory: string, packageManager: string): P
  *
  * @param directory - Directory containing the package
  * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
+ * @param workspacePackages - Optional map of workspace package names to their info for file: linking
  * @returns Parsed CycloneDX document or undefined if generation failed
  */
-async function generateSBOM(directory: string, packageManager: string): Promise<CycloneDXDocument | undefined> {
+async function generateSBOM(
+	directory: string,
+	packageManager: string,
+	workspacePackages?: Map<string, WorkspacePackageInfo>,
+): Promise<CycloneDXDocument | undefined> {
 	try {
 		// Check if node_modules exists, if not install dependencies first
 		const nodeModulesPath = join(directory, "node_modules");
 		if (!existsSync(nodeModulesPath)) {
 			debug(`No node_modules in ${directory}, installing dependencies...`);
-			const installed = await installDependencies(directory, packageManager);
+			const installed = await installDependencies(directory, packageManager, workspacePackages);
 			if (!installed) {
 				warning(`Failed to install dependencies in ${directory} for SBOM generation`);
 				return undefined;
@@ -654,7 +788,7 @@ async function generateSBOM(directory: string, packageManager: string): Promise<
  * @see https://github.com/actions/attest-sbom
  */
 export async function createSBOMAttestation(options: CreateSBOMAttestationOptions): Promise<AttestationResult> {
-	const { packageName, version, directory, dryRun, packageManager = "npm", tarballDigest } = options;
+	const { packageName, version, directory, dryRun, packageManager = "npm", tarballDigest, workspacePackages } = options;
 
 	if (dryRun) {
 		info(`[DRY RUN] Would create SBOM attestation for ${packageName}@${version}`);
@@ -676,8 +810,9 @@ export async function createSBOMAttestation(options: CreateSBOMAttestationOption
 	// Generate the SBOM from the dist directory where package.json has resolved versions
 	// (workspace:* dependencies are transformed to real versions during build)
 	// generateSBOM will install dependencies if node_modules doesn't exist
+	// If workspacePackages is provided, dependencies on workspace packages will use file: references
 	info(`Generating SBOM for ${packageName}@${version}...`);
-	const sbom = await generateSBOM(directory, packageManager);
+	const sbom = await generateSBOM(directory, packageManager, workspacePackages);
 	if (!sbom) {
 		return {
 			success: false,

@@ -1324,5 +1324,358 @@ describe("create-attestation", () => {
 				"  Transparency log: https://search.sigstore.dev/?logIndex=67890",
 			);
 		});
+
+		it("rewrites workspace dependencies to file: references when workspacePackages provided", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2024-01-01T00:00:00Z",
+					component: { name: "@org/pkg-b", version: "1.0.0" },
+				},
+				components: [],
+			};
+
+			const originalPkgJson = JSON.stringify({
+				name: "@org/pkg-b",
+				version: "1.0.0",
+				dependencies: {
+					"@org/pkg-a": "^1.0.0",
+					lodash: "^4.17.21",
+				},
+			});
+
+			let packageJsonContent = "";
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).endsWith("package.json")) {
+					return originalPkgJson;
+				}
+				return Buffer.from("test content");
+			});
+			vi.mocked(fs.writeFileSync).mockImplementation((path, content) => {
+				// Capture only the package.json write (not the backup or SBOM)
+				if (String(path).endsWith("package.json") && !String(path).includes(".backup")) {
+					packageJsonContent = String(content);
+				}
+			});
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				if (String(path).includes("node_modules")) return false;
+				if (String(path).includes(".npmignore")) return false;
+				if (String(path).includes(".backup")) return false;
+				return true;
+			});
+			vi.mocked(fs.unlinkSync).mockImplementation(() => {});
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				if (args?.includes("sbom")) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+					}
+				}
+				return 0;
+			});
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			const workspacePackages = new Map([["@org/pkg-a", { directory: "/path/to/pkg-a/dist", version: "1.0.0" }]]);
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg-b",
+				version: "1.0.0",
+				directory: "/path/to/pkg-b",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+				workspacePackages,
+			});
+
+			// Should have rewritten the package.json with file: reference
+			expect(packageJsonContent).toContain("file:/path/to/pkg-a/dist");
+			// Should still have lodash unchanged
+			expect(packageJsonContent).toContain("lodash");
+		});
+
+		it("restores package.json backup after dependency installation", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {},
+				components: [],
+			};
+
+			const originalPkgJson = JSON.stringify({
+				name: "@org/pkg-b",
+				version: "1.0.0",
+				dependencies: {
+					"@org/pkg-a": "^1.0.0",
+				},
+			});
+
+			const writeFileCalls: Array<{ path: string; content: string }> = [];
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.endsWith("package.json.backup")) {
+					return originalPkgJson; // Return original content from backup
+				}
+				if (pathStr.endsWith("package.json")) {
+					return originalPkgJson;
+				}
+				return Buffer.from("test content");
+			});
+			vi.mocked(fs.writeFileSync).mockImplementation((path, content) => {
+				writeFileCalls.push({ path: String(path), content: String(content) });
+			});
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes("node_modules")) return false;
+				if (pathStr.includes(".npmignore")) return false;
+				if (pathStr.includes(".backup")) return true; // Backup exists for restore
+				return true;
+			});
+			vi.mocked(fs.unlinkSync).mockImplementation(() => {});
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				if (args?.includes("sbom")) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+					}
+				}
+				return 0;
+			});
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			const workspacePackages = new Map([["@org/pkg-a", { directory: "/path/to/pkg-a/dist", version: "1.0.0" }]]);
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg-b",
+				version: "1.0.0",
+				directory: "/path/to/pkg-b",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+				workspacePackages,
+			});
+
+			// Should have called unlinkSync to remove backup
+			expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith(expect.stringContaining(".backup"));
+		});
+
+		it("does not rewrite dependencies when no workspace packages match", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {},
+				components: [],
+			};
+
+			const originalPkgJson = JSON.stringify({
+				name: "@org/pkg-b",
+				version: "1.0.0",
+				dependencies: {
+					lodash: "^4.17.21",
+				},
+			});
+
+			let backupWritten = false;
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).endsWith("package.json")) {
+					return originalPkgJson;
+				}
+				return Buffer.from("test content");
+			});
+			vi.mocked(fs.writeFileSync).mockImplementation((path) => {
+				if (String(path).includes(".backup")) {
+					backupWritten = true;
+				}
+			});
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				if (String(path).includes("node_modules")) return false;
+				if (String(path).includes(".npmignore")) return false;
+				return true;
+			});
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				if (args?.includes("sbom")) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+					}
+				}
+				return 0;
+			});
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			// Workspace packages don't include any dependencies of pkg-b
+			const workspacePackages = new Map([["@org/pkg-c", { directory: "/path/to/pkg-c/dist", version: "1.0.0" }]]);
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg-b",
+				version: "1.0.0",
+				directory: "/path/to/pkg-b",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+				workspacePackages,
+			});
+
+			// Should NOT have written backup since no deps were rewritten
+			expect(backupWritten).toBe(false);
+		});
+
+		it("handles missing package.json gracefully when rewriting deps", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {},
+				components: [],
+			};
+
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes("node_modules")) return false;
+				if (pathStr.includes(".npmignore")) return false;
+				if (pathStr.endsWith("package.json")) return false; // No package.json
+				return true;
+			});
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				if (args?.includes("sbom")) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+					}
+				}
+				return 0;
+			});
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			const workspacePackages = new Map([["@org/pkg-a", { directory: "/path/to/pkg-a/dist", version: "1.0.0" }]]);
+
+			// Should not throw, should proceed without rewriting
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg-b",
+				version: "1.0.0",
+				directory: "/path/to/pkg-b",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+				workspacePackages,
+			});
+
+			expect(result.success).toBe(true);
+		});
+
+		it("rewrites peerDependencies and optionalDependencies for workspace packages", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {},
+				components: [],
+			};
+
+			const originalPkgJson = JSON.stringify({
+				name: "@org/pkg-c",
+				version: "1.0.0",
+				dependencies: {
+					"@org/pkg-a": "^1.0.0",
+				},
+				peerDependencies: {
+					"@org/pkg-b": "^2.0.0",
+				},
+				optionalDependencies: {
+					"@org/pkg-d": "^3.0.0",
+				},
+			});
+
+			let packageJsonContent = "";
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).endsWith("package.json")) {
+					return originalPkgJson;
+				}
+				return Buffer.from("test content");
+			});
+			vi.mocked(fs.writeFileSync).mockImplementation((path, content) => {
+				// Capture only the package.json write (not the backup or SBOM)
+				if (String(path).endsWith("package.json") && !String(path).includes(".backup")) {
+					packageJsonContent = String(content);
+				}
+			});
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				if (String(path).includes("node_modules")) return false;
+				if (String(path).includes(".npmignore")) return false;
+				if (String(path).includes(".backup")) return false;
+				return true;
+			});
+			vi.mocked(fs.unlinkSync).mockImplementation(() => {});
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				if (args?.includes("sbom")) {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
+					}
+				}
+				return 0;
+			});
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({
+				bundle: {} as never,
+				certificate: "cert",
+				attestationID: "12345",
+			});
+
+			const workspacePackages = new Map([
+				["@org/pkg-a", { directory: "/path/to/pkg-a/dist", version: "1.0.0" }],
+				["@org/pkg-b", { directory: "/path/to/pkg-b/dist", version: "2.0.0" }],
+				["@org/pkg-d", { directory: "/path/to/pkg-d/dist", version: "3.0.0" }],
+			]);
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg-c",
+				version: "1.0.0",
+				directory: "/path/to/pkg-c",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+				workspacePackages,
+			});
+
+			// Should have rewritten all three dependency types
+			expect(packageJsonContent).toContain("file:/path/to/pkg-a/dist");
+			expect(packageJsonContent).toContain("file:/path/to/pkg-b/dist");
+			expect(packageJsonContent).toContain("file:/path/to/pkg-d/dist");
+		});
 	});
 });
