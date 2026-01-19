@@ -693,7 +693,8 @@ async function installDependencies(
 
 		const npmCmd = getNpmCommand(packageManager);
 		// Install production dependencies only (omit dev dependencies)
-		const installArgs = [...npmCmd.baseArgs, "install", "--omit=dev", "--ignore-scripts"];
+		// Use --legacy-peer-deps to avoid peer dependency resolution failures
+		const installArgs = [...npmCmd.baseArgs, "install", "--omit=dev", "--ignore-scripts", "--legacy-peer-deps"];
 
 		debug(`Running: ${npmCmd.cmd} ${installArgs.join(" ")} in ${directory}`);
 
