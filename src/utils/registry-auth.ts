@@ -37,20 +37,47 @@ function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[
 }
 
 /**
+ * Check if npm token is available (either via input or environment)
+ *
+ * @returns The npm token if available, undefined otherwise
+ */
+function getNpmToken(): string | undefined {
+	// Check input first (set by pre.ts or directly)
+	const inputToken = getInput("npm-token");
+	if (inputToken) return inputToken;
+
+	// Check environment variable as fallback
+	return process.env.NPM_TOKEN;
+}
+
+/**
  * Check if a registry uses OIDC-based authentication
  *
  * @remarks
  * OIDC (OpenID Connect) enables token-less publishing:
- * - npm public registry: Uses trusted publishing via Sigstore OIDC
+ * - npm public registry: Uses trusted publishing via Sigstore OIDC (when no NPM_TOKEN provided)
  * - JSR: Uses OIDC natively in GitHub Actions
+ *
+ * Note: If an NPM_TOKEN is provided, npm registry will NOT use OIDC.
+ * This allows first-time publishes and fallback authentication.
  *
  * @param registry - Registry URL to check
  * @returns true if registry uses OIDC
  */
 function isOidcRegistry(registry: string | null): boolean {
 	if (!registry) return false;
+
 	// npm public registry supports OIDC trusted publishing
-	if (registry.includes("registry.npmjs.org")) return true;
+	// BUT only if no NPM_TOKEN is provided (OIDC requires package to exist first)
+	if (registry.includes("registry.npmjs.org")) {
+		const npmToken = getNpmToken();
+		if (npmToken) {
+			// Token provided - don't use OIDC, use token auth instead
+			debug("NPM_TOKEN provided - using token auth instead of OIDC for npm");
+			return false;
+		}
+		return true;
+	}
 	return false;
 }
 
@@ -208,9 +235,10 @@ export async function validateRegistriesReachable(
  * Validate that required tokens are available in environment
  *
  * @remarks
- * OIDC-based registries (npm, JSR) don't require tokens - they use
+ * OIDC-based registries (npm without NPM_TOKEN, JSR) don't require tokens - they use
  * temporary credentials from the GitHub Actions OIDC provider.
- * Only GitHub Packages and custom registries require tokens.
+ * When NPM_TOKEN is provided, npm uses token auth instead of OIDC.
+ * GitHub Packages and custom registries always require tokens.
  *
  * @param targets - Array of resolved targets to validate
  * @returns Validation result with missing tokens
@@ -228,9 +256,23 @@ export function validateTokensAvailable(targets: ResolvedTarget[]): {
 			continue;
 		}
 
-		// npm public registry uses OIDC trusted publishing
+		// npm public registry uses OIDC trusted publishing (when no NPM_TOKEN)
 		if (isOidcRegistry(target.registry)) {
 			debug("npm uses OIDC trusted publishing - no token required");
+			continue;
+		}
+
+		// For npm registry with NPM_TOKEN, check the special env var we set up
+		if (target.registry?.includes("registry.npmjs.org") && !target.tokenEnv) {
+			// Check if REGISTRY_NPMJS_ORG_TOKEN was set by setupRegistryAuth
+			if (process.env.REGISTRY_NPMJS_ORG_TOKEN) {
+				debug("npm registry using NPM_TOKEN - token available");
+				continue;
+			}
+			missing.push({
+				registry: target.registry,
+				tokenEnv: "NPM_TOKEN or OIDC trusted publishing",
+			});
 			continue;
 		}
 
@@ -262,10 +304,11 @@ export function validateTokensAvailable(targets: ResolvedTarget[]): {
  *
  * @remarks
  * Only generates auth entries for:
+ * - npm public registry (when NPM_TOKEN is provided)
  * - GitHub Packages (uses GitHub App token)
  * - Custom registries (uses provided tokens)
  *
- * OIDC registries (npm public, JSR) don't need .npmrc entries.
+ * OIDC registries (npm public without token, JSR) don't need .npmrc entries.
  *
  * @param targets - Array of resolved targets to configure auth for
  */
@@ -286,14 +329,22 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
 
 		processedRegistries.add(target.registry);
 
-		if (!target.tokenEnv) {
+		// Determine the token env var to use
+		// For npm registry with NPM_TOKEN, we use REGISTRY_NPMJS_ORG_TOKEN (set by setupRegistryAuth)
+		let tokenEnvVar = target.tokenEnv;
+		if (!tokenEnvVar && target.registry.includes("registry.npmjs.org")) {
+			// npm registry without explicit tokenEnv - check for NPM_TOKEN setup
+			tokenEnvVar = "REGISTRY_NPMJS_ORG_TOKEN";
+		}
+
+		if (!tokenEnvVar) {
 			warning(`No token env var for registry: ${target.registry}`);
 			continue;
 		}
 
-		const authValue = process.env[target.tokenEnv];
+		const authValue = process.env[tokenEnvVar];
 		if (!authValue) {
-			warning(`Token env var ${target.tokenEnv} is not set for registry: ${target.registry}`);
+			warning(`Token env var ${tokenEnvVar} is not set for registry: ${target.registry}`);
 			continue;
 		}
 
@@ -337,13 +388,14 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
  *
  * @remarks
  * Authentication strategy:
- * - **npm public registry**: Uses OIDC trusted publishing (no token needed)
+ * - **npm public registry**: Uses `npm-token` input if provided, otherwise OIDC trusted publishing
  * - **GitHub Packages**: Uses `github-token` input if provided, otherwise GitHub App token
  * - **JSR**: Uses OIDC (no token needed)
  * - **Custom registries**: Uses tokens from `custom-registries` input, or GitHub App token if not specified
  *
  * The GitHub token is set to GITHUB_TOKEN for GitHub Packages auth.
- * No .npmrc entry is needed for npm/JSR since they use OIDC.
+ * NPM_TOKEN is set when npm-token input is provided (for first-time publishes or OIDC fallback).
+ * No .npmrc entry is needed for JSR since it uses OIDC.
  *
  * Custom registries format (one per line):
  * - `https://registry.example.com/` - Use GitHub App token
@@ -357,6 +409,19 @@ export async function setupRegistryAuth(targets: ResolvedTarget[], packageManage
 	// Get tokens from state (set by pre.ts)
 	const appToken = getState("token");
 	const githubToken = getState("githubToken"); // Optional: workflow's GITHUB_TOKEN for packages:write
+
+	// Check for NPM token (for npm registry when OIDC isn't configured)
+	const npmToken = getNpmToken();
+	if (npmToken) {
+		// Set NPM_TOKEN environment variable for npm CLI
+		process.env.NPM_TOKEN = npmToken;
+		setSecret(npmToken);
+		info("Using NPM_TOKEN for npm registry authentication (OIDC disabled)");
+
+		// Also set the env var that will be used by tokenEnv in targets
+		process.env.REGISTRY_NPMJS_ORG_TOKEN = `_authToken=${npmToken}`;
+		setSecret(`_authToken=${npmToken}`);
+	}
 
 	// Determine which token to use for GitHub Packages
 	// Prefer the explicit github-token input (has packages:write from workflow permissions)
