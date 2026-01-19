@@ -53,6 +53,10 @@ describe("create-github-releases", () => {
 				uploadReleaseAsset: vi.fn(),
 				updateRelease: vi.fn(),
 			},
+			git: {
+				createTag: vi.fn(),
+				createRef: vi.fn(),
+			},
 		},
 	};
 
@@ -65,6 +69,18 @@ describe("create-github-releases", () => {
 		vi.mocked(findPackagePath).mockImplementation((name: string) => `/mock/packages/${name.replace(/^@[^/]+\//, "")}`);
 		// Default: createReleaseAssetAttestation returns success result
 		vi.mocked(createReleaseAssetAttestation).mockResolvedValue({ success: true, attestationUrl: undefined });
+		// Default: git API calls succeed
+		mockOctokit.rest.git.createTag.mockResolvedValue({ data: { sha: "tag-sha-123" } });
+		mockOctokit.rest.git.createRef.mockResolvedValue({ data: {} });
+		// Default: exec returns HEAD sha for rev-parse
+		vi.mocked(exec.exec).mockImplementation(
+			async (_cmd: string, args?: string[], options?: { listeners?: { stdout?: (data: Buffer) => void } }) => {
+				if (args?.includes("rev-parse")) {
+					options?.listeners?.stdout?.(Buffer.from("abc123def456\n"));
+				}
+				return 0;
+			},
+		);
 	});
 
 	afterEach(() => {
@@ -366,7 +382,6 @@ describe("create-github-releases", () => {
 				},
 			];
 
-			vi.mocked(exec.exec).mockResolvedValue(0);
 			mockOctokit.rest.repos.createRelease.mockResolvedValue({
 				data: {
 					id: 123,
@@ -381,9 +396,21 @@ describe("create-github-releases", () => {
 			expect(result.releases[0].id).toBe(123);
 			expect(result.releases[0].url).toBe("https://github.com/test-owner/test-repo/releases/tag/v2.0.0");
 
-			// Verify git tag command was called
-			expect(exec.exec).toHaveBeenCalledWith("git", ["tag", "-a", "v2.0.0", "-m", "Release v2.0.0"]);
-			expect(exec.exec).toHaveBeenCalledWith("git", ["push", "origin", "v2.0.0"]);
+			// Verify git API was called to create signed tag
+			expect(mockOctokit.rest.git.createTag).toHaveBeenCalledWith({
+				owner: "test-owner",
+				repo: "test-repo",
+				tag: "v2.0.0",
+				message: "Release v2.0.0",
+				object: "abc123def456",
+				type: "commit",
+			});
+			expect(mockOctokit.rest.git.createRef).toHaveBeenCalledWith({
+				owner: "test-owner",
+				repo: "test-repo",
+				ref: "refs/tags/v2.0.0",
+				sha: "tag-sha-123",
+			});
 		});
 
 		it("handles git tag creation failure", async () => {
@@ -402,13 +429,8 @@ describe("create-github-releases", () => {
 				},
 			];
 
-			// Allow git config calls (for identity setup) but fail the git tag command
-			vi.mocked(exec.exec).mockImplementation(async (_cmd: string, args?: string[]) => {
-				if (args?.includes("tag")) {
-					throw new Error("Git tag failed");
-				}
-				return 0;
-			});
+			// Fail the git API tag creation
+			mockOctokit.rest.git.createTag.mockRejectedValue(new Error("API tag creation failed"));
 
 			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
 

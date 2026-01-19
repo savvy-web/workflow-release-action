@@ -223,7 +223,11 @@ async function configureGitIdentity(): Promise<void> {
 }
 
 /**
- * Create a git tag
+ * Create a signed git tag via the GitHub API
+ *
+ * @remarks
+ * Tags created via the GitHub API with a GitHub App token are automatically
+ * verified/signed by GitHub, similar to commits created via the API.
  *
  * @param tagName - Name of the tag to create
  * @param message - Tag message
@@ -236,12 +240,45 @@ async function createGitTag(tagName: string, message: string, dryRun: boolean): 
 		return true;
 	}
 
-	try {
-		// Create annotated tag
-		await exec("git", ["tag", "-a", tagName, "-m", message]);
+	const token = getState("token");
+	if (!token) {
+		error("No token available for creating signed tag");
+		return false;
+	}
 
-		// Push the tag
-		await exec("git", ["push", "origin", tagName]);
+	const octokit = getOctokit(token);
+	const { owner, repo } = context.repo;
+
+	try {
+		// Get the current HEAD commit SHA
+		let stdout = "";
+		await exec("git", ["rev-parse", "HEAD"], {
+			listeners: {
+				stdout: (data: Buffer) => {
+					stdout += data.toString();
+				},
+			},
+			silent: true,
+		});
+		const headSha = stdout.trim();
+
+		// Create an annotated tag object via the API (this makes it signed/verified)
+		const { data: tagObject } = await octokit.rest.git.createTag({
+			owner,
+			repo,
+			tag: tagName,
+			message,
+			object: headSha,
+			type: "commit",
+		});
+
+		// Create a reference pointing to the tag object
+		await octokit.rest.git.createRef({
+			owner,
+			repo,
+			ref: `refs/tags/${tagName}`,
+			sha: tagObject.sha,
+		});
 
 		info(`Created and pushed tag: ${tagName}`);
 		return true;
