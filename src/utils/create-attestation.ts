@@ -674,6 +674,18 @@ async function installDependencies(
 		// Ensure .npmignore excludes installed dependencies from future npm pack
 		ensureNpmIgnore(directory);
 
+		// Log package.json contents for debugging
+		const pkgJsonPath = join(directory, "package.json");
+		if (existsSync(pkgJsonPath)) {
+			try {
+				const pkgContent = readFileSync(pkgJsonPath, "utf-8");
+				const pkg = JSON.parse(pkgContent) as { dependencies?: Record<string, string> };
+				debug(`Package.json dependencies in ${directory}: ${JSON.stringify(pkg.dependencies || {})}`);
+			} catch {
+				// Ignore parsing errors for debug logging
+			}
+		}
+
 		// Rewrite workspace dependencies to use file: references if provided
 		if (workspacePackages && workspacePackages.size > 0) {
 			backupPath = rewriteWorkspaceDeps(directory, workspacePackages);
@@ -683,10 +695,36 @@ async function installDependencies(
 		// Install production dependencies only (omit dev dependencies)
 		const installArgs = [...npmCmd.baseArgs, "install", "--omit=dev", "--ignore-scripts"];
 
-		await exec(npmCmd.cmd, installArgs, {
+		debug(`Running: ${npmCmd.cmd} ${installArgs.join(" ")} in ${directory}`);
+
+		// Capture output for debugging
+		let stdout = "";
+		let stderr = "";
+		const exitCode = await exec(npmCmd.cmd, installArgs, {
 			cwd: directory,
 			silent: true,
+			ignoreReturnCode: true,
+			listeners: {
+				stdout: (data: Buffer) => {
+					stdout += data.toString();
+				},
+				stderr: (data: Buffer) => {
+					stderr += data.toString();
+				},
+			},
 		});
+
+		if (exitCode !== 0) {
+			debug(`npm install failed with exit code ${exitCode}`);
+			// Log errors with more visibility for troubleshooting
+			if (stdout) {
+				debug(`npm install stdout:\n${stdout.slice(0, 1000)}`);
+			}
+			if (stderr) {
+				debug(`npm install stderr:\n${stderr.slice(0, 1000)}`);
+			}
+			return false;
+		}
 
 		debug(`Installed dependencies in ${directory}`);
 		return true;

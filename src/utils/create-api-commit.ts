@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { debug, endGroup, info, startGroup } from "@actions/core";
+import { debug, endGroup, getState, info, startGroup } from "@actions/core";
 import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 
@@ -229,12 +229,19 @@ export async function createApiCommit(
 	});
 	info(`Created tree: ${newTree.sha}`);
 
-	// Create the commit
+	// Create the commit with DCO sign-off
 	info("Creating commit...");
+	const appSlug = getState("appSlug");
+	const botName = appSlug ? `${appSlug}[bot]` : "github-actions[bot]";
+	const botEmail = appSlug
+		? `${appSlug}[bot]@users.noreply.github.com`
+		: "41898282+github-actions[bot]@users.noreply.github.com";
+	const signedMessage = `${message}\n\nSigned-off-by: ${botName} <${botEmail}>`;
+
 	const { data: newCommit } = await octokit.rest.git.createCommit({
 		owner,
 		repo,
-		message,
+		message: signedMessage,
 		tree: newTree.sha,
 		parents: [parentCommitSha],
 	});
