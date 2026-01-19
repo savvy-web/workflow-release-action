@@ -1300,6 +1300,7 @@ describe("create-github-releases", () => {
 			vi.mocked(exec.exec).mockResolvedValue(0);
 			vi.mocked(fs.existsSync).mockImplementation((p) => {
 				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				if (typeof p === "string" && p.includes(".api.json")) return false; // No API doc in this test
 				return true;
 			});
 			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
@@ -1341,7 +1342,7 @@ describe("create-github-releases", () => {
 
 			await createGitHubReleases(tags, publishResults, "pnpm", false);
 
-			// Verify SBOM was uploaded
+			// Verify SBOM was uploaded (tarball + SBOM = 2 uploads)
 			expect(mockOctokit.rest.repos.uploadReleaseAsset).toHaveBeenCalledTimes(2);
 			expect(core.info).toHaveBeenCalledWith("Uploading SBOM: pkg-a-1.0.0-npm.sbom.json");
 
@@ -1432,6 +1433,243 @@ describe("create-github-releases", () => {
 			expect(core.warning).toHaveBeenCalledWith(
 				expect.stringContaining("Failed to upload SBOM /path/to/pkg-a/pkg-a-1.0.0-npm.sbom.json"),
 			);
+		});
+
+		it("uploads API doc file when available", async () => {
+			// Reset getState mock to return token
+			vi.mocked(core.getState).mockReturnValue("mock-token");
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [
+						{
+							target: {
+								protocol: "npm",
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/pkg-a",
+								access: "public",
+								provenance: true,
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							success: true,
+							tarballPath: "/path/to/pkg-a/pkg-a-1.0.0.tgz",
+						},
+					],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				if (typeof p === "string" && p.includes("pkg-a.api.json")) return true; // API doc exists
+				return true;
+			});
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockImplementation(async (params) => {
+				const name = params?.name as string;
+				if (name.endsWith(".tgz")) {
+					return {
+						data: {
+							name: "pkg-a-1.0.0.tgz",
+							browser_download_url: "https://example.com/pkg-a-1.0.0.tgz",
+							size: 1234,
+						},
+					};
+				}
+				if (name.endsWith(".api.json")) {
+					return {
+						data: {
+							name: "pkg-a.api.json",
+							browser_download_url: "https://example.com/pkg-a.api.json",
+							size: 5000,
+						},
+					};
+				}
+				return {
+					data: {
+						name,
+						browser_download_url: `https://example.com/${name}`,
+						size: 500,
+					},
+				};
+			});
+			mockOctokit.rest.repos.updateRelease.mockResolvedValue({ data: {} });
+
+			vi.mocked(createReleaseAssetAttestation).mockResolvedValue({
+				success: true,
+				attestationUrl: "https://github.com/test-owner/test-repo/attestations/asset-123",
+			});
+
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
+
+			// Verify API doc was uploaded (tarball + API doc = 2 uploads)
+			expect(mockOctokit.rest.repos.uploadReleaseAsset).toHaveBeenCalledTimes(2);
+			expect(core.info).toHaveBeenCalledWith("Uploading API doc: pkg-a.api.json");
+			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Uploaded API doc:"));
+		});
+
+		it("handles API doc upload failure gracefully", async () => {
+			// Reset getState mock to return token
+			vi.mocked(core.getState).mockReturnValue("mock-token");
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "@org/pkg-a",
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					targets: [
+						{
+							target: {
+								protocol: "npm",
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/pkg-a",
+								access: "public",
+								provenance: true,
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							success: true,
+							tarballPath: "/path/to/pkg-a/pkg-a-1.0.0.tgz",
+						},
+					],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				if (typeof p === "string" && p.includes("pkg-a.api.json")) return true;
+				return true;
+			});
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockImplementation(async (params) => {
+				const name = params?.name as string;
+				if (name.endsWith(".tgz")) {
+					return {
+						data: {
+							name: "pkg-a-1.0.0.tgz",
+							browser_download_url: "https://example.com/pkg-a-1.0.0.tgz",
+							size: 1234,
+						},
+					};
+				}
+				// API doc upload fails
+				throw new Error("API doc upload failed");
+			});
+
+			vi.mocked(createReleaseAssetAttestation).mockResolvedValue({
+				success: true,
+				attestationUrl: "https://github.com/test-owner/test-repo/attestations/asset-123",
+			});
+
+			const result = await createGitHubReleases(tags, publishResults, "pnpm", false);
+
+			// Should still succeed even if API doc upload fails
+			expect(result.success).toBe(true);
+			expect(core.warning).toHaveBeenCalledWith(
+				expect.stringContaining("Failed to upload API doc /path/to/pkg-a/pkg-a.api.json"),
+			);
+		});
+
+		it("uploads API doc file for unscoped package names", async () => {
+			// Reset getState mock to return token
+			vi.mocked(core.getState).mockReturnValue("mock-token");
+
+			const tags: TagInfo[] = [
+				{
+					name: "v1.0.0",
+					packageName: "my-package", // Unscoped package name
+					version: "1.0.0",
+				},
+			];
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "my-package",
+					version: "1.0.0",
+					targets: [
+						{
+							target: {
+								protocol: "npm",
+								registry: "https://registry.npmjs.org/",
+								directory: "/path/to/my-package",
+								access: "public",
+								provenance: true,
+								tag: "latest",
+								tokenEnv: "NPM_TOKEN",
+							},
+							success: true,
+							tarballPath: "/path/to/my-package/my-package-1.0.0.tgz",
+						},
+					],
+				},
+			];
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(fs.existsSync).mockImplementation((p) => {
+				if (typeof p === "string" && p.includes("CHANGELOG")) return false;
+				if (typeof p === "string" && p.includes("my-package.api.json")) return true;
+				return true;
+			});
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("content"));
+
+			mockOctokit.rest.repos.createRelease.mockResolvedValue({
+				data: {
+					id: 123,
+					html_url: "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
+				},
+			});
+			mockOctokit.rest.repos.uploadReleaseAsset.mockImplementation(async (params) => {
+				const name = params?.name as string;
+				return {
+					data: {
+						name,
+						browser_download_url: `https://example.com/${name}`,
+						size: 1234,
+					},
+				};
+			});
+			mockOctokit.rest.repos.updateRelease.mockResolvedValue({ data: {} });
+
+			vi.mocked(createReleaseAssetAttestation).mockResolvedValue({
+				success: true,
+				attestationUrl: "https://github.com/test-owner/test-repo/attestations/asset-123",
+			});
+
+			await createGitHubReleases(tags, publishResults, "pnpm", false);
+
+			// Verify API doc was uploaded with unscoped package name
+			expect(mockOctokit.rest.repos.uploadReleaseAsset).toHaveBeenCalledTimes(2);
+			expect(core.info).toHaveBeenCalledWith("Uploading API doc: my-package.api.json");
 		});
 
 		it("handles release notes update failure gracefully", async () => {
