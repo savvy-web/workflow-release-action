@@ -118,7 +118,7 @@ describe("create-attestation", () => {
 				tlogID: "67890",
 			});
 
-			// Default package manager is npm, which uses npx npm
+			// npm is used directly for tarball creation
 			const result = await createPackageAttestation({
 				packageName: "@org/pkg",
 				version: "1.0.0",
@@ -127,10 +127,10 @@ describe("create-attestation", () => {
 			});
 
 			expect(result.success).toBe(true);
-			expect(exec.exec).toHaveBeenCalledWith("npx", ["npm", "pack", "--json"], expect.any(Object));
+			expect(exec.exec).toHaveBeenCalledWith("npm", ["pack", "--json"], expect.any(Object));
 		});
 
-		it("uses specified package manager for tarball creation", async () => {
+		it("uses npm directly for tarball creation regardless of package manager", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 			let existsCallCount = 0;
 			vi.mocked(fs.existsSync).mockImplementation((path) => {
@@ -156,7 +156,7 @@ describe("create-attestation", () => {
 				tlogID: "67890",
 			});
 
-			// Use pnpm as package manager, which uses pnpm dlx npm
+			// npm is used directly regardless of packageManager setting
 			const result = await createPackageAttestation({
 				packageName: "@org/pkg",
 				version: "1.0.0",
@@ -166,85 +166,7 @@ describe("create-attestation", () => {
 			});
 
 			expect(result.success).toBe(true);
-			expect(exec.exec).toHaveBeenCalledWith("pnpm", ["dlx", "npm", "pack", "--json"], expect.any(Object));
-		});
-
-		it("uses yarn npm for tarball creation with yarn", async () => {
-			process.env.GITHUB_TOKEN = "test-token";
-			let existsCallCount = 0;
-			vi.mocked(fs.existsSync).mockImplementation((path) => {
-				existsCallCount++;
-				if (existsCallCount <= 1) return false;
-				return String(path).endsWith("org-pkg-1.0.0.tgz");
-			});
-			vi.mocked(fs.readdirSync).mockReturnValue([]);
-			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
-
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from(JSON.stringify([{ filename: "org-pkg-1.0.0.tgz" }])));
-				}
-				return 0;
-			});
-
-			const { attestProvenance } = await import("@actions/attest");
-			vi.mocked(attestProvenance).mockResolvedValue({
-				bundle: {} as never,
-				certificate: "cert",
-				attestationID: "12345",
-				tlogID: "67890",
-			});
-
-			// Use yarn as package manager, which uses yarn npm
-			const result = await createPackageAttestation({
-				packageName: "@org/pkg",
-				version: "1.0.0",
-				directory: "/path/to/pkg",
-				dryRun: false,
-				packageManager: "yarn",
-			});
-
-			expect(result.success).toBe(true);
-			expect(exec.exec).toHaveBeenCalledWith("yarn", ["npm", "pack", "--json"], expect.any(Object));
-		});
-
-		it("uses bun x npm for tarball creation with bun", async () => {
-			process.env.GITHUB_TOKEN = "test-token";
-			let existsCallCount = 0;
-			vi.mocked(fs.existsSync).mockImplementation((path) => {
-				existsCallCount++;
-				if (existsCallCount <= 1) return false;
-				return String(path).endsWith("org-pkg-1.0.0.tgz");
-			});
-			vi.mocked(fs.readdirSync).mockReturnValue([]);
-			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
-
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from(JSON.stringify([{ filename: "org-pkg-1.0.0.tgz" }])));
-				}
-				return 0;
-			});
-
-			const { attestProvenance } = await import("@actions/attest");
-			vi.mocked(attestProvenance).mockResolvedValue({
-				bundle: {} as never,
-				certificate: "cert",
-				attestationID: "12345",
-				tlogID: "67890",
-			});
-
-			// Use bun as package manager, which uses bun x npm
-			const result = await createPackageAttestation({
-				packageName: "@org/pkg",
-				version: "1.0.0",
-				directory: "/path/to/pkg",
-				dryRun: false,
-				packageManager: "bun",
-			});
-
-			expect(result.success).toBe(true);
-			expect(exec.exec).toHaveBeenCalledWith("bun", ["x", "npm", "pack", "--json"], expect.any(Object));
+			expect(exec.exec).toHaveBeenCalledWith("npm", ["pack", "--json"], expect.any(Object));
 		});
 
 		it("finds tarball with scoped package name", async () => {
@@ -1004,11 +926,7 @@ describe("create-attestation", () => {
 				packageManager: "pnpm",
 			});
 
-			expect(exec.exec).toHaveBeenCalledWith(
-				"pnpm",
-				["dlx", "npm", "sbom", "--sbom-format=cyclonedx"],
-				expect.any(Object),
-			);
+			expect(exec.exec).toHaveBeenCalledWith("npm", ["sbom", "--sbom-format=cyclonedx"], expect.any(Object));
 		});
 
 		it("handles attest errors gracefully", async () => {

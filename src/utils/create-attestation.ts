@@ -69,22 +69,12 @@ function findTarball(directory: string, packageName: string, version: string): s
  * Get the command to run npm operations
  *
  * @remarks
- * - npm: `npx npm <args>`
- * - pnpm: `pnpm dlx npm <args>`
- * - yarn: `yarn npm <args>`
- * - bun: `bun x npm <args>`
+ * npm is always available in GitHub Actions runners and alongside all major
+ * package managers (pnpm, yarn, bun). Using npm directly is simpler and more
+ * reliable than routing through package manager dlx/npx wrappers.
  */
-function getNpmCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
-	switch (packageManager) {
-		case "pnpm":
-			return { cmd: "pnpm", baseArgs: ["dlx", "npm"] };
-		case "yarn":
-			return { cmd: "yarn", baseArgs: ["npm"] };
-		case "bun":
-			return { cmd: "bun", baseArgs: ["x", "npm"] };
-		default:
-			return { cmd: "npx", baseArgs: ["npm"] };
-	}
+function getNpmCommand(): { cmd: string; baseArgs: string[] } {
+	return { cmd: "npm", baseArgs: [] };
 }
 
 /**
@@ -159,10 +149,10 @@ async function createArtifactMetadataRecord(
  * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
  * @returns Path to created tarball, or undefined if failed
  */
-async function createTarball(directory: string, packageManager: string): Promise<string | undefined> {
+async function createTarball(directory: string): Promise<string | undefined> {
 	try {
 		let output = "";
-		const npmCmd = getNpmCommand(packageManager);
+		const npmCmd = getNpmCommand();
 		const packArgs = [...npmCmd.baseArgs, "pack", "--json"];
 
 		await exec(npmCmd.cmd, packArgs, {
@@ -338,7 +328,7 @@ export interface CreatePackageAttestationOptions {
  * @returns Promise resolving to attestation result
  */
 export async function createPackageAttestation(options: CreatePackageAttestationOptions): Promise<AttestationResult> {
-	const { packageName, version, directory, dryRun, packageManager = "npm", tarballDigest, registry } = options;
+	const { packageName, version, directory, dryRun, tarballDigest, registry } = options;
 
 	if (dryRun) {
 		info(`[DRY RUN] Would create attestation for ${packageName}@${version}`);
@@ -372,7 +362,7 @@ export async function createPackageAttestation(options: CreatePackageAttestation
 		let tarballPath = findTarball(directory, packageName, version);
 		if (!tarballPath) {
 			debug(`No tarball found in ${directory} for ${packageName}@${version}, creating one...`);
-			tarballPath = await createTarball(directory, packageManager);
+			tarballPath = await createTarball(directory);
 			if (!tarballPath) {
 				debug(`Failed to create tarball in ${directory}`);
 				return {
@@ -665,7 +655,6 @@ function restorePackageJson(backupPath: string): void {
  */
 async function installDependencies(
 	directory: string,
-	packageManager: string,
 	workspacePackages?: Map<string, WorkspacePackageInfo>,
 ): Promise<boolean> {
 	let backupPath: string | undefined;
@@ -691,7 +680,7 @@ async function installDependencies(
 			backupPath = rewriteWorkspaceDeps(directory, workspacePackages);
 		}
 
-		const npmCmd = getNpmCommand(packageManager);
+		const npmCmd = getNpmCommand();
 		// Install production dependencies only (omit dev dependencies)
 		// Use --legacy-peer-deps to avoid peer dependency resolution failures
 		const installArgs = [...npmCmd.baseArgs, "install", "--omit=dev", "--ignore-scripts", "--legacy-peer-deps"];
@@ -757,7 +746,6 @@ async function installDependencies(
  */
 async function generateSBOM(
 	directory: string,
-	packageManager: string,
 	workspacePackages?: Map<string, WorkspacePackageInfo>,
 ): Promise<CycloneDXDocument | undefined> {
 	try {
@@ -765,7 +753,7 @@ async function generateSBOM(
 		const nodeModulesPath = join(directory, "node_modules");
 		if (!existsSync(nodeModulesPath)) {
 			debug(`No node_modules in ${directory}, installing dependencies...`);
-			const installed = await installDependencies(directory, packageManager, workspacePackages);
+			const installed = await installDependencies(directory, workspacePackages);
 			if (!installed) {
 				warning(`Failed to install dependencies in ${directory} for SBOM generation`);
 				return undefined;
@@ -774,7 +762,7 @@ async function generateSBOM(
 
 		let output = "";
 		let stderr = "";
-		const npmCmd = getNpmCommand(packageManager);
+		const npmCmd = getNpmCommand();
 		const sbomArgs = [...npmCmd.baseArgs, "sbom", "--sbom-format=cyclonedx"];
 
 		await exec(npmCmd.cmd, sbomArgs, {
@@ -827,7 +815,7 @@ async function generateSBOM(
  * @see https://github.com/actions/attest-sbom
  */
 export async function createSBOMAttestation(options: CreateSBOMAttestationOptions): Promise<AttestationResult> {
-	const { packageName, version, directory, dryRun, packageManager = "npm", tarballDigest, workspacePackages } = options;
+	const { packageName, version, directory, dryRun, tarballDigest, workspacePackages } = options;
 
 	if (dryRun) {
 		info(`[DRY RUN] Would create SBOM attestation for ${packageName}@${version}`);
@@ -851,7 +839,7 @@ export async function createSBOMAttestation(options: CreateSBOMAttestationOption
 	// generateSBOM will install dependencies if node_modules doesn't exist
 	// If workspacePackages is provided, dependencies on workspace packages will use file: references
 	info(`Generating SBOM for ${packageName}@${version}...`);
-	const sbom = await generateSBOM(directory, packageManager, workspacePackages);
+	const sbom = await generateSBOM(directory, workspacePackages);
 	if (!sbom) {
 		return {
 			success: false,
@@ -878,7 +866,7 @@ export async function createSBOMAttestation(options: CreateSBOMAttestationOption
 		// Try to find or create a tarball to compute digest
 		let tarballPath = findTarball(directory, packageName, version);
 		if (!tarballPath) {
-			tarballPath = await createTarball(directory, packageManager);
+			tarballPath = await createTarball(directory);
 		}
 		if (!tarballPath) {
 			return {
