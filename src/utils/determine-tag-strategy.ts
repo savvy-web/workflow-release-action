@@ -114,7 +114,7 @@ export function determineTagStrategy(publishResults: PackagePublishResult[]): Ta
 
 		if (isFixedVersioning) {
 			const version = successfulPackages[0].version;
-			const tag = `v${version}`;
+			const tag = version;
 			const packageNames =
 				successfulPackages.length === 1 ? successfulPackages[0].name : successfulPackages.map((p) => p.name).join(", ");
 
@@ -136,7 +136,7 @@ export function determineTagStrategy(publishResults: PackagePublishResult[]): Ta
 		// Edge case: multiple packages released with different versions but not a monorepo
 		// This shouldn't happen in practice, but handle it by using highest version
 		const highestVersion = [...versions].sort().pop() || successfulPackages[0].version;
-		const tag = `v${highestVersion}`;
+		const tag = highestVersion;
 		warning(`Unexpected: multiple versions in single-tag mode. Using highest version: ${tag}`);
 
 		return {

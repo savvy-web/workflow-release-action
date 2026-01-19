@@ -93,7 +93,7 @@ describe("determine-tag-strategy", () => {
 			expect(result.strategy).toBe("single");
 			expect(result.tags).toHaveLength(1);
 			expect(result.tags[0]).toEqual({
-				name: "v1.2.3",
+				name: "1.2.3",
 				packageName: "@org/pkg-a",
 				version: "1.2.3",
 			});
@@ -144,7 +144,7 @@ describe("determine-tag-strategy", () => {
 
 			expect(result.strategy).toBe("single");
 			expect(result.tags).toHaveLength(1);
-			expect(result.tags[0].name).toBe("v2.0.0");
+			expect(result.tags[0].name).toBe("2.0.0");
 			expect(result.tags[0].packageName).toContain("@org/pkg-a");
 			expect(result.tags[0].packageName).toContain("@org/pkg-b");
 			expect(result.isFixedVersioning).toBe(true);
@@ -316,7 +316,7 @@ describe("determine-tag-strategy", () => {
 
 			expect(result.strategy).toBe("single");
 			expect(result.tags).toHaveLength(1);
-			expect(result.tags[0].name).toBe("v1.0.0");
+			expect(result.tags[0].name).toBe("1.0.0");
 		});
 
 		it("uses per-package tag when monorepo releases single package (bug fix)", () => {
@@ -418,7 +418,7 @@ describe("determine-tag-strategy", () => {
 
 			expect(result.strategy).toBe("single");
 			expect(result.tags).toHaveLength(1);
-			expect(result.tags[0].name).toBe("v1.0.0");
+			expect(result.tags[0].name).toBe("1.0.0");
 		});
 	});
 
