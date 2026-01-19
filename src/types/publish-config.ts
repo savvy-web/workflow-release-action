@@ -199,6 +199,20 @@ export interface PackagePublishValidation {
 
 	/** Error message if package discovery failed (workspace path or package.json not found) */
 	discoveryError?: string;
+
+	/** SBOM validation result */
+	sbomValidation?: {
+		/** Whether SBOM generation is expected to work */
+		valid: boolean;
+		/** Whether the package has production dependencies */
+		hasDependencies: boolean;
+		/** Number of production dependencies */
+		dependencyCount: number;
+		/** Warning message if SBOM will be empty or limited */
+		warning?: string;
+		/** Error message if validation failed */
+		error?: string;
+	};
 }
 
 /**

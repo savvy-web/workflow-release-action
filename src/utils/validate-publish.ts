@@ -7,6 +7,7 @@ import type {
 	ResolvedTarget,
 	TargetValidationResult,
 } from "../types/publish-config.js";
+import { validateSBOMGeneration } from "./create-attestation.js";
 import { dryRunPublish } from "./dry-run-publish.js";
 import { findPackagePath } from "./find-package-path.js";
 import { generatePublishSummary } from "./generate-publish-summary.js";
@@ -261,6 +262,25 @@ export async function validatePublish(
 		const allTargetsValid = targetResults.every((t) => t.canPublish);
 		const hasPublishableTargets = targetResults.some((t) => t.canPublish);
 
+		// Validate SBOM generation for npm targets that have provenance enabled
+		// Use the first npm target's directory for validation
+		const npmTargetWithProvenance = packageInfo.targets.find((t) => t.protocol === "npm" && t.provenance);
+		let sbomValidation: PackagePublishValidation["sbomValidation"];
+
+		if (npmTargetWithProvenance) {
+			debug(`Validating SBOM generation for ${release.name} in ${npmTargetWithProvenance.directory}`);
+			const sbomResult = await validateSBOMGeneration(npmTargetWithProvenance.directory);
+			sbomValidation = sbomResult;
+
+			if (sbomResult.error) {
+				warning(`SBOM validation warning for ${release.name}: ${sbomResult.error}`);
+			} else if (sbomResult.warning) {
+				warning(`SBOM: ${sbomResult.warning}`);
+			} else {
+				info(`✓ SBOM validation passed (${sbomResult.dependencyCount} dependencies)`);
+			}
+		}
+
 		validations.push({
 			name: release.name,
 			version: release.newVersion,
@@ -268,6 +288,7 @@ export async function validatePublish(
 			targets: targetResults,
 			allTargetsValid,
 			hasPublishableTargets,
+			sbomValidation,
 		});
 	}
 

@@ -26,6 +26,22 @@ export interface AttestationResult {
 }
 
 /**
+ * Result of validating SBOM generation capability
+ */
+export interface SBOMValidationResult {
+	/** Whether SBOM generation is expected to work */
+	valid: boolean;
+	/** Whether the package has production dependencies */
+	hasDependencies: boolean;
+	/** Number of production dependencies */
+	dependencyCount: number;
+	/** Warning message if SBOM will be empty or limited */
+	warning?: string;
+	/** Error message if validation failed */
+	error?: string;
+}
+
+/**
  * Compute SHA256 digest of a file
  *
  * @param filePath - Path to the file
@@ -929,4 +945,117 @@ export async function createSBOMAttestation(options: CreateSBOMAttestationOption
 			error: message,
 		};
 	}
+}
+
+/**
+ * Validate that SBOM generation can work for a package
+ *
+ * @remarks
+ * This performs a pre-flight check for SBOM generation during validation phase.
+ * It checks:
+ * 1. Whether the package.json exists and is valid
+ * 2. Whether there are production dependencies to include in SBOM
+ * 3. Whether npm sbom command is available
+ *
+ * This helps catch SBOM issues early before the actual release.
+ *
+ * @param directory - Directory containing the package.json
+ * @returns SBOM validation result
+ */
+export async function validateSBOMGeneration(directory: string): Promise<SBOMValidationResult> {
+	// Check if package.json exists
+	const pkgJsonPath = join(directory, "package.json");
+	if (!existsSync(pkgJsonPath)) {
+		return {
+			valid: false,
+			hasDependencies: false,
+			dependencyCount: 0,
+			error: `package.json not found at ${pkgJsonPath}`,
+		};
+	}
+
+	// Read package.json to check dependencies
+	let pkgJson: { dependencies?: Record<string, string> };
+	try {
+		pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as typeof pkgJson;
+	} catch (error) {
+		return {
+			valid: false,
+			hasDependencies: false,
+			dependencyCount: 0,
+			error: `Failed to parse package.json: ${error instanceof Error ? error.message : String(error)}`,
+		};
+	}
+
+	// Count production dependencies
+	const dependencies = pkgJson.dependencies || {};
+	const dependencyCount = Object.keys(dependencies).length;
+	const hasDependencies = dependencyCount > 0;
+
+	if (!hasDependencies) {
+		return {
+			valid: true,
+			hasDependencies: false,
+			dependencyCount: 0,
+			warning: "Package has no production dependencies - SBOM will be minimal",
+		};
+	}
+
+	// Check if npm is available by running a quick command
+	const npmCmd = getNpmCommand();
+	let npmAvailable = false;
+	try {
+		const exitCode = await exec(npmCmd.cmd, ["--version"], {
+			silent: true,
+			ignoreReturnCode: true,
+		});
+		npmAvailable = exitCode === 0;
+	} catch {
+		npmAvailable = false;
+	}
+
+	if (!npmAvailable) {
+		return {
+			valid: false,
+			hasDependencies,
+			dependencyCount,
+			error: "npm is not available - SBOM generation requires npm",
+		};
+	}
+
+	// Check if npm sbom command exists (npm 9.5.0+)
+	let sbomCommandAvailable = false;
+	try {
+		let helpOutput = "";
+		await exec(npmCmd.cmd, ["help", "sbom"], {
+			silent: true,
+			ignoreReturnCode: true,
+			listeners: {
+				stdout: (data: Buffer) => {
+					helpOutput += data.toString();
+				},
+			},
+		});
+		// npm help sbom returns help text if command exists
+		sbomCommandAvailable = helpOutput.includes("sbom") || helpOutput.includes("SBOM");
+	} catch {
+		sbomCommandAvailable = false;
+	}
+
+	if (!sbomCommandAvailable) {
+		return {
+			valid: false,
+			hasDependencies,
+			dependencyCount,
+			error: "npm sbom command not available - requires npm 9.5.0 or later",
+		};
+	}
+
+	debug(`SBOM validation passed for ${directory}: ${dependencyCount} dependencies`);
+
+	return {
+		valid: true,
+		hasDependencies,
+		dependencyCount,
+	};
 }

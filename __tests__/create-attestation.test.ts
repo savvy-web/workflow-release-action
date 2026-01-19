@@ -1596,4 +1596,129 @@ describe("create-attestation", () => {
 			expect(packageJsonContent).toContain("file:/path/to/pkg-d/dist");
 		});
 	});
+
+	describe("validateSBOMGeneration", () => {
+		it("returns error when package.json does not exist", async () => {
+			vi.mocked(fs.existsSync).mockReturnValue(false);
+
+			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
+			const result = await validateSBOMGeneration("/path/to/pkg");
+
+			expect(result.valid).toBe(false);
+			expect(result.hasDependencies).toBe(false);
+			expect(result.error).toContain("package.json not found");
+		});
+
+		it("returns error when package.json is invalid JSON", async () => {
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue("invalid json {");
+
+			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
+			const result = await validateSBOMGeneration("/path/to/pkg");
+
+			expect(result.valid).toBe(false);
+			expect(result.error).toContain("Failed to parse package.json");
+		});
+
+		it("returns warning when package has no dependencies", async () => {
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ name: "test-pkg" }));
+
+			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
+			const result = await validateSBOMGeneration("/path/to/pkg");
+
+			expect(result.valid).toBe(true);
+			expect(result.hasDependencies).toBe(false);
+			expect(result.dependencyCount).toBe(0);
+			expect(result.warning).toContain("no production dependencies");
+		});
+
+		it("validates successfully when package has dependencies and npm is available", async () => {
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "test-pkg",
+					dependencies: {
+						lodash: "^4.0.0",
+						express: "^4.0.0",
+					},
+				}),
+			);
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				// npm --version check
+				if (args?.[0] === "--version") {
+					return 0;
+				}
+				// npm help sbom check
+				if (args?.[0] === "help" && args?.[1] === "sbom") {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from("npm sbom - generate SBOM"));
+					}
+					return 0;
+				}
+				return 0;
+			});
+
+			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
+			const result = await validateSBOMGeneration("/path/to/pkg");
+
+			expect(result.valid).toBe(true);
+			expect(result.hasDependencies).toBe(true);
+			expect(result.dependencyCount).toBe(2);
+			expect(result.error).toBeUndefined();
+		});
+
+		it("returns error when npm is not available", async () => {
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "test-pkg",
+					dependencies: { lodash: "^4.0.0" },
+				}),
+			);
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args) => {
+				// npm --version check fails
+				if (args?.[0] === "--version") {
+					return 1;
+				}
+				return 0;
+			});
+
+			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
+			const result = await validateSBOMGeneration("/path/to/pkg");
+
+			expect(result.valid).toBe(false);
+			expect(result.error).toContain("npm is not available");
+		});
+
+		it("returns error when npm sbom command is not available", async () => {
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "test-pkg",
+					dependencies: { lodash: "^4.0.0" },
+				}),
+			);
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				// npm --version check passes
+				if (args?.[0] === "--version") {
+					return 0;
+				}
+				// npm help sbom returns empty output (old npm version without sbom command)
+				if (args?.[0] === "help" && args?.[1] === "sbom") {
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from(""));
+					}
+					return 0;
+				}
+				return 0;
+			});
+
+			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
+			const result = await validateSBOMGeneration("/path/to/pkg");
+
+			expect(result.valid).toBe(false);
+			expect(result.error).toContain("npm sbom command not available");
+		});
+	});
 });
