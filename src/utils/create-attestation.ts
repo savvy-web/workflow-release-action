@@ -657,7 +657,7 @@ function restorePackageJson(backupPath: string): void {
  * Install production dependencies in a directory
  *
  * @remarks
- * This is needed before running npm sbom in dist directories, which have
+ * This is needed before running cdxgen in dist directories, which have
  * resolved package.json versions but no node_modules installed.
  *
  * If workspacePackages is provided, dependencies on those packages will be
@@ -746,17 +746,16 @@ async function installDependencies(
 }
 
 /**
- * Generate a CycloneDX SBOM for a package using npm sbom
+ * Generate a CycloneDX SBOM for a package using cdxgen
  *
  * @remarks
- * CycloneDX is preferred over SPDX for JavaScript/npm projects because it has
- * better support for npm-specific metadata and vulnerability information.
+ * Uses @cyclonedx/cdxgen which supports multiple package managers (npm, pnpm, yarn, bun).
+ * This is more reliable than npm sbom which requires package-lock.json.
  *
  * If no node_modules exists in the directory, this function will first install
- * production dependencies to ensure npm sbom has the dependency tree to analyze.
+ * production dependencies to ensure cdxgen has the dependency tree to analyze.
  *
  * @param directory - Directory containing the package
- * @param packageManager - Package manager to use (npm, pnpm, yarn, bun)
  * @param workspacePackages - Optional map of workspace package names to their info for file: linking
  * @returns Parsed CycloneDX document or undefined if generation failed
  */
@@ -764,46 +763,86 @@ async function generateSBOM(
 	directory: string,
 	workspacePackages?: Map<string, WorkspacePackageInfo>,
 ): Promise<CycloneDXDocument | undefined> {
-	try {
-		// Check if node_modules exists, if not install dependencies first
-		const nodeModulesPath = join(directory, "node_modules");
-		if (!existsSync(nodeModulesPath)) {
-			debug(`No node_modules in ${directory}, installing dependencies...`);
-			const installed = await installDependencies(directory, workspacePackages);
-			if (!installed) {
-				warning(`Failed to install dependencies in ${directory} for SBOM generation`);
-				return undefined;
-			}
+	// Check if node_modules exists, if not install dependencies first
+	// cdxgen can work with lockfiles directly, but node_modules gives more accurate results
+	const nodeModulesPath = join(directory, "node_modules");
+	if (!existsSync(nodeModulesPath)) {
+		debug(`No node_modules in ${directory}, installing dependencies...`);
+		const installed = await installDependencies(directory, workspacePackages);
+		if (!installed) {
+			warning(`Failed to install dependencies in ${directory} for SBOM generation`);
+			return undefined;
 		}
+	}
 
-		let output = "";
-		let stderr = "";
-		const npmCmd = getNpmCommand();
-		const sbomArgs = [...npmCmd.baseArgs, "sbom", "--sbom-format=cyclonedx"];
+	let stderr = "";
+	// Use cdxgen (@cyclonedx/cdxgen) which supports npm, pnpm, yarn, and other package managers
+	// This is more reliable than npm sbom which requires package-lock.json
+	const sbomOutputPath = join(directory, ".cdxgen-sbom.json");
+	const cdxgenArgs = [
+		"@cyclonedx/cdxgen",
+		"-o",
+		sbomOutputPath,
+		"--spec-version",
+		"1.5",
+		"--no-recurse", // Only this package, not nested
+		"--required-only", // Production dependencies only
+		"--no-install-deps", // We already installed deps
+		directory,
+	];
 
-		await exec(npmCmd.cmd, sbomArgs, {
+	try {
+		const exitCode = await exec("npx", cdxgenArgs, {
 			cwd: directory,
 			silent: true,
+			ignoreReturnCode: true,
 			listeners: {
-				stdout: (data: Buffer) => {
-					output += data.toString();
-				},
 				stderr: (data: Buffer) => {
 					stderr += data.toString();
 				},
 			},
 		});
 
-		if (!output.trim()) {
-			warning(`npm sbom produced no output for ${directory}${stderr ? `: ${stderr}` : ""}`);
+		if (exitCode !== 0) {
+			const errorDetails = stderr.trim() || `exit code ${exitCode}`;
+			warning(`cdxgen failed for ${directory}: ${errorDetails}`);
 			return undefined;
 		}
 
-		const sbom = JSON.parse(output) as CycloneDXDocument;
+		// Read the generated SBOM file
+		if (!existsSync(sbomOutputPath)) {
+			warning(`cdxgen did not produce output file at ${sbomOutputPath}`);
+			return undefined;
+		}
+
+		const sbomContent = readFileSync(sbomOutputPath, "utf-8");
+		// Clean up the temp file
+		try {
+			unlinkSync(sbomOutputPath);
+		} catch {
+			// Ignore cleanup errors
+		}
+
+		if (!sbomContent.trim()) {
+			warning(`cdxgen produced empty SBOM for ${directory}`);
+			return undefined;
+		}
+
+		const sbom = JSON.parse(sbomContent) as CycloneDXDocument;
 		debug(`Generated SBOM: ${sbom.bomFormat} v${sbom.specVersion}`);
 		return sbom;
 	} catch (error) {
-		warning(`Failed to generate SBOM for ${directory}: ${error instanceof Error ? error.message : String(error)}`);
+		const errorMsg = error instanceof Error ? error.message : String(error);
+		const stderrInfo = stderr.trim() ? `\nStderr: ${stderr.trim()}` : "";
+		warning(`Failed to generate SBOM for ${directory}: ${errorMsg}${stderrInfo}`);
+		// Clean up temp file if it exists
+		try {
+			if (existsSync(sbomOutputPath)) {
+				unlinkSync(sbomOutputPath);
+			}
+		} catch {
+			// Ignore cleanup errors
+		}
 		return undefined;
 	}
 }
@@ -816,7 +855,7 @@ async function generateSBOM(
  * The attestation binds the SBOM to the package artifact, allowing consumers
  * to verify what dependencies were included in the build.
  *
- * The SBOM is generated using `npm sbom --sbom-format=cyclonedx` and then attested
+ * The SBOM is generated using cdxgen (@cyclonedx/cdxgen) and then attested
  * using the in-toto CycloneDX predicate type. CycloneDX is preferred over SPDX
  * for JavaScript/npm projects due to better npm-specific metadata support.
  *
@@ -955,7 +994,7 @@ export async function createSBOMAttestation(options: CreateSBOMAttestationOption
  * It checks:
  * 1. Whether the package.json exists and is valid
  * 2. Whether there are production dependencies to include in SBOM
- * 3. Whether npm sbom command is available
+ * 3. Whether npx is available for running cdxgen
  *
  * This helps catch SBOM issues early before the actual release.
  *
@@ -1001,53 +1040,24 @@ export async function validateSBOMGeneration(directory: string): Promise<SBOMVal
 		};
 	}
 
-	// Check if npm is available by running a quick command
-	const npmCmd = getNpmCommand();
-	let npmAvailable = false;
+	// Check if npx is available (needed for cdxgen)
+	let npxAvailable = false;
 	try {
-		const exitCode = await exec(npmCmd.cmd, ["--version"], {
+		const exitCode = await exec("npx", ["--version"], {
 			silent: true,
 			ignoreReturnCode: true,
 		});
-		npmAvailable = exitCode === 0;
+		npxAvailable = exitCode === 0;
 	} catch {
-		npmAvailable = false;
+		npxAvailable = false;
 	}
 
-	if (!npmAvailable) {
+	if (!npxAvailable) {
 		return {
 			valid: false,
 			hasDependencies,
 			dependencyCount,
-			error: "npm is not available - SBOM generation requires npm",
-		};
-	}
-
-	// Check if npm sbom command exists (npm 9.5.0+)
-	let sbomCommandAvailable = false;
-	try {
-		let helpOutput = "";
-		await exec(npmCmd.cmd, ["help", "sbom"], {
-			silent: true,
-			ignoreReturnCode: true,
-			listeners: {
-				stdout: (data: Buffer) => {
-					helpOutput += data.toString();
-				},
-			},
-		});
-		// npm help sbom returns help text if command exists
-		sbomCommandAvailable = helpOutput.includes("sbom") || helpOutput.includes("SBOM");
-	} catch {
-		sbomCommandAvailable = false;
-	}
-
-	if (!sbomCommandAvailable) {
-		return {
-			valid: false,
-			hasDependencies,
-			dependencyCount,
-			error: "npm sbom command not available - requires npm 9.5.0 or later",
+			error: "npx is not available - SBOM generation requires npx for cdxgen",
 		};
 	}
 

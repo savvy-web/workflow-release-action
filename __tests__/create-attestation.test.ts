@@ -725,10 +725,10 @@ describe("create-attestation", () => {
 			expect(result.error).toBe("No GITHUB_TOKEN available for SBOM attestation creation");
 		});
 
-		it("returns error when SBOM generation fails", async () => {
+		it("returns error when SBOM generation fails with exception", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
-			// Mock npm sbom to fail
-			vi.mocked(exec.exec).mockRejectedValue(new Error("npm sbom failed"));
+			// Mock cdxgen to throw an exception
+			vi.mocked(exec.exec).mockRejectedValue(new Error("cdxgen failed"));
 
 			const result = await createSBOMAttestation({
 				packageName: "@org/pkg",
@@ -739,6 +739,89 @@ describe("create-attestation", () => {
 
 			expect(result.success).toBe(false);
 			expect(result.error).toBe("Failed to generate SBOM for @org/pkg@1.0.0");
+		});
+
+		it("returns error when cdxgen exits with non-zero code and logs stderr", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				// Simulate cdxgen exiting with code 1 and stderr message
+				if (options?.listeners?.stderr) {
+					options.listeners.stderr(Buffer.from("cdxgen error: Failed to parse lockfile"));
+				}
+				return 1; // Non-zero exit code
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(true); // node_modules exists
+
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+			});
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("Failed to generate SBOM for @org/pkg@1.0.0");
+			expect(core.warning).toHaveBeenCalledWith(
+				expect.stringContaining("cdxgen failed for /path/to/pkg: cdxgen error: Failed to parse lockfile"),
+			);
+		});
+
+		it("shows exit code when cdxgen fails without stderr", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			vi.mocked(exec.exec).mockImplementation(async () => {
+				// Simulate cdxgen exiting with code 1 but no stderr (cdxgen writes to file, not stdout)
+				return 1; // Non-zero exit code, no stderr
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(true); // node_modules exists
+
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+			});
+
+			expect(result.success).toBe(false);
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("cdxgen failed for /path/to/pkg: exit code 1"));
+		});
+
+		it("includes stderr in exception handling when available", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			let stderrCaptured = false;
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+				// First capture stderr, then throw
+				if (options?.listeners?.stderr) {
+					options.listeners.stderr(Buffer.from("npm error: network failure"));
+					stderrCaptured = true;
+				}
+				if (stderrCaptured) {
+					throw new Error("Command failed");
+				}
+				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(true); // node_modules exists
+
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+			});
+
+			expect(result.success).toBe(false);
+			expect(core.warning).toHaveBeenCalledWith(
+				expect.stringContaining("Failed to generate SBOM for /path/to/pkg: Command failed"),
+			);
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Stderr: npm error: network failure"));
 		});
 
 		it("generates SBOM and creates attestation successfully", async () => {
@@ -756,16 +839,19 @@ describe("create-attestation", () => {
 				components: [{ type: "library", name: "@org/pkg", version: "1.0.0" }],
 			};
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
+				// cdxgen writes to file, not stdout
 				return 0;
 			});
 
-			// Mock tarball finding
+			// Mock tarball finding and cdxgen output file
 			vi.mocked(fs.existsSync).mockReturnValue(true);
-			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				return Buffer.from("test content");
+			});
 
 			const { attest } = await import("@actions/attest");
 			vi.mocked(attest).mockResolvedValue({
@@ -802,15 +888,17 @@ describe("create-attestation", () => {
 				components: [],
 			};
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
 			});
 
 			vi.mocked(fs.existsSync).mockReturnValue(true);
-			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				return Buffer.from("test content");
+			});
 
 			const { attest } = await import("@actions/attest");
 			vi.mocked(attest).mockResolvedValue({
@@ -848,11 +936,16 @@ describe("create-attestation", () => {
 				components: [],
 			};
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
+			});
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				return Buffer.from("test content");
 			});
 
 			const { attest } = await import("@actions/attest");
@@ -887,7 +980,7 @@ describe("create-attestation", () => {
 			expect(vi.mocked(fs.readdirSync)).not.toHaveBeenCalled();
 		});
 
-		it("uses specified package manager for SBOM generation", async () => {
+		it("uses cdxgen for SBOM generation regardless of package manager", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 
 			const mockSBOM = {
@@ -901,15 +994,17 @@ describe("create-attestation", () => {
 				components: [],
 			};
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
 			});
 
 			vi.mocked(fs.existsSync).mockReturnValue(true);
-			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				return Buffer.from("test content");
+			});
 
 			const { attest } = await import("@actions/attest");
 			vi.mocked(attest).mockResolvedValue({
@@ -926,7 +1021,8 @@ describe("create-attestation", () => {
 				packageManager: "pnpm",
 			});
 
-			expect(exec.exec).toHaveBeenCalledWith("npm", ["sbom", "--sbom-format=cyclonedx"], expect.any(Object));
+			// cdxgen is called via npx regardless of package manager (works with npm, pnpm, yarn, etc.)
+			expect(exec.exec).toHaveBeenCalledWith("npx", expect.arrayContaining(["@cyclonedx/cdxgen"]), expect.any(Object));
 		});
 
 		it("handles attest errors gracefully", async () => {
@@ -943,15 +1039,17 @@ describe("create-attestation", () => {
 				components: [],
 			};
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
 			});
 
 			vi.mocked(fs.existsSync).mockReturnValue(true);
-			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				return Buffer.from("test content");
+			});
 
 			const { attest } = await import("@actions/attest");
 			vi.mocked(attest).mockRejectedValue(new Error("SBOM attestation API error"));
@@ -985,23 +1083,23 @@ describe("create-attestation", () => {
 			};
 
 			const execCalls: string[][] = [];
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args) => {
 				execCalls.push(args || []);
-				if (args?.includes("sbom")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-					}
-				}
 				return 0;
 			});
 
 			// First call for node_modules check returns false (doesn't exist)
-			// After install, tarball exists
+			// After install, cdxgen output file exists
 			vi.mocked(fs.existsSync).mockImplementation((path) => {
 				if (String(path).includes("node_modules")) return false;
-				return true; // tarball exists
+				return true; // cdxgen output and tarball exist
 			});
-			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				return Buffer.from("test content");
+			});
 
 			const { attest } = await import("@actions/attest");
 			vi.mocked(attest).mockResolvedValue({
@@ -1022,8 +1120,8 @@ describe("create-attestation", () => {
 			expect(execCalls[0]).toContain("install");
 			expect(execCalls[0]).toContain("--omit=dev");
 			expect(execCalls[0]).toContain("--ignore-scripts");
-			// Then npm sbom
-			expect(execCalls[1]).toContain("sbom");
+			// Then cdxgen
+			expect(execCalls[1]).toContain("@cyclonedx/cdxgen");
 		});
 
 		it("does not overwrite existing .npmignore when installing dependencies", async () => {
@@ -1040,12 +1138,7 @@ describe("create-attestation", () => {
 				components: [],
 			};
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
-				if (args?.includes("sbom")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-					}
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
 			});
 
@@ -1055,7 +1148,12 @@ describe("create-attestation", () => {
 				if (String(path).includes("node_modules")) return false;
 				return true;
 			});
-			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				return Buffer.from("test content");
+			});
 
 			const { attest } = await import("@actions/attest");
 			vi.mocked(attest).mockResolvedValue({
@@ -1079,7 +1177,7 @@ describe("create-attestation", () => {
 			);
 		});
 
-		it("returns error when dependency installation fails", async () => {
+		it("returns error when dependency installation fails with exception", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 
 			vi.mocked(exec.exec).mockRejectedValue(new Error("npm install failed"));
@@ -1099,18 +1197,56 @@ describe("create-attestation", () => {
 			expect(result.error).toBe("Failed to generate SBOM for @org/pkg@1.0.0");
 		});
 
-		it("returns error when npm sbom produces no output", async () => {
+		it("logs stdout and stderr when npm install exits with non-zero code", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				// Return empty output
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from(""));
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
+				if (args?.includes("install")) {
+					// Simulate npm install failing with output
+					if (options?.listeners?.stdout) {
+						options.listeners.stdout(Buffer.from("npm installing...\n"));
+					}
+					if (options?.listeners?.stderr) {
+						options.listeners.stderr(Buffer.from("npm ERR! peer dep error\n"));
+					}
+					return 1; // Non-zero exit code
 				}
 				return 0;
 			});
 
-			vi.mocked(fs.existsSync).mockReturnValue(true); // node_modules exists
+			// node_modules doesn't exist, so install will be attempted
+			vi.mocked(fs.existsSync).mockReturnValue(false);
+
+			const result = await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				tarballDigest: "sha256:abc123",
+			});
+
+			expect(result.success).toBe(false);
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to install dependencies"));
+			expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("npm install failed with exit code 1"));
+			expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("npm install stdout:"));
+			expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("npm install stderr:"));
+		});
+
+		it("returns error when cdxgen does not produce output file", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			vi.mocked(exec.exec).mockImplementation(async () => {
+				// cdxgen succeeds but doesn't create output file
+				return 0;
+			});
+
+			// node_modules exists but cdxgen output file doesn't exist
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes("node_modules")) return true;
+				if (pathStr.includes(".cdxgen-sbom.json")) return false;
+				return true;
+			});
 
 			const result = await createSBOMAttestation({
 				packageName: "@org/pkg",
@@ -1124,23 +1260,25 @@ describe("create-attestation", () => {
 			expect(result.error).toBe("Failed to generate SBOM for @org/pkg@1.0.0");
 		});
 
-		it("includes stderr in warning when npm sbom produces no output", async () => {
+		it("returns error when cdxgen produces empty SBOM file", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				// Return empty stdout but with stderr
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from(""));
-				}
-				if (options?.listeners?.stderr) {
-					options.listeners.stderr(Buffer.from("npm WARN some warning message"));
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
+				// cdxgen succeeds
 				return 0;
 			});
 
-			vi.mocked(fs.existsSync).mockReturnValue(true); // node_modules exists
+			// node_modules and output file exist
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".cdxgen-sbom.json")) {
+					return ""; // Empty SBOM content
+				}
+				return "{}";
+			});
 
-			await createSBOMAttestation({
+			const result = await createSBOMAttestation({
 				packageName: "@org/pkg",
 				version: "1.0.0",
 				directory: "/path/to/pkg",
@@ -1148,7 +1286,9 @@ describe("create-attestation", () => {
 				tarballDigest: "sha256:abc123",
 			});
 
-			expect(vi.mocked(core.warning)).toHaveBeenCalledWith(expect.stringContaining("npm WARN some warning message"));
+			expect(result.success).toBe(false);
+			expect(result.error).toBe("Failed to generate SBOM for @org/pkg@1.0.0");
+			expect(vi.mocked(core.warning)).toHaveBeenCalledWith(expect.stringContaining("cdxgen produced empty SBOM"));
 		});
 
 		it("returns error when no tarball found and cannot be created", async () => {
@@ -1165,14 +1305,7 @@ describe("create-attestation", () => {
 				components: [],
 			};
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
-				// First call: npm sbom (node_modules exists so no install needed)
-				if (args?.includes("sbom")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-					}
-					return 0;
-				}
+			vi.mocked(exec.exec).mockImplementation(async (_cmd, args) => {
 				// npm pack call - fail it
 				if (args?.includes("pack")) {
 					throw new Error("npm pack failed");
@@ -1180,11 +1313,19 @@ describe("create-attestation", () => {
 				return 0;
 			});
 
-			// node_modules exists, so no install needed
+			// node_modules and cdxgen output exist, but no tarball
 			vi.mocked(fs.existsSync).mockImplementation((path) => {
-				if (String(path).includes("node_modules")) return true;
+				const pathStr = String(path);
+				if (pathStr.includes("node_modules")) return true;
+				if (pathStr.includes(".cdxgen-sbom.json")) return true;
 				// No tarball exists
 				return false;
+			});
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				return Buffer.from("test content");
 			});
 			vi.mocked(fs.readdirSync).mockReturnValue([]);
 
@@ -1213,15 +1354,17 @@ describe("create-attestation", () => {
 				components: [],
 			};
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
-				if (options?.listeners?.stdout) {
-					options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
 			});
 
 			vi.mocked(fs.existsSync).mockReturnValue(true);
-			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				return Buffer.from("test content");
+			});
 
 			const { attest } = await import("@actions/attest");
 			vi.mocked(attest).mockResolvedValue({
@@ -1268,7 +1411,11 @@ describe("create-attestation", () => {
 
 			let packageJsonContent = "";
 			vi.mocked(fs.readFileSync).mockImplementation((path) => {
-				if (String(path).endsWith("package.json")) {
+				const pathStr = String(path);
+				if (pathStr.includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				if (pathStr.endsWith("package.json")) {
 					return originalPkgJson;
 				}
 				return Buffer.from("test content");
@@ -1280,19 +1427,15 @@ describe("create-attestation", () => {
 				}
 			});
 			vi.mocked(fs.existsSync).mockImplementation((path) => {
-				if (String(path).includes("node_modules")) return false;
-				if (String(path).includes(".npmignore")) return false;
-				if (String(path).includes(".backup")) return false;
-				return true;
+				const pathStr = String(path);
+				if (pathStr.includes("node_modules")) return false;
+				if (pathStr.includes(".npmignore")) return false;
+				if (pathStr.includes(".backup")) return false;
+				return true; // cdxgen output file exists
 			});
 			vi.mocked(fs.unlinkSync).mockImplementation(() => {});
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
-				if (args?.includes("sbom")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-					}
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
 			});
 
@@ -1342,6 +1485,9 @@ describe("create-attestation", () => {
 			const writeFileCalls: Array<{ path: string; content: string }> = [];
 			vi.mocked(fs.readFileSync).mockImplementation((path) => {
 				const pathStr = String(path);
+				if (pathStr.includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
 				if (pathStr.endsWith("package.json.backup")) {
 					return originalPkgJson; // Return original content from backup
 				}
@@ -1358,16 +1504,11 @@ describe("create-attestation", () => {
 				if (pathStr.includes("node_modules")) return false;
 				if (pathStr.includes(".npmignore")) return false;
 				if (pathStr.includes(".backup")) return true; // Backup exists for restore
-				return true;
+				return true; // cdxgen output file exists
 			});
 			vi.mocked(fs.unlinkSync).mockImplementation(() => {});
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
-				if (args?.includes("sbom")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-					}
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
 			});
 
@@ -1414,7 +1555,11 @@ describe("create-attestation", () => {
 
 			let backupWritten = false;
 			vi.mocked(fs.readFileSync).mockImplementation((path) => {
-				if (String(path).endsWith("package.json")) {
+				const pathStr = String(path);
+				if (pathStr.includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				if (pathStr.endsWith("package.json")) {
 					return originalPkgJson;
 				}
 				return Buffer.from("test content");
@@ -1425,17 +1570,13 @@ describe("create-attestation", () => {
 				}
 			});
 			vi.mocked(fs.existsSync).mockImplementation((path) => {
-				if (String(path).includes("node_modules")) return false;
-				if (String(path).includes(".npmignore")) return false;
-				return true;
+				const pathStr = String(path);
+				if (pathStr.includes("node_modules")) return false;
+				if (pathStr.includes(".npmignore")) return false;
+				return true; // cdxgen output file exists
 			});
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
-				if (args?.includes("sbom")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-					}
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
 			});
 
@@ -1473,21 +1614,22 @@ describe("create-attestation", () => {
 				components: [],
 			};
 
-			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				return Buffer.from("test content");
+			});
 			vi.mocked(fs.existsSync).mockImplementation((path) => {
 				const pathStr = String(path);
 				if (pathStr.includes("node_modules")) return false;
 				if (pathStr.includes(".npmignore")) return false;
 				if (pathStr.endsWith("package.json")) return false; // No package.json
-				return true;
+				return true; // cdxgen output file exists
 			});
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
-				if (args?.includes("sbom")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-					}
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
 			});
 
@@ -1540,7 +1682,11 @@ describe("create-attestation", () => {
 
 			let packageJsonContent = "";
 			vi.mocked(fs.readFileSync).mockImplementation((path) => {
-				if (String(path).endsWith("package.json")) {
+				const pathStr = String(path);
+				if (pathStr.includes(".cdxgen-sbom.json")) {
+					return JSON.stringify(mockSBOM);
+				}
+				if (pathStr.endsWith("package.json")) {
 					return originalPkgJson;
 				}
 				return Buffer.from("test content");
@@ -1552,19 +1698,15 @@ describe("create-attestation", () => {
 				}
 			});
 			vi.mocked(fs.existsSync).mockImplementation((path) => {
-				if (String(path).includes("node_modules")) return false;
-				if (String(path).includes(".npmignore")) return false;
-				if (String(path).includes(".backup")) return false;
-				return true;
+				const pathStr = String(path);
+				if (pathStr.includes("node_modules")) return false;
+				if (pathStr.includes(".npmignore")) return false;
+				if (pathStr.includes(".backup")) return false;
+				return true; // cdxgen output file exists
 			});
 			vi.mocked(fs.unlinkSync).mockImplementation(() => {});
 
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
-				if (args?.includes("sbom")) {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(JSON.stringify(mockSBOM)));
-					}
-				}
+			vi.mocked(exec.exec).mockImplementation(async () => {
 				return 0;
 			});
 
@@ -1668,7 +1810,7 @@ describe("create-attestation", () => {
 			expect(result.error).toBeUndefined();
 		});
 
-		it("returns error when npm is not available", async () => {
+		it("returns error when npx is not available", async () => {
 			vi.mocked(fs.existsSync).mockReturnValue(true);
 			vi.mocked(fs.readFileSync).mockReturnValue(
 				JSON.stringify({
@@ -1677,7 +1819,7 @@ describe("create-attestation", () => {
 				}),
 			);
 			vi.mocked(exec.exec).mockImplementation(async (_cmd, args) => {
-				// npm --version check fails
+				// npx --version check fails
 				if (args?.[0] === "--version") {
 					return 1;
 				}
@@ -1688,37 +1830,7 @@ describe("create-attestation", () => {
 			const result = await validateSBOMGeneration("/path/to/pkg");
 
 			expect(result.valid).toBe(false);
-			expect(result.error).toContain("npm is not available");
-		});
-
-		it("returns error when npm sbom command is not available", async () => {
-			vi.mocked(fs.existsSync).mockReturnValue(true);
-			vi.mocked(fs.readFileSync).mockReturnValue(
-				JSON.stringify({
-					name: "test-pkg",
-					dependencies: { lodash: "^4.0.0" },
-				}),
-			);
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
-				// npm --version check passes
-				if (args?.[0] === "--version") {
-					return 0;
-				}
-				// npm help sbom returns empty output (old npm version without sbom command)
-				if (args?.[0] === "help" && args?.[1] === "sbom") {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from(""));
-					}
-					return 0;
-				}
-				return 0;
-			});
-
-			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
-			const result = await validateSBOMGeneration("/path/to/pkg");
-
-			expect(result.valid).toBe(false);
-			expect(result.error).toContain("npm sbom command not available");
+			expect(result.error).toContain("npx is not available");
 		});
 	});
 });
