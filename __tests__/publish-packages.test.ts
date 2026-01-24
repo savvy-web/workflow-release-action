@@ -1120,5 +1120,51 @@ describe("publish-packages", () => {
 				}),
 			);
 		});
+
+		it("includes SBOM attestation URL in target results when attestation succeeds", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					publishConfig: { access: "public" },
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(packAndComputeDigest).mockResolvedValue({
+				path: "/path/to/pkg-a/org-pkg-a-1.0.0.tgz",
+				digest: "sha256:abc123def456",
+				filename: "org-pkg-a-1.0.0.tgz",
+			});
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: true,
+				output: "Published successfully",
+				error: "",
+				registryUrl: "https://www.npmjs.com/package/@org/pkg-a",
+				tarballPath: "/path/to/pkg-a/org-pkg-a-1.0.0.tgz",
+				tarballDigest: "sha256:abc123def456",
+			});
+			// Mock SBOM attestation to return both path and URL
+			vi.mocked(createSBOMAttestation).mockResolvedValue({
+				success: true,
+				sbomPath: "/path/to/pkg-a/pkg-a-1.0.0.sbom.json",
+				attestationUrl: "https://github.com/attestations/sbom-67890",
+			});
+
+			const result = await publishPackages("pnpm", "main", false);
+
+			expect(result.success).toBe(true);
+			// SBOM results should be included in target results
+			expect(result.packages[0].targets[0].sbomPath).toBe("/path/to/pkg-a/pkg-a-1.0.0.sbom.json");
+			expect(result.packages[0].targets[0].sbomAttestationUrl).toBe("https://github.com/attestations/sbom-67890");
+			// Should log SBOM creation messages
+			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Created SBOM:"));
+			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Created SBOM attestation:"));
+		});
 	});
 });

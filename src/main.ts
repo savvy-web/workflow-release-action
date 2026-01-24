@@ -33,6 +33,7 @@ import {
 	generatePublishResultsSummary,
 } from "./utils/generate-publish-summary.js";
 import { generateReleaseNotesPreview } from "./utils/generate-release-notes-preview.js";
+import { generateSBOMPreview } from "./utils/generate-sbom-preview.js";
 import { getChangesetStatus } from "./utils/get-changeset-status.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
 import { PHASE, logger } from "./utils/logger.js";
@@ -321,7 +322,13 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 	endGroup();
 
 	const checkIds: number[] = [];
-	const checkNames = ["Link Issues from Commits", "Build Validation", "Publish Validation", "Release Notes Preview"];
+	const checkNames = [
+		"Link Issues from Commits",
+		"Build Validation",
+		"Publish Validation",
+		"Release Notes Preview",
+		"SBOM Preview",
+	];
 
 	try {
 		// Create all validation checks upfront for immediate visibility
@@ -496,8 +503,35 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 
 		logger.endStep();
 
-		// Step 5: Create unified validation check
-		logger.step(5, "Create Unified Validation Check");
+		// Step 5: Generate SBOM Preview
+		logger.step(5, "Generate SBOM Preview");
+
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[4],
+			status: "in_progress",
+		});
+
+		const sbomResult = await generateSBOMPreview(inputs.packageManager, publishResult.validations);
+
+		// Complete the SBOM preview check
+		await octokit.rest.checks.update({
+			owner: context.repo.owner,
+			repo: context.repo.repo,
+			check_run_id: checkIds[4],
+			status: "completed",
+			conclusion: sbomResult.success ? "success" : "neutral",
+			output: {
+				title: sbomResult.checkTitle,
+				summary: sbomResult.summaryContent,
+			},
+		});
+
+		logger.endStep();
+
+		// Step 6: Create unified validation check
+		logger.step(6, "Create Unified Validation Check");
 
 		const validationResults = [
 			{
@@ -527,14 +561,20 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				checkId: checkIds[3],
 				outcome: `${releaseNotesResult.packages.length} package(s) ready`,
 			},
+			{
+				name: checkNames[4],
+				success: sbomResult.success,
+				checkId: checkIds[4],
+				outcome: sbomResult.checkTitle,
+			},
 		];
 
 		await createValidationCheck(validationResults, inputs.dryRun);
 
 		logger.endStep();
 
-		// Step 6: Update sticky comment on PR
-		logger.step(6, "Update Sticky Comment");
+		// Step 7: Update sticky comment on PR
+		logger.step(7, "Update Sticky Comment");
 
 		try {
 			// Find the PR for the release branch
