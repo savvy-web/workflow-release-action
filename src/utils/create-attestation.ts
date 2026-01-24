@@ -39,6 +39,11 @@ export interface SBOMValidationResult {
 	warning?: string;
 	/** Error message if validation failed */
 	error?: string;
+	/**
+	 * The generated SBOM document if validation succeeded.
+	 * This can be reused during the actual attestation creation.
+	 */
+	generatedSbom?: CycloneDXDocument;
 }
 
 /**
@@ -91,6 +96,36 @@ function findTarball(directory: string, packageName: string, version: string): s
  */
 function getNpmCommand(): { cmd: string; baseArgs: string[] } {
 	return { cmd: "npm", baseArgs: [] };
+}
+
+/**
+ * Get the command to execute a package via the package manager
+ *
+ * @remarks
+ * Different package managers have different ways to execute packages:
+ * - npm/npx: npx
+ * - pnpm: pnpm dlx (or pnpm exec for installed packages)
+ * - yarn: yarn dlx
+ * - bun: bunx
+ *
+ * Using the package manager's exec command ensures consistency with
+ * the project's dependency resolution and avoids issues with npx
+ * in non-npm managed projects.
+ *
+ * @param packageManager - Package manager to use
+ * @returns Command and base args for executing packages
+ */
+function getDlxCommand(packageManager: string): { cmd: string; baseArgs: string[] } {
+	switch (packageManager) {
+		case "pnpm":
+			return { cmd: "pnpm", baseArgs: ["dlx"] };
+		case "yarn":
+			return { cmd: "yarn", baseArgs: ["dlx"] };
+		case "bun":
+			return { cmd: "bunx", baseArgs: [] };
+		default:
+			return { cmd: "npx", baseArgs: [] };
+	}
 }
 
 /**
@@ -465,7 +500,7 @@ const CYCLONEDX_PREDICATE_TYPE = "https://cyclonedx.org/bom";
  *
  * @see https://sbomgenerator.com/guides/javascript
  */
-interface CycloneDXDocument {
+export interface CycloneDXDocument {
 	bomFormat: "CycloneDX";
 	specVersion: string;
 	version: number;
@@ -524,6 +559,12 @@ export interface CreateSBOMAttestationOptions {
 	 * which may not yet be available on the registry.
 	 */
 	workspacePackages?: Map<string, WorkspacePackageInfo>;
+	/**
+	 * Pre-generated SBOM from validation phase.
+	 * If provided, this SBOM will be used instead of generating a new one.
+	 * This avoids duplicate generation when SBOM was already validated.
+	 */
+	preGeneratedSbom?: CycloneDXDocument;
 }
 
 /**
@@ -756,11 +797,13 @@ async function installDependencies(
  * production dependencies to ensure cdxgen has the dependency tree to analyze.
  *
  * @param directory - Directory containing the package
+ * @param packageManager - Package manager to use for running cdxgen
  * @param workspacePackages - Optional map of workspace package names to their info for file: linking
  * @returns Parsed CycloneDX document or undefined if generation failed
  */
 async function generateSBOM(
 	directory: string,
+	packageManager: string,
 	workspacePackages?: Map<string, WorkspacePackageInfo>,
 ): Promise<CycloneDXDocument | undefined> {
 	// Check if node_modules exists, if not install dependencies first
@@ -779,7 +822,12 @@ async function generateSBOM(
 	// Use cdxgen (@cyclonedx/cdxgen) which supports npm, pnpm, yarn, and other package managers
 	// This is more reliable than npm sbom which requires package-lock.json
 	const sbomOutputPath = join(directory, ".cdxgen-sbom.json");
+
+	// Use the package manager's dlx/exec command to run cdxgen
+	// This ensures consistency with the project's dependency resolution
+	const dlxCmd = getDlxCommand(packageManager);
 	const cdxgenArgs = [
+		...dlxCmd.baseArgs,
 		"@cyclonedx/cdxgen",
 		"-o",
 		sbomOutputPath,
@@ -791,8 +839,10 @@ async function generateSBOM(
 		directory,
 	];
 
+	debug(`Running SBOM generation: ${dlxCmd.cmd} ${cdxgenArgs.join(" ")}`);
+
 	try {
-		const exitCode = await exec("npx", cdxgenArgs, {
+		const exitCode = await exec(dlxCmd.cmd, cdxgenArgs, {
 			cwd: directory,
 			silent: true,
 			ignoreReturnCode: true,
@@ -889,12 +939,23 @@ export async function createSBOMAttestation(options: CreateSBOMAttestationOption
 		};
 	}
 
-	// Generate the SBOM from the dist directory where package.json has resolved versions
-	// (workspace:* dependencies are transformed to real versions during build)
-	// generateSBOM will install dependencies if node_modules doesn't exist
-	// If workspacePackages is provided, dependencies on workspace packages will use file: references
-	info(`Generating SBOM for ${packageName}@${version}...`);
-	const sbom = await generateSBOM(directory, workspacePackages);
+	// Use pre-generated SBOM if provided, otherwise generate a new one
+	// Pre-generated SBOMs come from the validation phase to avoid duplicate generation
+	let sbom: CycloneDXDocument | undefined;
+
+	if (options.preGeneratedSbom) {
+		info(`Using pre-generated SBOM for ${packageName}@${version}`);
+		sbom = options.preGeneratedSbom;
+	} else {
+		// Generate the SBOM from the dist directory where package.json has resolved versions
+		// (workspace:* dependencies are transformed to real versions during build)
+		// generateSBOM will install dependencies if node_modules doesn't exist
+		// If workspacePackages is provided, dependencies on workspace packages will use file: references
+		info(`Generating SBOM for ${packageName}@${version}...`);
+		const pm = options.packageManager || "npm";
+		sbom = await generateSBOM(directory, pm, workspacePackages);
+	}
+
 	if (!sbom) {
 		return {
 			success: false,
@@ -987,21 +1048,39 @@ export async function createSBOMAttestation(options: CreateSBOMAttestationOption
 }
 
 /**
- * Validate that SBOM generation can work for a package
+ * Options for validating SBOM generation
+ */
+export interface ValidateSBOMGenerationOptions {
+	/** Directory containing the package.json */
+	directory: string;
+	/** Package manager to use for generating SBOM */
+	packageManager: string;
+	/** Map of workspace package names to their info for file: linking */
+	workspacePackages?: Map<string, WorkspacePackageInfo>;
+}
+
+/**
+ * Validate that SBOM generation works for a package by actually generating it
  *
  * @remarks
- * This performs a pre-flight check for SBOM generation during validation phase.
- * It checks:
- * 1. Whether the package.json exists and is valid
- * 2. Whether there are production dependencies to include in SBOM
- * 3. Whether npx is available for running cdxgen
+ * This performs a full SBOM generation during the validation phase to ensure
+ * it will work during the actual release. The generated SBOM is returned
+ * so it can be reused later.
+ *
+ * This function:
+ * 1. Checks if package.json exists and is valid
+ * 2. Counts production dependencies
+ * 3. Actually generates the SBOM using cdxgen via the package manager
+ * 4. Returns the generated SBOM for later use
  *
  * This helps catch SBOM issues early before the actual release.
  *
- * @param directory - Directory containing the package.json
- * @returns SBOM validation result
+ * @param options - Validation options
+ * @returns SBOM validation result with the generated SBOM if successful
  */
-export async function validateSBOMGeneration(directory: string): Promise<SBOMValidationResult> {
+export async function validateSBOMGeneration(options: ValidateSBOMGenerationOptions): Promise<SBOMValidationResult> {
+	const { directory, packageManager, workspacePackages } = options;
+
 	// Check if package.json exists
 	const pkgJsonPath = join(directory, "package.json");
 	if (!existsSync(pkgJsonPath)) {
@@ -1040,32 +1119,27 @@ export async function validateSBOMGeneration(directory: string): Promise<SBOMVal
 		};
 	}
 
-	// Check if npx is available (needed for cdxgen)
-	let npxAvailable = false;
-	try {
-		const exitCode = await exec("npx", ["--version"], {
-			silent: true,
-			ignoreReturnCode: true,
-		});
-		npxAvailable = exitCode === 0;
-	} catch {
-		npxAvailable = false;
-	}
+	// Actually generate the SBOM to validate it works
+	// This catches issues like missing dependencies, cdxgen failures, etc.
+	debug(`Validating SBOM generation by generating SBOM for ${directory}`);
+	const sbom = await generateSBOM(directory, packageManager, workspacePackages);
 
-	if (!npxAvailable) {
+	if (!sbom) {
 		return {
 			valid: false,
 			hasDependencies,
 			dependencyCount,
-			error: "npx is not available - SBOM generation requires npx for cdxgen",
+			error: "Failed to generate SBOM - check cdxgen output for details",
 		};
 	}
 
-	debug(`SBOM validation passed for ${directory}: ${dependencyCount} dependencies`);
+	const componentCount = sbom.components?.length || 0;
+	debug(`SBOM validation passed for ${directory}: ${dependencyCount} deps, ${componentCount} components`);
 
 	return {
 		valid: true,
 		hasDependencies,
 		dependencyCount,
+		generatedSbom: sbom,
 	};
 }

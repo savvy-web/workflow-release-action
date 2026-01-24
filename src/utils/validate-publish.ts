@@ -264,12 +264,16 @@ export async function validatePublish(
 
 		// Validate SBOM generation for npm targets that have provenance enabled
 		// Use the first npm target's directory for validation
+		// This actually generates the SBOM to ensure it works before the real publish
 		const npmTargetWithProvenance = packageInfo.targets.find((t) => t.protocol === "npm" && t.provenance);
 		let sbomValidation: PackagePublishValidation["sbomValidation"];
 
 		if (npmTargetWithProvenance) {
 			debug(`Validating SBOM generation for ${release.name} in ${npmTargetWithProvenance.directory}`);
-			const sbomResult = await validateSBOMGeneration(npmTargetWithProvenance.directory);
+			const sbomResult = await validateSBOMGeneration({
+				directory: npmTargetWithProvenance.directory,
+				packageManager,
+			});
 			sbomValidation = sbomResult;
 
 			if (sbomResult.error) {
@@ -277,7 +281,8 @@ export async function validatePublish(
 			} else if (sbomResult.warning) {
 				warning(`SBOM: ${sbomResult.warning}`);
 			} else {
-				info(`✓ SBOM validation passed (${sbomResult.dependencyCount} dependencies)`);
+				const componentCount = sbomResult.generatedSbom?.components?.length || 0;
+				info(`✓ SBOM validation passed (${sbomResult.dependencyCount} dependencies, ${componentCount} components)`);
 			}
 		}
 

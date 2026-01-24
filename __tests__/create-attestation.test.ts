@@ -980,7 +980,7 @@ describe("create-attestation", () => {
 			expect(vi.mocked(fs.readdirSync)).not.toHaveBeenCalled();
 		});
 
-		it("uses cdxgen for SBOM generation regardless of package manager", async () => {
+		it("uses pnpm dlx for SBOM generation with pnpm", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 
 			const mockSBOM = {
@@ -1021,8 +1021,145 @@ describe("create-attestation", () => {
 				packageManager: "pnpm",
 			});
 
-			// cdxgen is called via npx regardless of package manager (works with npm, pnpm, yarn, etc.)
+			// pnpm uses pnpm dlx
+			expect(exec.exec).toHaveBeenCalledWith(
+				"pnpm",
+				expect.arrayContaining(["dlx", "@cyclonedx/cdxgen"]),
+				expect.any(Object),
+			);
+		});
+
+		it("uses yarn dlx for SBOM generation with yarn", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				components: [],
+			};
+
+			vi.mocked(exec.exec).mockImplementation(async () => 0);
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) return JSON.stringify(mockSBOM);
+				return Buffer.from("test content");
+			});
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({ bundle: {} as never, certificate: "cert", attestationID: "12345" });
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				packageManager: "yarn",
+			});
+
+			// yarn uses yarn dlx
+			expect(exec.exec).toHaveBeenCalledWith(
+				"yarn",
+				expect.arrayContaining(["dlx", "@cyclonedx/cdxgen"]),
+				expect.any(Object),
+			);
+		});
+
+		it("uses bunx for SBOM generation with bun", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				components: [],
+			};
+
+			vi.mocked(exec.exec).mockImplementation(async () => 0);
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) return JSON.stringify(mockSBOM);
+				return Buffer.from("test content");
+			});
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({ bundle: {} as never, certificate: "cert", attestationID: "12345" });
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				packageManager: "bun",
+			});
+
+			// bun uses bunx (no dlx arg needed)
+			expect(exec.exec).toHaveBeenCalledWith("bunx", expect.arrayContaining(["@cyclonedx/cdxgen"]), expect.any(Object));
+		});
+
+		it("uses npx for SBOM generation with npm", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const mockSBOM = {
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				components: [],
+			};
+
+			vi.mocked(exec.exec).mockImplementation(async () => 0);
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				if (String(path).includes(".cdxgen-sbom.json")) return JSON.stringify(mockSBOM);
+				return Buffer.from("test content");
+			});
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({ bundle: {} as never, certificate: "cert", attestationID: "12345" });
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				packageManager: "npm",
+			});
+
+			// npm uses npx
 			expect(exec.exec).toHaveBeenCalledWith("npx", expect.arrayContaining(["@cyclonedx/cdxgen"]), expect.any(Object));
+		});
+
+		it("uses pre-generated SBOM when provided", async () => {
+			process.env.GITHUB_TOKEN = "test-token";
+
+			const preGeneratedSbom = {
+				bomFormat: "CycloneDX" as const,
+				specVersion: "1.5",
+				version: 1,
+				components: [{ type: "library", name: "lodash", version: "4.17.21" }],
+			};
+
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from("test content"));
+
+			const { attest } = await import("@actions/attest");
+			vi.mocked(attest).mockResolvedValue({ bundle: {} as never, certificate: "cert", attestationID: "12345" });
+
+			await createSBOMAttestation({
+				packageName: "@org/pkg",
+				version: "1.0.0",
+				directory: "/path/to/pkg",
+				dryRun: false,
+				packageManager: "pnpm",
+				preGeneratedSbom,
+			});
+
+			// Should not call exec since we're using pre-generated SBOM
+			// (except for npm pack if needed for digest)
+			const cdxgenCalls = vi
+				.mocked(exec.exec)
+				.mock.calls.filter((call) => call[1] && Array.isArray(call[1]) && call[1].includes("@cyclonedx/cdxgen"));
+			expect(cdxgenCalls).toHaveLength(0);
 		});
 
 		it("handles attest errors gracefully", async () => {
@@ -1744,7 +1881,10 @@ describe("create-attestation", () => {
 			vi.mocked(fs.existsSync).mockReturnValue(false);
 
 			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
-			const result = await validateSBOMGeneration("/path/to/pkg");
+			const result = await validateSBOMGeneration({
+				directory: "/path/to/pkg",
+				packageManager: "pnpm",
+			});
 
 			expect(result.valid).toBe(false);
 			expect(result.hasDependencies).toBe(false);
@@ -1756,7 +1896,10 @@ describe("create-attestation", () => {
 			vi.mocked(fs.readFileSync).mockReturnValue("invalid json {");
 
 			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
-			const result = await validateSBOMGeneration("/path/to/pkg");
+			const result = await validateSBOMGeneration({
+				directory: "/path/to/pkg",
+				packageManager: "pnpm",
+			});
 
 			expect(result.valid).toBe(false);
 			expect(result.error).toContain("Failed to parse package.json");
@@ -1767,7 +1910,10 @@ describe("create-attestation", () => {
 			vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ name: "test-pkg" }));
 
 			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
-			const result = await validateSBOMGeneration("/path/to/pkg");
+			const result = await validateSBOMGeneration({
+				directory: "/path/to/pkg",
+				packageManager: "pnpm",
+			});
 
 			expect(result.valid).toBe(true);
 			expect(result.hasDependencies).toBe(false);
@@ -1775,62 +1921,91 @@ describe("create-attestation", () => {
 			expect(result.warning).toContain("no production dependencies");
 		});
 
-		it("validates successfully when package has dependencies and npm is available", async () => {
-			vi.mocked(fs.existsSync).mockReturnValue(true);
-			vi.mocked(fs.readFileSync).mockReturnValue(
-				JSON.stringify({
-					name: "test-pkg",
-					dependencies: {
-						lodash: "^4.0.0",
-						express: "^4.0.0",
-					},
-				}),
-			);
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args, options) => {
-				// npm --version check
-				if (args?.[0] === "--version") {
-					return 0;
-				}
-				// npm help sbom check
-				if (args?.[0] === "help" && args?.[1] === "sbom") {
-					if (options?.listeners?.stdout) {
-						options.listeners.stdout(Buffer.from("npm sbom - generate SBOM"));
-					}
-					return 0;
-				}
-				return 0;
+		it("validates successfully when SBOM generation succeeds", async () => {
+			// Mock file system
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				// package.json exists, node_modules exists, sbom output file exists
+				if (pathStr.endsWith("package.json")) return true;
+				if (pathStr.endsWith("node_modules")) return true;
+				if (pathStr.endsWith(".cdxgen-sbom.json")) return true;
+				return false;
 			});
 
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.endsWith("package.json")) {
+					return JSON.stringify({
+						name: "test-pkg",
+						dependencies: {
+							lodash: "^4.0.0",
+							express: "^4.0.0",
+						},
+					});
+				}
+				if (pathStr.endsWith(".cdxgen-sbom.json")) {
+					return JSON.stringify({
+						bomFormat: "CycloneDX",
+						specVersion: "1.5",
+						version: 1,
+						components: [
+							{ type: "library", name: "lodash", version: "4.17.21" },
+							{ type: "library", name: "express", version: "4.18.2" },
+						],
+					});
+				}
+				return "";
+			});
+
+			// Mock exec to succeed for cdxgen
+			vi.mocked(exec.exec).mockImplementation(async () => 0);
+
 			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
-			const result = await validateSBOMGeneration("/path/to/pkg");
+			const result = await validateSBOMGeneration({
+				directory: "/path/to/pkg",
+				packageManager: "pnpm",
+			});
 
 			expect(result.valid).toBe(true);
 			expect(result.hasDependencies).toBe(true);
 			expect(result.dependencyCount).toBe(2);
 			expect(result.error).toBeUndefined();
+			expect(result.generatedSbom).toBeDefined();
+			expect(result.generatedSbom?.components).toHaveLength(2);
 		});
 
-		it("returns error when npx is not available", async () => {
-			vi.mocked(fs.existsSync).mockReturnValue(true);
-			vi.mocked(fs.readFileSync).mockReturnValue(
-				JSON.stringify({
-					name: "test-pkg",
-					dependencies: { lodash: "^4.0.0" },
-				}),
-			);
-			vi.mocked(exec.exec).mockImplementation(async (_cmd, args) => {
-				// npx --version check fails
-				if (args?.[0] === "--version") {
-					return 1;
-				}
-				return 0;
+		it("returns error when SBOM generation fails", async () => {
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.endsWith("package.json")) return true;
+				if (pathStr.endsWith("node_modules")) return true;
+				// SBOM output file does not exist (generation failed)
+				if (pathStr.endsWith(".cdxgen-sbom.json")) return false;
+				return false;
 			});
 
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.endsWith("package.json")) {
+					return JSON.stringify({
+						name: "test-pkg",
+						dependencies: { lodash: "^4.0.0" },
+					});
+				}
+				return "";
+			});
+
+			// Mock exec to fail for cdxgen
+			vi.mocked(exec.exec).mockImplementation(async () => 1);
+
 			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
-			const result = await validateSBOMGeneration("/path/to/pkg");
+			const result = await validateSBOMGeneration({
+				directory: "/path/to/pkg",
+				packageManager: "pnpm",
+			});
 
 			expect(result.valid).toBe(false);
-			expect(result.error).toContain("npx is not available");
+			expect(result.error).toContain("Failed to generate SBOM");
 		});
 	});
 });

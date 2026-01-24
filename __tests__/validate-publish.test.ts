@@ -699,5 +699,79 @@ describe("validate-publish", () => {
 			// Should log warning about skipping
 			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("registry unreachable"));
 		});
+
+		it("validates SBOM generation for npm targets with provenance", async () => {
+			const changesetStatus: ChangesetStatus = {
+				changesets: [{ id: "test", summary: "Test", releases: [] }],
+				releases: [{ name: "@test/package", type: "patch", oldVersion: "1.0.0", newVersion: "1.0.1" }],
+			};
+
+			// Use target object with provenance: true to trigger SBOM validation
+			const workspacePackageJson: PackageJson = {
+				name: "@test/package",
+				version: "1.0.1",
+				publishConfig: {
+					targets: [{ protocol: "npm", provenance: true }],
+					directory: "dist",
+				},
+				dependencies: {
+					lodash: "^4.17.21",
+				},
+			};
+
+			const distPackageJson: PackageJson = {
+				name: "@test/package",
+				version: "1.0.1",
+				dependencies: {
+					lodash: "^4.17.21",
+				},
+			};
+
+			vi.mocked(fs.existsSync).mockImplementation((filePath) => {
+				const p = String(filePath);
+				if (p.includes(".npmrc")) return false;
+				// SBOM generation needs node_modules to exist
+				if (p.includes("node_modules")) return true;
+				// SBOM output file
+				if (p.includes(".cdxgen-sbom.json")) return true;
+				return true;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((filePath) => {
+				const p = String(filePath);
+				if (p.includes("changeset-status")) return JSON.stringify(changesetStatus);
+				if (p.includes("test-package") && p.endsWith("package.json") && !p.includes("dist")) {
+					return JSON.stringify(workspacePackageJson);
+				}
+				if (p.includes("dist") && p.endsWith("package.json")) {
+					return JSON.stringify(distPackageJson);
+				}
+				// Return valid SBOM for cdxgen output
+				if (p.includes(".cdxgen-sbom.json")) {
+					return JSON.stringify({
+						bomFormat: "CycloneDX",
+						specVersion: "1.5",
+						version: 1,
+						components: [{ type: "library", name: "lodash", version: "4.17.21" }],
+					});
+				}
+				return JSON.stringify({});
+			});
+
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			const result = await validatePublish("pnpm", "main", false);
+
+			expect(result).toBeDefined();
+			expect(result.validations).toHaveLength(1);
+			// SBOM validation should be included
+			expect(result.validations[0].sbomValidation).toBeDefined();
+			expect(result.validations[0].sbomValidation?.valid).toBe(true);
+			expect(result.validations[0].sbomValidation?.hasDependencies).toBe(true);
+			expect(result.validations[0].sbomValidation?.generatedSbom).toBeDefined();
+			expect(result.validations[0].sbomValidation?.generatedSbom?.components).toHaveLength(1);
+			// Should log success message
+			expect(core.info).toHaveBeenCalledWith(expect.stringContaining("SBOM validation passed"));
+		});
 	});
 });

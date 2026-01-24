@@ -212,6 +212,13 @@ export interface PackagePublishValidation {
 		warning?: string;
 		/** Error message if validation failed */
 		error?: string;
+		/** The generated SBOM document if validation succeeded */
+		generatedSbom?: {
+			bomFormat: string;
+			specVersion: string;
+			version: number;
+			components?: Array<{ type: string; name: string; version?: string; purl?: string }>;
+		};
 	};
 }
 
@@ -256,6 +263,10 @@ export interface PackageJson {
 	private?: boolean;
 	publishConfig?: PublishConfig;
 	exports?: Record<string, unknown>;
+	/** Production dependencies */
+	dependencies?: Record<string, string>;
+	/** Development dependencies */
+	devDependencies?: Record<string, string>;
 }
 
 /**
