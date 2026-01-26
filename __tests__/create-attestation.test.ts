@@ -1065,7 +1065,7 @@ describe("create-attestation", () => {
 			);
 		});
 
-		it("uses bunx for SBOM generation with bun", async () => {
+		it("uses bun x for SBOM generation with bun", async () => {
 			process.env.GITHUB_TOKEN = "test-token";
 
 			const mockSBOM = {
@@ -1093,8 +1093,12 @@ describe("create-attestation", () => {
 				packageManager: "bun",
 			});
 
-			// bun uses bunx (no dlx arg needed)
-			expect(exec.exec).toHaveBeenCalledWith("bunx", expect.arrayContaining(["@cyclonedx/cdxgen"]), expect.any(Object));
+			// bun uses `bun x` (not `bunx` - alias not available on GitHub Actions)
+			expect(exec.exec).toHaveBeenCalledWith(
+				"bun",
+				expect.arrayContaining(["x", "@cyclonedx/cdxgen"]),
+				expect.any(Object),
+			);
 		});
 
 		it("uses npx for SBOM generation with npm", async () => {

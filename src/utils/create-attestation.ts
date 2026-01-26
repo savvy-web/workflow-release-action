@@ -106,7 +106,7 @@ function getNpmCommand(): { cmd: string; baseArgs: string[] } {
  * - npm/npx: npx
  * - pnpm: pnpm dlx (or pnpm exec for installed packages)
  * - yarn: yarn dlx
- * - bun: bunx
+ * - bun: bun x (note: `bunx` alias is not available on GitHub Actions runners)
  *
  * Using the package manager's exec command ensures consistency with
  * the project's dependency resolution and avoids issues with npx
@@ -122,7 +122,8 @@ function getDlxCommand(packageManager: string): { cmd: string; baseArgs: string[
 		case "yarn":
 			return { cmd: "yarn", baseArgs: ["dlx"] };
 		case "bun":
-			return { cmd: "bunx", baseArgs: [] };
+			// Use `bun x` instead of `bunx` - the alias is not available on GitHub Actions runners
+			return { cmd: "bun", baseArgs: ["x"] };
 		default:
 			return { cmd: "npx", baseArgs: [] };
 	}
