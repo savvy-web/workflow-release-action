@@ -67,7 +67,7 @@ export function generatePurl(packageName: string, version: string): string {
  *
  * The metadata is sourced from:
  * 1. Auto-inferred values from package.json
- * 2. Explicit configuration from .github/release-config.json
+ * 2. Explicit configuration from .github/silk-release.json
  * 3. Auto-detected copyright year from npm registry
  *
  * @param sbom - Original SBOM document from cdxgen
