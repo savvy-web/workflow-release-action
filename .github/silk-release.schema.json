@@ -114,7 +114,7 @@
 					"type": "integer",
 					"minimum": 1970,
 					"maximum": 2100,
-					"description": "Copyright start year. Auto-detected from npm registry (first publish date) if not specified."
+					"description": "Override for copyright start year. Most users should NOT set this - it is auto-detected from the npm registry (first publication date). Only use this override if the package was published elsewhere before npm, or if the copyright predates the first npm publication."
 				}
 			},
 			"additionalProperties": false

@@ -45,12 +45,16 @@ export interface SBOMCopyrightConfig {
 	/** Copyright holder name (defaults to supplier.name) */
 	holder?: string;
 	/**
-	 * Copyright start year
+	 * Override for copyright start year
 	 *
 	 * @remarks
-	 * If not provided, will be auto-detected by:
-	 * 1. Querying npm registry for time.created on existing packages
-	 * 2. Falling back to current year for new packages
+	 * **Most users should NOT set this.** The start year is auto-detected from the
+	 * npm registry (first publication date). For new packages, the current year is used.
+	 *
+	 * Only use this override if:
+	 * - The package was published elsewhere before npm
+	 * - The copyright predates the first npm publication
+	 * - The registry lookup fails or returns incorrect data
 	 */
 	startYear?: number;
 }

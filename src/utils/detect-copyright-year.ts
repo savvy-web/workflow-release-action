@@ -94,12 +94,15 @@ export function extractYearFromDate(isoDate: string): number {
  *
  * @remarks
  * Determines the copyright start year using the following precedence:
- * 1. Explicit startYear from configuration (if provided)
- * 2. First publication date from npm registry
- * 3. Current year (for new packages)
+ * 1. Explicit startYear override from configuration (if provided)
+ * 2. First publication date from npm registry (auto-detected)
+ * 3. Current year (for new/unpublished packages)
+ *
+ * Most packages will use auto-detection (option 2 or 3). The config override
+ * is only needed for edge cases like packages published elsewhere before npm.
  *
  * @param packageName - Package name
- * @param configStartYear - Optional start year from configuration
+ * @param configStartYear - Optional override from configuration (most users should not set this)
  * @param registry - Registry URL for npm lookup
  * @returns Copyright year detection result
  */
