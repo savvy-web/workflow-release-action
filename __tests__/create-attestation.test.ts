@@ -31,6 +31,10 @@ vi.mock("@actions/attest", () => ({
 	createStorageRecord: vi.fn(),
 }));
 
+vi.mock("../src/utils/enhance-sbom-metadata.js", () => ({
+	enhanceSBOMMetadata: vi.fn(),
+}));
+
 describe("create-attestation", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -2010,6 +2014,138 @@ describe("create-attestation", () => {
 
 			expect(result.valid).toBe(false);
 			expect(result.error).toContain("Failed to generate SBOM");
+		});
+
+		it("enhances SBOM with metadata when enhanceMetadata is true", async () => {
+			// Mock file system
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.endsWith("package.json")) return true;
+				if (pathStr.endsWith("node_modules")) return true;
+				if (pathStr.endsWith(".cdxgen-sbom.json")) return true;
+				return false;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.endsWith("package.json")) {
+					return JSON.stringify({
+						name: "test-pkg",
+						version: "1.0.0",
+						author: "Test Author <test@example.com>",
+						dependencies: {
+							lodash: "^4.0.0",
+						},
+					});
+				}
+				if (pathStr.endsWith(".cdxgen-sbom.json")) {
+					return JSON.stringify({
+						bomFormat: "CycloneDX",
+						specVersion: "1.5",
+						version: 1,
+						metadata: {
+							component: { name: "test-pkg", version: "1.0.0" },
+						},
+						components: [{ type: "library", name: "lodash", version: "4.17.21" }],
+					});
+				}
+				return "";
+			});
+
+			// Mock exec to succeed for cdxgen
+			vi.mocked(exec.exec).mockImplementation(async () => 0);
+
+			// Mock enhanceSBOMMetadata to return enhanced SBOM
+			const { enhanceSBOMMetadata } = await import("../src/utils/enhance-sbom-metadata.js");
+			vi.mocked(enhanceSBOMMetadata).mockResolvedValue({
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					component: {
+						name: "test-pkg",
+						version: "1.0.0",
+						purl: "pkg:npm/test-pkg@1.0.0",
+					},
+				},
+				components: [{ type: "library", name: "lodash", version: "4.17.21" }],
+			});
+
+			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
+			const result = await validateSBOMGeneration({
+				directory: "/path/to/pkg",
+				packageManager: "pnpm",
+				packageName: "test-pkg",
+				packageVersion: "1.0.0",
+				enhanceMetadata: true,
+			});
+
+			expect(result.valid).toBe(true);
+			expect(result.generatedSbom).toBeDefined();
+			// Enhanced SBOM should have purl - use type assertion since we know it's enhanced
+			const enhancedSbom = result.generatedSbom as { metadata?: { component?: { purl?: string } } };
+			expect(enhancedSbom?.metadata?.component?.purl).toBe("pkg:npm/test-pkg@1.0.0");
+			// Verify enhanceSBOMMetadata was called
+			expect(enhanceSBOMMetadata).toHaveBeenCalledWith(
+				expect.any(Object),
+				expect.objectContaining({
+					packageName: "test-pkg",
+					packageVersion: "1.0.0",
+				}),
+			);
+		});
+
+		it("continues validation when metadata enhancement fails", async () => {
+			// Mock file system
+			vi.mocked(fs.existsSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.endsWith("package.json")) return true;
+				if (pathStr.endsWith("node_modules")) return true;
+				if (pathStr.endsWith(".cdxgen-sbom.json")) return true;
+				return false;
+			});
+
+			vi.mocked(fs.readFileSync).mockImplementation((path) => {
+				const pathStr = String(path);
+				if (pathStr.endsWith("package.json")) {
+					return JSON.stringify({
+						name: "test-pkg",
+						version: "1.0.0",
+						dependencies: { lodash: "^4.0.0" },
+					});
+				}
+				if (pathStr.endsWith(".cdxgen-sbom.json")) {
+					return JSON.stringify({
+						bomFormat: "CycloneDX",
+						specVersion: "1.5",
+						version: 1,
+						components: [{ type: "library", name: "lodash", version: "4.17.21" }],
+					});
+				}
+				return "";
+			});
+
+			// Mock exec to succeed for cdxgen
+			vi.mocked(exec.exec).mockImplementation(async () => 0);
+
+			// Mock enhanceSBOMMetadata to throw an error
+			const { enhanceSBOMMetadata } = await import("../src/utils/enhance-sbom-metadata.js");
+			vi.mocked(enhanceSBOMMetadata).mockRejectedValue(new Error("Enhancement failed"));
+
+			const { validateSBOMGeneration } = await import("../src/utils/create-attestation.js");
+			const result = await validateSBOMGeneration({
+				directory: "/path/to/pkg",
+				packageManager: "pnpm",
+				packageName: "test-pkg",
+				packageVersion: "1.0.0",
+				enhanceMetadata: true,
+			});
+
+			// Validation should still pass even if enhancement fails
+			expect(result.valid).toBe(true);
+			expect(result.generatedSbom).toBeDefined();
+			// Warning should have been logged
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to enhance SBOM metadata"));
 		});
 	});
 });

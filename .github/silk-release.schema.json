@@ -1,0 +1,123 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/savvy-web/workflow-release-action/main/.github/silk-release.schema.json",
+	"title": "Silk Release Configuration",
+	"description": "Configuration file for Silk release workflow. The action searches for this config in order: (1) .github/silk-release.json in your repo, (2) SILK_RELEASE_SBOM_TEMPLATE environment variable (from repo or org variable).",
+	"type": "object",
+	"properties": {
+		"$schema": {
+			"type": "string",
+			"description": "JSON Schema reference for IDE support"
+		},
+		"sbom": {
+			"$ref": "#/$defs/SBOMMetadataConfig"
+		}
+	},
+	"additionalProperties": false,
+	"$defs": {
+		"SBOMMetadataConfig": {
+			"type": "object",
+			"description": "SBOM metadata configuration for NTIA-compliant SBOM generation. Values are merged with auto-inferred data from package.json (config takes precedence).",
+			"properties": {
+				"supplier": {
+					"$ref": "#/$defs/SBOMSupplierConfig"
+				},
+				"copyright": {
+					"$ref": "#/$defs/SBOMCopyrightConfig"
+				},
+				"publisher": {
+					"type": "string",
+					"description": "Publisher name for component metadata. Defaults to supplier.name or author from package.json if not specified."
+				},
+				"documentationUrl": {
+					"type": "string",
+					"format": "uri",
+					"description": "Documentation URL. Overrides homepage from package.json."
+				}
+			},
+			"additionalProperties": false
+		},
+		"SBOMSupplierConfig": {
+			"type": "object",
+			"description": "Supplier information for SBOM metadata. Required for NTIA minimum elements compliance.",
+			"properties": {
+				"name": {
+					"type": "string",
+					"description": "Organization or company name. Required for NTIA compliance."
+				},
+				"url": {
+					"oneOf": [
+						{
+							"type": "string",
+							"format": "uri",
+							"description": "Organization website URL"
+						},
+						{
+							"type": "array",
+							"items": {
+								"type": "string",
+								"format": "uri"
+							},
+							"description": "Organization website URLs"
+						}
+					],
+					"description": "Organization website URL(s)"
+				},
+				"contact": {
+					"oneOf": [
+						{
+							"$ref": "#/$defs/SBOMContact"
+						},
+						{
+							"type": "array",
+							"items": {
+								"$ref": "#/$defs/SBOMContact"
+							},
+							"description": "Multiple contacts"
+						}
+					],
+					"description": "Contact information. Security contact is recommended."
+				}
+			},
+			"required": ["name"],
+			"additionalProperties": false
+		},
+		"SBOMContact": {
+			"type": "object",
+			"description": "Contact information for supplier or security",
+			"properties": {
+				"name": {
+					"type": "string",
+					"description": "Contact name"
+				},
+				"email": {
+					"type": "string",
+					"format": "email",
+					"description": "Contact email address"
+				},
+				"phone": {
+					"type": "string",
+					"description": "Contact phone number"
+				}
+			},
+			"additionalProperties": false
+		},
+		"SBOMCopyrightConfig": {
+			"type": "object",
+			"description": "Copyright configuration for SBOM metadata",
+			"properties": {
+				"holder": {
+					"type": "string",
+					"description": "Copyright holder name. Defaults to supplier.name if not specified."
+				},
+				"startYear": {
+					"type": "integer",
+					"minimum": 1970,
+					"maximum": 2100,
+					"description": "Copyright start year. Auto-detected from npm registry (first publish date) if not specified."
+				}
+			},
+			"additionalProperties": false
+		}
+	}
+}

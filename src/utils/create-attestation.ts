@@ -6,6 +6,8 @@ import { attest, attestProvenance, createStorageRecord } from "@actions/attest";
 import { debug, getState, info, warning } from "@actions/core";
 import { exec } from "@actions/exec";
 import { context } from "@actions/github";
+import type { EnhancedCycloneDXDocument } from "../types/sbom-config.js";
+import { enhanceSBOMMetadata } from "./enhance-sbom-metadata.js";
 
 /**
  * Result of creating a GitHub attestation
@@ -42,8 +44,9 @@ export interface SBOMValidationResult {
 	/**
 	 * The generated SBOM document if validation succeeded.
 	 * This can be reused during the actual attestation creation.
+	 * May be enhanced with additional metadata if enhanceMetadata option was enabled.
 	 */
-	generatedSbom?: CycloneDXDocument;
+	generatedSbom?: CycloneDXDocument | EnhancedCycloneDXDocument;
 }
 
 /**
@@ -1058,6 +1061,14 @@ export interface ValidateSBOMGenerationOptions {
 	packageManager: string;
 	/** Map of workspace package names to their info for file: linking */
 	workspacePackages?: Map<string, WorkspacePackageInfo>;
+	/** Package name (required for metadata enhancement) */
+	packageName?: string;
+	/** Package version (required for metadata enhancement) */
+	packageVersion?: string;
+	/** Repository root directory (for loading release config) */
+	rootDirectory?: string;
+	/** Whether to enhance SBOM with metadata from config and package.json */
+	enhanceMetadata?: boolean;
 }
 
 /**
@@ -1072,7 +1083,8 @@ export interface ValidateSBOMGenerationOptions {
  * 1. Checks if package.json exists and is valid
  * 2. Counts production dependencies
  * 3. Actually generates the SBOM using cdxgen via the package manager
- * 4. Returns the generated SBOM for later use
+ * 4. Optionally enhances SBOM with metadata from config and package.json
+ * 5. Returns the generated SBOM for later use
  *
  * This helps catch SBOM issues early before the actual release.
  *
@@ -1080,7 +1092,8 @@ export interface ValidateSBOMGenerationOptions {
  * @returns SBOM validation result with the generated SBOM if successful
  */
 export async function validateSBOMGeneration(options: ValidateSBOMGenerationOptions): Promise<SBOMValidationResult> {
-	const { directory, packageManager, workspacePackages } = options;
+	const { directory, packageManager, workspacePackages, packageName, packageVersion, rootDirectory, enhanceMetadata } =
+		options;
 
 	// Check if package.json exists
 	const pkgJsonPath = join(directory, "package.json");
@@ -1093,8 +1106,8 @@ export async function validateSBOMGeneration(options: ValidateSBOMGenerationOpti
 		};
 	}
 
-	// Read package.json to check dependencies
-	let pkgJson: { dependencies?: Record<string, string> };
+	// Read package.json to check dependencies and get package info
+	let pkgJson: { name?: string; version?: string; dependencies?: Record<string, string> };
 	try {
 		pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as typeof pkgJson;
 	} catch (error) {
@@ -1137,10 +1150,30 @@ export async function validateSBOMGeneration(options: ValidateSBOMGenerationOpti
 	const componentCount = sbom.components?.length || 0;
 	debug(`SBOM validation passed for ${directory}: ${dependencyCount} deps, ${componentCount} components`);
 
+	// Enhance SBOM with metadata if requested and we have package info
+	let finalSbom: CycloneDXDocument | EnhancedCycloneDXDocument = sbom;
+	const pkgName = packageName || pkgJson.name;
+	const pkgVersion = packageVersion || pkgJson.version;
+
+	if (enhanceMetadata && pkgName && pkgVersion) {
+		try {
+			finalSbom = await enhanceSBOMMetadata(sbom, {
+				packageName: pkgName,
+				packageVersion: pkgVersion,
+				packageDirectory: directory,
+				rootDirectory,
+			});
+			debug(`Enhanced SBOM with metadata for ${pkgName}@${pkgVersion}`);
+		} catch (error) {
+			// Enhancement failure should not fail validation, just log warning
+			warning(`Failed to enhance SBOM metadata: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
 	return {
 		valid: true,
 		hasDependencies,
 		dependencyCount,
-		generatedSbom: sbom,
+		generatedSbom: finalSbom,
 	};
 }

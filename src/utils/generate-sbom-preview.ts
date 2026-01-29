@@ -1,7 +1,13 @@
 import { debug, endGroup, info, startGroup, warning } from "@actions/core";
 import type { PackagePublishValidation } from "../types/publish-config.js";
+import type {
+	EnhancedCycloneDXComponent,
+	EnhancedCycloneDXDocument,
+	NTIAComplianceResult,
+} from "../types/sbom-config.js";
 import type { CycloneDXDocument, SBOMValidationResult } from "./create-attestation.js";
 import { validateSBOMGeneration } from "./create-attestation.js";
+import { formatNTIAComplianceMarkdown, validateNTIACompliance } from "./validate-ntia-compliance.js";
 
 /**
  * SBOM preview for a single package
@@ -18,7 +24,9 @@ interface PackageSBOMPreview {
 	/** Number of components in the SBOM */
 	componentCount: number;
 	/** The generated SBOM document */
-	sbom?: CycloneDXDocument;
+	sbom?: CycloneDXDocument | EnhancedCycloneDXDocument;
+	/** NTIA compliance result */
+	ntiaCompliance?: NTIAComplianceResult;
 	/** Error message if generation failed */
 	error?: string;
 	/** Warning message */
@@ -37,6 +45,16 @@ export interface SBOMPreviewResult {
 	checkTitle: string;
 	/** Whether all SBOMs generated successfully */
 	success: boolean;
+}
+
+/**
+ * License information extracted from SBOM
+ */
+interface LicenseInfo {
+	/** License identifier (SPDX or name) */
+	id: string;
+	/** Number of components with this license */
+	count: number;
 }
 
 /**
@@ -59,18 +77,50 @@ function groupComponentsByType(
 }
 
 /**
+ * Extract license summary from SBOM components
+ */
+function extractLicenses(components: EnhancedCycloneDXComponent[]): LicenseInfo[] {
+	const licenseCounts = new Map<string, number>();
+
+	for (const component of components) {
+		if (component.licenses) {
+			for (const licenseEntry of component.licenses) {
+				let licenseId = "Unknown";
+				if (licenseEntry.license?.id) {
+					licenseId = licenseEntry.license.id;
+				} else if (licenseEntry.license?.name) {
+					licenseId = licenseEntry.license.name;
+				} else if (licenseEntry.expression) {
+					licenseId = licenseEntry.expression;
+				}
+
+				licenseCounts.set(licenseId, (licenseCounts.get(licenseId) || 0) + 1);
+			}
+		}
+	}
+
+	// Sort by count descending
+	return Array.from(licenseCounts.entries())
+		.map(([id, count]) => ({ id, count }))
+		.sort((a, b) => b.count - a.count);
+}
+
+/**
  * Generate SBOM preview for packages during validation
  *
  * This function generates SBOMs for packages with npm targets that have
  * provenance enabled, and returns a formatted preview for the PR check.
+ * Includes NTIA compliance analysis and enhanced metadata preview.
  *
  * @param packageManager - Package manager to use
  * @param validations - Package validation results from validatePublish
+ * @param rootDirectory - Repository root directory (for config loading)
  * @returns SBOM preview result with summary content
  */
 export async function generateSBOMPreview(
 	packageManager: string,
 	validations: PackagePublishValidation[],
+	rootDirectory?: string,
 ): Promise<SBOMPreviewResult> {
 	startGroup("Generating SBOM Preview");
 
@@ -110,6 +160,10 @@ export async function generateSBOMPreview(
 			sbomResult = await validateSBOMGeneration({
 				directory: npmTargetWithProvenance.target.directory,
 				packageManager,
+				packageName: validation.name,
+				packageVersion: validation.version,
+				rootDirectory,
+				enhanceMetadata: true,
 			});
 		}
 
@@ -120,6 +174,17 @@ export async function generateSBOMPreview(
 			allSuccess = false;
 		}
 
+		// Run NTIA compliance check on the SBOM
+		let ntiaCompliance: NTIAComplianceResult | undefined;
+		if (sbomResult.generatedSbom) {
+			ntiaCompliance = validateNTIACompliance(sbomResult.generatedSbom as EnhancedCycloneDXDocument);
+			if (!ntiaCompliance.compliant) {
+				debug(
+					`NTIA compliance check for ${validation.name}: ${ntiaCompliance.passedCount}/${ntiaCompliance.totalCount}`,
+				);
+			}
+		}
+
 		packages.push({
 			name: validation.name,
 			version: validation.version,
@@ -127,6 +192,7 @@ export async function generateSBOMPreview(
 			dependencyCount: sbomResult.dependencyCount,
 			componentCount,
 			sbom: sbomResult.generatedSbom,
+			ntiaCompliance,
 			error: sbomResult.error,
 			warning: sbomResult.warning,
 		});
@@ -170,14 +236,19 @@ function generateSummaryContent(packages: PackageSBOMPreview[], packageManager: 
 	}
 
 	// Summary table
-	lines.push("| Package | Status | Dependencies | Components |");
-	lines.push("|---------|--------|--------------|------------|");
+	lines.push("| Package | Status | Dependencies | Components | NTIA |");
+	lines.push("|---------|--------|--------------|------------|------|");
 
 	for (const pkg of packages) {
 		const status = pkg.success ? "✅ Ready" : "❌ Failed";
 		const deps = pkg.dependencyCount.toString();
 		const components = pkg.componentCount.toString();
-		lines.push(`| \`${pkg.name}@${pkg.version}\` | ${status} | ${deps} | ${components} |`);
+		const ntia = pkg.ntiaCompliance
+			? pkg.ntiaCompliance.compliant
+				? "✅ 100%"
+				: `⚠️ ${pkg.ntiaCompliance.percentage}%`
+			: "—";
+		lines.push(`| \`${pkg.name}@${pkg.version}\` | ${status} | ${deps} | ${components} | ${ntia} |`);
 	}
 
 	lines.push("");
@@ -204,12 +275,58 @@ function generateSummaryContent(packages: PackageSBOMPreview[], packageManager: 
 			continue;
 		}
 
-		// SBOM metadata
-		lines.push(`**SBOM Format:** CycloneDX ${pkg.sbom.specVersion}`);
+		// Type cast for enhanced SBOM
+		const sbom = pkg.sbom as EnhancedCycloneDXDocument;
+
+		// SBOM metadata summary
+		const supplierName = sbom.metadata?.supplier?.name;
+		const publisher = sbom.metadata?.component?.publisher;
+
+		lines.push(`**SBOM Format:** CycloneDX ${sbom.specVersion}`);
+		if (supplierName) {
+			lines.push(`**Supplier:** ${supplierName}`);
+		}
+		if (publisher) {
+			lines.push(`**Publisher:** ${publisher}`);
+		}
 		lines.push("");
 
+		// External references
+		const externalRefs = sbom.metadata?.component?.externalReferences;
+		if (externalRefs && externalRefs.length > 0) {
+			lines.push("**External References:**");
+			for (const ref of externalRefs) {
+				const icon = getExternalRefIcon(ref.type);
+				const label = capitalizeFirst(ref.type.replace(/-/g, " "));
+				lines.push(`- ${icon} [${label}](${ref.url})`);
+			}
+			lines.push("");
+		}
+
+		// License summary
+		const components = (sbom.components || []) as EnhancedCycloneDXComponent[];
+		const licenses = extractLicenses(components);
+		if (licenses.length > 0) {
+			lines.push("**License Summary:**");
+			lines.push("");
+			lines.push("| License | Count |");
+			lines.push("|---------|-------|");
+			// Show top 10 licenses
+			for (const license of licenses.slice(0, 10)) {
+				lines.push(`| ${license.id} | ${license.count} |`);
+			}
+			if (licenses.length > 10) {
+				lines.push(`| *... ${licenses.length - 10} more* | |`);
+			}
+			lines.push("");
+		}
+
+		// NTIA compliance section
+		if (pkg.ntiaCompliance) {
+			lines.push(formatNTIAComplianceMarkdown(pkg.ntiaCompliance));
+		}
+
 		// Components grouped by type
-		const components = pkg.sbom.components || [];
 		if (components.length === 0) {
 			lines.push("*No components found in SBOM*");
 			lines.push("");
@@ -275,6 +392,32 @@ function getTypeIcon(type: string): string {
 			return "🖥️";
 		default:
 			return "📦";
+	}
+}
+
+/**
+ * Get icon for external reference type
+ */
+function getExternalRefIcon(type: string): string {
+	switch (type.toLowerCase()) {
+		case "vcs":
+			return "🔗";
+		case "issue-tracker":
+			return "🐛";
+		case "documentation":
+			return "📚";
+		case "website":
+			return "🌐";
+		case "support":
+			return "💬";
+		case "license":
+			return "📜";
+		case "release-notes":
+			return "📝";
+		case "security-contact":
+			return "🔒";
+		default:
+			return "🔗";
 	}
 }
 
