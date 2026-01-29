@@ -94,7 +94,7 @@ export async function enhanceSBOMMetadata(
 	debug(`Copyright year for ${packageName}: ${copyrightYearResult.startYear} (source: ${copyrightYearResult.source})`);
 
 	// Resolve final metadata (config overrides inferred)
-	const resolved = resolveSBOMMetadata(inferred, config, packageName, packageVersion, copyrightYearResult.startYear);
+	const resolved = resolveSBOMMetadata(inferred, config, copyrightYearResult.startYear);
 
 	// Create enhanced SBOM
 	const enhanced: EnhancedCycloneDXDocument = {

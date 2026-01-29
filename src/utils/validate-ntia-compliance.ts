@@ -27,7 +27,7 @@ function checkSupplierName(sbom: EnhancedCycloneDXDocument): NTIAFieldResult {
 		description: "Entity that supplies the software",
 		passed,
 		value: passed ? supplierName : undefined,
-		suggestion: passed ? undefined : "Add `supplier.name` to `.github/release-config.json`",
+		suggestion: passed ? undefined : "Add `supplier.name` to `.github/silk-release.json`",
 	};
 }
 

@@ -4,7 +4,7 @@
  * @remarks
  * These types support a layered configuration system:
  * 1. Auto-infer from package.json (author, repository, bugs, homepage)
- * 2. Load explicit config from .github/release-config.json
+ * 2. Load explicit config from .github/silk-release.json
  * 3. Merge config over inferred values (config wins)
  *
  * @see https://www.ntia.gov/files/ntia/publications/sbom_minimum_elements_report.pdf
@@ -118,7 +118,7 @@ export interface SBOMExternalReference {
  * Complete SBOM metadata configuration
  *
  * @remarks
- * This configuration is loaded from .github/release-config.json and merged
+ * This configuration is loaded from .github/silk-release.json and merged
  * with auto-inferred values from package.json. Explicit config values take
  * precedence over inferred values.
  *
@@ -162,7 +162,7 @@ export interface SBOMMetadataConfig {
  * Release configuration file structure
  *
  * @remarks
- * This is the structure of .github/release-config.json which configures
+ * This is the structure of .github/silk-release.json which configures
  * release-related settings including SBOM metadata.
  */
 export interface ReleaseConfig {
@@ -175,7 +175,7 @@ export interface ReleaseConfig {
  *
  * @remarks
  * These values are auto-detected from package.json fields and used as defaults.
- * Explicit configuration from release-config.json takes precedence.
+ * Explicit configuration from silk-release.json takes precedence.
  */
 export interface InferredSBOMMetadata {
 	/** Author name parsed from package.json author field */

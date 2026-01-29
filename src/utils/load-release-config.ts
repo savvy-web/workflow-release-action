@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { debug, info, warning } from "@actions/core";
+import { parse as parseJsonc } from "jsonc-parser";
 import type { ReleaseConfig, SBOMMetadataConfig } from "../types/sbom-config.js";
 
 /**
@@ -12,23 +13,6 @@ const CONFIG_FILE_NAMES = ["silk-release.json", "silk-release.jsonc"] as const;
  * Environment variable name for variable-based configuration
  */
 const CONFIG_ENV_VAR = "SILK_RELEASE_SBOM_TEMPLATE";
-
-/**
- * Strip JSON comments (single-line // and multi-line /* *\/)
- *
- * @param content - JSON content that may contain comments
- * @returns JSON content with comments removed
- */
-function stripJsonComments(content: string): string {
-	// Remove single-line comments (// ...)
-	// Be careful not to remove URLs with // in them
-	let result = content.replace(/(?<![:"'])\/\/[^\n]*/g, "");
-
-	// Remove multi-line comments (/* ... */)
-	result = result.replace(/\/\*[\s\S]*?\*\//g, "");
-
-	return result;
-}
 
 /**
  * Validate SBOM metadata configuration
@@ -108,8 +92,13 @@ function validateSBOMConfig(config: unknown): string[] {
  */
 function parseConfigContent(content: string, source: string): ReleaseConfig | undefined {
 	try {
-		const strippedContent = stripJsonComments(content);
-		const parsed = JSON.parse(strippedContent) as ReleaseConfig;
+		const errors: Array<{ error: number; offset: number; length: number }> = [];
+		const parsed = parseJsonc(content, errors) as ReleaseConfig;
+
+		if (errors.length > 0) {
+			warning(`Failed to parse config from ${source}: JSON syntax error at offset ${errors[0].offset}`);
+			return undefined;
+		}
 
 		// Validate the sbom section if present
 		if (parsed.sbom !== undefined) {

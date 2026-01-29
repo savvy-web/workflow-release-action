@@ -58,7 +58,7 @@ describe("validate-ntia-compliance", () => {
 			expect(result.compliant).toBe(false);
 			const supplierField = result.fields.find((f) => f.name === "Supplier Name");
 			expect(supplierField?.passed).toBe(false);
-			expect(supplierField?.suggestion).toContain("release-config.json");
+			expect(supplierField?.suggestion).toContain("silk-release.json");
 		});
 
 		it("should return non-compliant when missing component name", () => {
@@ -377,7 +377,7 @@ describe("validate-ntia-compliance", () => {
 
 			expect(markdown).toContain("⚠️ SBOM Compliance Check");
 			expect(markdown).toContain("Action required");
-			expect(markdown).toContain("release-config.json");
+			expect(markdown).toContain("silk-release.json");
 		});
 
 		it("should include table with field statuses", () => {

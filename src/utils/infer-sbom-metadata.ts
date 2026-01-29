@@ -182,20 +182,16 @@ export function formatCopyright(holder: string, startYear?: number, endYear?: nu
  * Explicit configuration values take precedence over inferred values.
  * This implements the layered configuration system where:
  * 1. Auto-inferred values from package.json are the base
- * 2. Explicit config from release-config.json overrides
+ * 2. Explicit config from silk-release.json overrides
  *
  * @param inferred - Metadata inferred from package.json
- * @param config - Explicit configuration from release-config.json
- * @param packageName - Package name for PURL
- * @param packageVersion - Package version
+ * @param config - Explicit configuration from silk-release.json
  * @param copyrightStartYear - Detected copyright start year
  * @returns Resolved metadata ready for SBOM injection
  */
 export function resolveSBOMMetadata(
 	inferred: InferredSBOMMetadata,
 	config: SBOMMetadataConfig | undefined,
-	_packageName: string,
-	_packageVersion: string,
 	copyrightStartYear?: number,
 ): ResolvedSBOMMetadata {
 	const result: ResolvedSBOMMetadata = {};

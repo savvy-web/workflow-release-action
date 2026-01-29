@@ -251,7 +251,7 @@ describe("infer-sbom-metadata", () => {
 				},
 			};
 
-			const result = resolveSBOMMetadata(inferred, config, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, config);
 
 			expect(result.supplier).toEqual({
 				name: "My Company",
@@ -264,7 +264,7 @@ describe("infer-sbom-metadata", () => {
 			const inferred = { authorName: "John Doe" };
 			const config = { publisher: "Custom Publisher" };
 
-			const result = resolveSBOMMetadata(inferred, config, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, config);
 
 			expect(result.component?.publisher).toBe("Custom Publisher");
 		});
@@ -275,7 +275,7 @@ describe("infer-sbom-metadata", () => {
 				supplier: { name: "My Company" },
 			};
 
-			const result = resolveSBOMMetadata(inferred, config, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, config);
 
 			expect(result.component?.publisher).toBe("My Company");
 		});
@@ -283,7 +283,7 @@ describe("infer-sbom-metadata", () => {
 		it("should fall back to author name for publisher", () => {
 			const inferred = { authorName: "John Doe" };
 
-			const result = resolveSBOMMetadata(inferred, undefined, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, undefined);
 
 			expect(result.component?.publisher).toBe("John Doe");
 		});
@@ -295,7 +295,7 @@ describe("infer-sbom-metadata", () => {
 				documentationUrl: "https://docs.example.com",
 			};
 
-			const result = resolveSBOMMetadata(inferred, undefined, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, undefined);
 
 			expect(result.component?.externalReferences).toContainEqual({
 				type: "vcs",
@@ -320,7 +320,7 @@ describe("infer-sbom-metadata", () => {
 				},
 			};
 
-			const result = resolveSBOMMetadata(inferred, config, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, config);
 
 			expect(result.component?.externalReferences).toContainEqual({
 				type: "website",
@@ -339,7 +339,7 @@ describe("infer-sbom-metadata", () => {
 				},
 			};
 
-			const result = resolveSBOMMetadata(inferred, config, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, config);
 
 			const websiteRefs = result.component?.externalReferences?.filter((r) => r.type === "website");
 			expect(websiteRefs?.length).toBe(0);
@@ -352,7 +352,7 @@ describe("infer-sbom-metadata", () => {
 			};
 			const currentYear = new Date().getFullYear();
 
-			const result = resolveSBOMMetadata(inferred, config, "pkg", "1.0.0", 2020);
+			const result = resolveSBOMMetadata(inferred, config, 2020);
 
 			expect(result.component?.copyright).toBe(`Copyright 2020-${currentYear} My Company LLC`);
 		});
@@ -364,7 +364,7 @@ describe("infer-sbom-metadata", () => {
 			};
 			const currentYear = new Date().getFullYear();
 
-			const result = resolveSBOMMetadata(inferred, config, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, config);
 
 			expect(result.component?.copyright).toBe(`Copyright ${currentYear} My Company`);
 		});
@@ -378,7 +378,7 @@ describe("infer-sbom-metadata", () => {
 				},
 			};
 
-			const result = resolveSBOMMetadata(inferred, config, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, config);
 
 			expect(result.supplier?.url).toEqual(["https://mycompany.com", "https://alt.mycompany.com"]);
 		});
@@ -392,7 +392,7 @@ describe("infer-sbom-metadata", () => {
 				},
 			};
 
-			const result = resolveSBOMMetadata(inferred, config, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, config);
 
 			expect(result.supplier?.contact).toHaveLength(2);
 		});
@@ -405,7 +405,7 @@ describe("infer-sbom-metadata", () => {
 				documentationUrl: "https://docs.example.com",
 			};
 
-			const result = resolveSBOMMetadata(inferred, config, "pkg", "1.0.0");
+			const result = resolveSBOMMetadata(inferred, config);
 
 			expect(result.component?.externalReferences).toContainEqual({
 				type: "documentation",
