@@ -4,7 +4,15 @@
 	"fix": true,
 	"gitignore": true,
 	"noBanner": true,
-	"ignores": ["**/node_modules", "**/.cache", "**/coverage", "**/.coverage", "**/dist", "**/CHANGELOG.md"],
+	"ignores": [
+		"**/node_modules",
+		"**/.cache",
+		"**/coverage",
+		"**/.coverage",
+		"**/dist",
+		"**/CHANGELOG.md",
+		"**/.claude/plans"
+	],
 	"config": {
 		"default": true,
 		"MD001": true,

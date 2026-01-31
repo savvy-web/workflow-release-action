@@ -1,6 +1,9 @@
 import * as core from "@actions/core";
 import { context, getOctokit } from "@actions/github";
-import type { Context } from "@actions/github/lib/context.js";
+
+/** Context type derived from @actions/github exports */
+type Context = typeof context;
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PhaseDetectionOptions } from "../src/utils/detect-workflow-phase.js";
 import { detectWorkflowPhase, detectWorkflowPhaseSync } from "../src/utils/detect-workflow-phase.js";

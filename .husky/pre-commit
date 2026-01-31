@@ -26,4 +26,4 @@ export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
 # Run lint-staged to check and fix staged files
-pnpm exec lint-staged --config ./lib/configs/lint-staged.config.js
+pnpm exec lint-staged --config ./lib/configs/lint-staged.config.ts

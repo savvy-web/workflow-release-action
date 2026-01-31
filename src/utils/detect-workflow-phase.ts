@@ -1,6 +1,11 @@
 import { info, warning } from "@actions/core";
-import type { Context } from "@actions/github/lib/context.js";
-import type { GitHub } from "@actions/github/lib/utils.js";
+import type { getOctokit, context as githubContext } from "@actions/github";
+
+/** Context type derived from @actions/github exports */
+type Context = typeof githubContext;
+
+/** Octokit instance type derived from getOctokit return type */
+type GitHub = ReturnType<typeof getOctokit>;
 
 /**
  * Workflow phases for release management
@@ -61,7 +66,7 @@ export interface PhaseDetectionOptions {
 	context: Context;
 
 	/** Authenticated Octokit instance */
-	octokit: InstanceType<typeof GitHub>;
+	octokit: GitHub;
 
 	/**
 	 * Explicit phase to use, skipping automatic detection.
@@ -195,12 +200,29 @@ export async function detectWorkflowPhase(options: PhaseDetectionOptions): Promi
 	return result;
 }
 
+/** PR type for associated PRs from listPullRequestsAssociatedWithCommit */
+interface AssociatedPR {
+	number: number;
+	merged_at: string | null;
+	head: { ref: string };
+	base: { ref: string };
+}
+
+/** PR type for merged PRs from pulls.list */
+interface MergedPR {
+	number: number;
+	merged_at: string | null;
+	merge_commit_sha: string | null;
+	head: { ref: string };
+	base: { ref: string };
+}
+
 /**
  * Options for release commit detection
  */
 interface ReleaseCommitDetectionOptions {
 	context: Context;
-	octokit: InstanceType<typeof GitHub>;
+	octokit: GitHub;
 	releaseBranch: string;
 	targetBranch: string;
 }
@@ -276,7 +298,7 @@ async function attemptReleaseCommitDetection(
 
 		// Find a merged PR from the release branch to target branch
 		const mergedReleasePR = associatedPRs.find(
-			(pr) => pr.merged_at !== null && pr.head.ref === releaseBranch && pr.base.ref === targetBranch,
+			(pr: AssociatedPR) => pr.merged_at !== null && pr.head.ref === releaseBranch && pr.base.ref === targetBranch,
 		);
 
 		if (mergedReleasePR) {
@@ -304,7 +326,7 @@ async function attemptReleaseCommitDetection(
 		});
 
 		// Find a PR whose merge_commit_sha matches the current commit
-		const matchingPR = mergedPRs.find((pr) => pr.merged_at !== null && pr.merge_commit_sha === context.sha);
+		const matchingPR = mergedPRs.find((pr: MergedPR) => pr.merged_at !== null && pr.merge_commit_sha === context.sha);
 
 		if (matchingPR) {
 			info(`Detected merged release PR #${matchingPR.number} from ${releaseBranch} (via merge_commit_sha match)`);
