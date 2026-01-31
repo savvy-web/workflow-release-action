@@ -8,6 +8,7 @@ import type { TagInfo } from "./determine-tag-strategy.js";
 import { findPackagePath } from "./find-package-path.js";
 import type { PackagePublishResult, TargetPublishResult } from "./generate-publish-summary.js";
 import { getPackagePageUrl } from "./generate-publish-summary.js";
+import { getRegistryDisplayName } from "./registry-utils.js";
 
 /**
  * Result of creating GitHub releases
@@ -429,16 +430,8 @@ export async function createGitHubReleases(
 
 		for (const pkg of associatedPackages) {
 			for (const target of pkg.targets.filter((t) => t.success)) {
-				const registryName = target.target.registry?.includes("npmjs.org")
-					? "npm"
-					: target.target.registry?.includes("pkg.github.com")
-						? "GitHub Packages"
-						: target.target.registry
-							? new URL(target.target.registry).hostname
-							: "jsr.io";
-
+				const registryName = getRegistryDisplayName(target.target.registry);
 				const packageUrl = getPackagePageUrl(target.target.registry ?? null, pkg.name, pkg.version);
-
 				publishedTargets.push({ pkg, target, registryName, packageUrl });
 			}
 		}

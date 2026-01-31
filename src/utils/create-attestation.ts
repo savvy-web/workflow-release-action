@@ -8,6 +8,7 @@ import { exec } from "@actions/exec";
 import { context } from "@actions/github";
 import type { EnhancedCycloneDXDocument } from "../types/sbom-config.js";
 import { enhanceSBOMMetadata } from "./enhance-sbom-metadata.js";
+import { isGitHubPackagesRegistry } from "./registry-utils.js";
 
 /**
  * Result of creating a GitHub attestation
@@ -462,7 +463,7 @@ export async function createPackageAttestation(options: CreatePackageAttestation
 
 		// Link attestation to GitHub Packages artifact via storage record API
 		// Only applicable for GitHub Packages registry
-		if (registry?.includes("pkg.github.com")) {
+		if (isGitHubPackagesRegistry(registry)) {
 			const storageRecordIds = await createArtifactMetadataRecord(packageName, version, digest, token);
 			if (storageRecordIds && storageRecordIds.length > 0) {
 				info(`  ✓ Linked attestation to GitHub Packages artifact (storage record IDs: ${storageRecordIds.join(",")})`);

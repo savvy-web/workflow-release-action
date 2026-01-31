@@ -2,21 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { debug } from "@actions/core";
 import type { PackageJson, PreValidationResult, ResolvedTarget } from "../types/publish-config.js";
-
-/**
- * Get a display name for a registry URL
- */
-function getRegistryDisplayName(registry: string | null): string {
-	if (!registry) return "unknown";
-	if (registry.includes("npmjs.org")) return "npm";
-	if (registry.includes("pkg.github.com")) return "GitHub Packages";
-	try {
-		const url = new URL(registry);
-		return url.hostname;
-	} catch {
-		return registry;
-	}
-}
+import { getRegistryDisplayName, isGitHubPackagesRegistry } from "./registry-utils.js";
 
 /**
  * Validate package.json for npm-compatible registries
@@ -53,7 +39,7 @@ function validateNpmPackageJson(
 	}
 
 	// For GitHub Packages, name must be scoped
-	if (target.registry?.includes("pkg.github.com") && pkg.name && !pkg.name.startsWith("@")) {
+	if (isGitHubPackagesRegistry(target.registry) && pkg.name && !pkg.name.startsWith("@")) {
 		errors.push(`GitHub Packages requires scoped package names (@org/name), got: ${pkg.name}`);
 	}
 

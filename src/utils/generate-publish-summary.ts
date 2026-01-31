@@ -6,21 +6,7 @@ import type {
 	ResolvedTarget,
 } from "../types/publish-config.js";
 import type { PublishPackagesResult } from "./publish-packages.js";
-
-/**
- * Get a display name for a registry URL
- */
-function getRegistryDisplayName(registry: string | null): string {
-	if (!registry) return "jsr.io";
-	if (registry.includes("npmjs.org")) return "npm";
-	if (registry.includes("pkg.github.com")) return "GitHub Packages";
-	try {
-		const url = new URL(registry);
-		return url.hostname;
-	} catch {
-		return registry;
-	}
-}
+import { getRegistryDisplayName, isCustomRegistry, isGitHubPackagesRegistry, isNpmRegistry } from "./registry-utils.js";
 
 /**
  * Get the web URL for a package on a registry
@@ -36,12 +22,12 @@ export function getPackagePageUrl(registry: string | null, packageName: string, 
 		return `https://jsr.io/${packageName}@${version}`;
 	}
 
-	if (registry.includes("npmjs.org")) {
+	if (isNpmRegistry(registry)) {
 		// npm public registry
 		return `https://www.npmjs.com/package/${packageName}/v/${version}`;
 	}
 
-	if (registry.includes("pkg.github.com")) {
+	if (isGitHubPackagesRegistry(registry)) {
 		// GitHub Packages - URL format: https://github.com/orgs/{owner}/packages/npm/package/{package-name-without-scope}
 		// For user packages: https://github.com/{owner}/packages/npm/package/{package-name-without-scope}
 		const { owner } = context.repo;
@@ -441,7 +427,7 @@ export interface PackagePublishResult {
  */
 function categorizeError(error: string, stderr: string, registry?: string | null): { category: string; hint: string } {
 	const combined = `${error} ${stderr}`.toLowerCase();
-	const isGitHubPackages = registry?.includes("pkg.github.com");
+	const isGitHubPackages = isGitHubPackagesRegistry(registry);
 
 	// GitHub Packages specific errors
 	if (isGitHubPackages) {
@@ -797,8 +783,8 @@ function categorizePreValidationError(
 	registryUrl?: string | null,
 ): { category: string; icon: string; hint: string } {
 	const lowerError = error.toLowerCase();
-	const isGitHubPackages = registryUrl?.includes("pkg.github.com");
-	const isCustomRegistry = registryUrl && !registryUrl.includes("npmjs.org") && !isGitHubPackages;
+	const isGitHubPkg = isGitHubPackagesRegistry(registryUrl);
+	const isCustom = isCustomRegistry(registryUrl);
 
 	// Content mismatch
 	if (lowerError.includes("content mismatch") || lowerError.includes("differs")) {
@@ -810,7 +796,7 @@ function categorizePreValidationError(
 	}
 
 	// GitHub Packages specific
-	if (isGitHubPackages) {
+	if (isGitHubPkg) {
 		if (lowerError.includes("401") || lowerError.includes("unauthorized")) {
 			return {
 				icon: "\u{1F512}",
@@ -828,7 +814,7 @@ function categorizePreValidationError(
 	}
 
 	// Custom registry errors
-	if (isCustomRegistry) {
+	if (isCustom) {
 		if (lowerError.includes("401") || lowerError.includes("unauthorized")) {
 			// Extract hostname for the example
 			let hostname = "your-registry.example.com";
@@ -1011,10 +997,7 @@ export function generatePreValidationFailureSummary(details: PreValidationDetail
 	sections.push("### \u{1F527} Configuration\n");
 
 	// Check if any errors are from custom registries
-	const hasCustomRegistryErrors = details.errorTargets.some((t) => {
-		const url = t.registryUrl || "";
-		return url && !url.includes("npmjs.org") && !url.includes("pkg.github.com");
-	});
+	const hasCustomRegistryErrors = details.errorTargets.some((t) => isCustomRegistry(t.registryUrl));
 
 	if (hasCustomRegistryErrors) {
 		sections.push("**For custom registries**, add auth to `custom-registries`:\n");
@@ -1024,11 +1007,7 @@ export function generatePreValidationFailureSummary(details: PreValidationDetail
 		sections.push("    custom-registries: |");
 		// Show unique custom registries from errors
 		const customRegistries = new Set(
-			details.errorTargets
-				.filter(
-					(t) => t.registryUrl && !t.registryUrl.includes("npmjs.org") && !t.registryUrl.includes("pkg.github.com"),
-				)
-				.map((t) => t.registryUrl),
+			details.errorTargets.filter((t) => isCustomRegistry(t.registryUrl)).map((t) => t.registryUrl),
 		);
 		for (const registry of customRegistries) {
 			// Extract hostname for secret name suggestion
@@ -1049,7 +1028,7 @@ export function generatePreValidationFailureSummary(details: PreValidationDetail
 	}
 
 	// GitHub Packages help
-	const hasGitHubPackagesErrors = details.errorTargets.some((t) => t.registryUrl?.includes("pkg.github.com"));
+	const hasGitHubPackagesErrors = details.errorTargets.some((t) => isGitHubPackagesRegistry(t.registryUrl));
 	if (hasGitHubPackagesErrors) {
 		sections.push("**For GitHub Packages**, ensure GitHub App permissions:\n");
 		sections.push("```yaml");
@@ -1061,7 +1040,7 @@ export function generatePreValidationFailureSummary(details: PreValidationDetail
 	}
 
 	// npm help
-	const hasNpmErrors = details.errorTargets.some((t) => t.registryUrl?.includes("npmjs.org"));
+	const hasNpmErrors = details.errorTargets.some((t) => isNpmRegistry(t.registryUrl));
 	if (hasNpmErrors) {
 		sections.push("**For npm**, configure trusted publishing:\n");
 		sections.push("1. Go to https://www.npmjs.com/settings/packages");

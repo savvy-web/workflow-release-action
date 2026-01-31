@@ -1,21 +1,7 @@
 import { info } from "@actions/core";
 import { exec } from "@actions/exec";
 import type { DryRunResult, PackageStats, ResolvedTarget } from "../types/publish-config.js";
-
-/**
- * Get a display name for a registry URL
- */
-function getRegistryDisplayName(registry: string | null): string {
-	if (!registry) return "unknown";
-	if (registry.includes("npmjs.org")) return "npm";
-	if (registry.includes("pkg.github.com")) return "GitHub Packages";
-	try {
-		const url = new URL(registry);
-		return url.hostname;
-	} catch {
-		return registry;
-	}
-}
+import { getRegistryDisplayName } from "./registry-utils.js";
 
 /**
  * Get the publish command for a package manager

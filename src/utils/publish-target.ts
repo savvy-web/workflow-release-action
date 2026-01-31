@@ -11,21 +11,7 @@ import type {
 	ResolvedTarget,
 	VersionCheckResult,
 } from "../types/publish-config.js";
-
-/**
- * Get a display name for a registry URL
- */
-function getRegistryDisplayName(registry: string | null): string {
-	if (!registry) return "unknown";
-	if (registry.includes("npmjs.org")) return "npm";
-	if (registry.includes("pkg.github.com")) return "GitHub Packages";
-	try {
-		const url = new URL(registry);
-		return url.hostname;
-	} catch {
-		return registry;
-	}
-}
+import { generatePackageViewUrl, getRegistryDisplayName } from "./registry-utils.js";
 
 /**
  * Generate a URL to the published package
@@ -35,21 +21,7 @@ function generatePackageUrl(target: ResolvedTarget): string | undefined {
 	if (!existsSync(pkgJsonPath)) return undefined;
 
 	const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as { name?: string };
-	const name = pkg.name;
-
-	if (!name || !target.registry) return undefined;
-
-	if (target.registry.includes("npmjs.org")) {
-		return `https://www.npmjs.com/package/${name}`;
-	}
-
-	if (target.registry.includes("pkg.github.com")) {
-		const scope = name.startsWith("@") ? name.split("/")[0].slice(1) : undefined;
-		return scope ? `https://github.com/${scope}/packages` : undefined;
-	}
-
-	// Custom registries - no standard URL format
-	return undefined;
+	return generatePackageViewUrl(target.registry, pkg.name);
 }
 
 /**

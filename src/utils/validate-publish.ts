@@ -14,6 +14,7 @@ import { generatePublishSummary } from "./generate-publish-summary.js";
 import { getChangesetStatus } from "./get-changeset-status.js";
 import { preValidateTarget } from "./pre-validate-target.js";
 import { setupRegistryAuth } from "./registry-auth.js";
+import { isGitHubPackagesRegistry, isNpmRegistry } from "./registry-utils.js";
 import { countChangesetsPerPackage } from "./release-summary-helpers.js";
 import { getRegistryDisplayName, resolveTargets } from "./resolve-targets.js";
 
@@ -302,10 +303,10 @@ export async function validatePublish(
 	// Calculate overall success and backwards-compatible flags
 	const allValid = validations.every((v) => v.allTargetsValid);
 	const npmReady = validations.every((v) =>
-		v.targets.filter((t) => t.target.registry?.includes("npmjs.org")).every((t) => t.canPublish),
+		v.targets.filter((t) => isNpmRegistry(t.target.registry)).every((t) => t.canPublish),
 	);
 	const githubPackagesReady = validations.every((v) =>
-		v.targets.filter((t) => t.target.registry?.includes("pkg.github.com")).every((t) => t.canPublish),
+		v.targets.filter((t) => isGitHubPackagesRegistry(t.target.registry)).every((t) => t.canPublish),
 	);
 
 	// Build maps for enhanced summary

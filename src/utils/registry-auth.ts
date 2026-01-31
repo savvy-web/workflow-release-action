@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { debug, getInput, getState, info, setSecret, warning } from "@actions/core";
 import { exec } from "@actions/exec";
 import type { AuthSetupResult, ResolvedTarget } from "../types/publish-config.js";
+import { isGitHubPackagesRegistry, isNpmRegistry } from "./registry-utils.js";
 import { registryToEnvName } from "./resolve-targets.js";
 
 /** Timeout for registry health checks (10 seconds) */
@@ -69,7 +70,7 @@ function isOidcRegistry(registry: string | null): boolean {
 
 	// npm public registry supports OIDC trusted publishing
 	// BUT only if no NPM_TOKEN is provided (OIDC requires package to exist first)
-	if (registry.includes("registry.npmjs.org")) {
+	if (isNpmRegistry(registry)) {
 		const npmToken = getNpmToken();
 		if (npmToken) {
 			// Token provided - don't use OIDC, use token auth instead
@@ -212,7 +213,7 @@ export async function validateRegistriesReachable(
 
 		// Skip well-known registries that we trust
 		if (isOidcRegistry(target.registry)) continue;
-		if (target.registry.includes("npm.pkg.github.com")) continue;
+		if (isGitHubPackagesRegistry(target.registry)) continue;
 
 		debug(`Checking registry reachability: ${target.registry}`);
 		const result = await checkRegistryReachable(target.registry, packageManager);
@@ -263,14 +264,14 @@ export function validateTokensAvailable(targets: ResolvedTarget[]): {
 		}
 
 		// For npm registry with NPM_TOKEN, check the special env var we set up
-		if (target.registry?.includes("registry.npmjs.org") && !target.tokenEnv) {
+		if (isNpmRegistry(target.registry) && !target.tokenEnv) {
 			// Check if REGISTRY_NPMJS_ORG_TOKEN was set by setupRegistryAuth
 			if (process.env.REGISTRY_NPMJS_ORG_TOKEN) {
 				debug("npm registry using NPM_TOKEN - token available");
 				continue;
 			}
 			missing.push({
-				registry: target.registry,
+				registry: target.registry || "unknown",
 				tokenEnv: "NPM_TOKEN or OIDC trusted publishing",
 			});
 			continue;
@@ -332,7 +333,7 @@ export function generateNpmrc(targets: ResolvedTarget[]): void {
 		// Determine the token env var to use
 		// For npm registry with NPM_TOKEN, we use REGISTRY_NPMJS_ORG_TOKEN (set by setupRegistryAuth)
 		let tokenEnvVar = target.tokenEnv;
-		if (!tokenEnvVar && target.registry.includes("registry.npmjs.org")) {
+		if (!tokenEnvVar && isNpmRegistry(target.registry)) {
 			// npm registry without explicit tokenEnv - check for NPM_TOKEN setup
 			tokenEnvVar = "REGISTRY_NPMJS_ORG_TOKEN";
 		}

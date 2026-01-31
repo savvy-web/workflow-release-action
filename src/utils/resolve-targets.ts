@@ -1,6 +1,9 @@
 import { resolve } from "node:path";
 import type { PackageJson, PublishTarget, ResolvedTarget, Target } from "../types/publish-config.js";
 
+// Re-export from registry-utils for backward compatibility
+export { getRegistryDisplayName } from "./registry-utils.js";
+
 /**
  * Known shorthands that expand to full targets
  *
@@ -202,22 +205,4 @@ export function resolveTargets(packagePath: string, packageJson: PackageJson): R
 			tokenEnv,
 		};
 	});
-}
-
-/**
- * Get a display name for a registry URL
- *
- * @param registry - Registry URL to convert to display name
- * @returns Human-readable registry name
- */
-export function getRegistryDisplayName(registry: string | null): string {
-	if (!registry) return "jsr.io";
-	if (registry.includes("npmjs.org")) return "npm";
-	if (registry.includes("pkg.github.com")) return "GitHub Packages";
-	try {
-		const url = new URL(registry);
-		return url.hostname;
-	} catch {
-		return registry;
-	}
 }

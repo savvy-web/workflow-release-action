@@ -20,6 +20,7 @@ import {
 	publishToTarget,
 } from "./publish-target.js";
 import { setupRegistryAuth } from "./registry-auth.js";
+import { isGitHubPackagesRegistry } from "./registry-utils.js";
 import { getRegistryDisplayName, resolveTargets } from "./resolve-targets.js";
 import { sortPackageMapTopologically } from "./topological-sort.js";
 
@@ -635,7 +636,7 @@ export async function publishPackages(
 
 		if (allTargetsSuccess && !hasProvenanceAttestation && prePackedTarballs.size > 0) {
 			// Find a GitHub Packages target for linking, fall back to first npm target
-			const githubPackagesTarget = npmTargets.find((t) => t.registry?.includes("pkg.github.com"));
+			const githubPackagesTarget = npmTargets.find((t) => isGitHubPackagesRegistry(t.registry));
 			const attestationTarget = githubPackagesTarget || npmTargets[0];
 
 			if (attestationTarget) {

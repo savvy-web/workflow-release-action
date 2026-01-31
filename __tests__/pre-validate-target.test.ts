@@ -544,7 +544,8 @@ describe("pre-validate-target", () => {
 				const result = await preValidateTarget(target, "@test/package", "1.0.0");
 
 				expect(result.valid).toBe(false);
-				expect(result.errors[0]).toContain("unknown");
+				// null registry is displayed as "jsr.io" (the default for null registries)
+				expect(result.errors[0]).toContain("jsr.io");
 			});
 		});
 
