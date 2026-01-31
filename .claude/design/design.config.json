@@ -1,0 +1,32 @@
+{
+	"$schema": "../skills/design-config/json-schemas/current.json",
+	"version": "1.0.0",
+	"project": {
+		"name": "savvy-web/github-action-builder",
+		"type": "library",
+		"repository": "https://github.com/savvy-web/github-action-builder",
+		"maintainer": "C. Spencer Beggs"
+	},
+	"paths": {
+		"designDocs": ".claude/design",
+		"plans": ".claude/plans",
+		"skills": ".claude/skills",
+		"context": "CLAUDE.md"
+	},
+	"modules": {
+		"github-action-builder": {
+			"path": ".",
+			"designDocsPath": ".claude/design/github-action-builder",
+			"categories": ["architecture", "api", "cli"],
+			"maintainer": "C. Spencer Beggs"
+		}
+	},
+	"quality": {
+		"designDocs": {
+			"maxLineLength": 120,
+			"requireFrontmatter": true,
+			"requireTOC": true,
+			"minSections": ["Overview", "Current State", "Rationale"]
+		}
+	}
+}
