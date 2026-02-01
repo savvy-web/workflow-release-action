@@ -84,32 +84,67 @@ function validateSBOMConfig(config: unknown): string[] {
 }
 
 /**
+ * Check if a parsed config is a direct SBOMMetadataConfig (unwrapped)
+ *
+ * @remarks
+ * Detects if the config contains SBOM fields at the root level rather than
+ * being wrapped in an `sbom` key. This allows users to store the SBOM template
+ * directly in the environment variable without the wrapper.
+ *
+ * @param config - Parsed configuration object
+ * @returns True if config appears to be an unwrapped SBOMMetadataConfig
+ */
+function isUnwrappedSBOMConfig(config: Record<string, unknown>): boolean {
+	// Check for characteristic SBOM config fields at root level
+	const sbomFields = ["supplier", "copyright", "publisher", "documentationUrl"];
+	return sbomFields.some((field) => config[field] !== undefined);
+}
+
+/**
  * Parse and validate configuration content
  *
  * @param content - Raw JSON/JSONC content
  * @param source - Source description for error messages
+ * @param allowUnwrapped - Whether to detect and wrap unwrapped SBOM configs
  * @returns Parsed configuration or undefined if invalid
  */
-function parseConfigContent(content: string, source: string): ReleaseConfig | undefined {
+function parseConfigContent(
+	content: string,
+	source: string,
+	allowUnwrapped: boolean = false,
+): ReleaseConfig | undefined {
 	try {
 		const errors: Array<{ error: number; offset: number; length: number }> = [];
-		const parsed = parseJsonc(content, errors) as ReleaseConfig;
+		const parsed = parseJsonc(content, errors) as Record<string, unknown>;
 
 		if (errors.length > 0) {
 			warning(`Failed to parse config from ${source}: JSON syntax error at offset ${errors[0].offset}`);
 			return undefined;
 		}
 
+		// Check if this is an unwrapped SBOM config (e.g., { supplier: {...} } instead of { sbom: { supplier: {...} } })
+		if (allowUnwrapped && isUnwrappedSBOMConfig(parsed) && parsed.sbom === undefined) {
+			debug(`Detected unwrapped SBOM config from ${source}, wrapping in 'sbom' key`);
+			const wrapped: ReleaseConfig = { sbom: parsed as SBOMMetadataConfig };
+			const validationErrors = validateSBOMConfig(wrapped.sbom);
+			if (validationErrors.length > 0) {
+				warning(`Invalid SBOM config from ${source}:\n${validationErrors.map((e) => `  - ${e}`).join("\n")}`);
+				return undefined;
+			}
+			return wrapped;
+		}
+
 		// Validate the sbom section if present
-		if (parsed.sbom !== undefined) {
-			const validationErrors = validateSBOMConfig(parsed.sbom);
+		const releaseConfig = parsed as ReleaseConfig;
+		if (releaseConfig.sbom !== undefined) {
+			const validationErrors = validateSBOMConfig(releaseConfig.sbom);
 			if (validationErrors.length > 0) {
 				warning(`Invalid SBOM config from ${source}:\n${validationErrors.map((e) => `  - ${e}`).join("\n")}`);
 				return undefined;
 			}
 		}
 
-		return parsed;
+		return releaseConfig;
 	} catch (error) {
 		warning(`Failed to parse config from ${source}: ${error instanceof Error ? error.message : String(error)}`);
 		return undefined;
@@ -160,6 +195,12 @@ function loadConfigFromLocalRepo(rootDir: string): ReleaseConfig | undefined {
  * and pass it to the workflow as an environment variable. The variable can
  * be defined at the repository or organization level.
  *
+ * The variable can contain either:
+ * - A full ReleaseConfig: `{ "sbom": { "supplier": {...} } }`
+ * - An unwrapped SBOMMetadataConfig: `{ "supplier": {...} }`
+ *
+ * Unwrapped configs are automatically detected and wrapped for convenience.
+ *
  * @returns Configuration or undefined if not set
  */
 function loadConfigFromEnvVar(): ReleaseConfig | undefined {
@@ -171,7 +212,8 @@ function loadConfigFromEnvVar(): ReleaseConfig | undefined {
 
 	debug(`Found ${CONFIG_ENV_VAR} environment variable`);
 
-	const config = parseConfigContent(envValue, `${CONFIG_ENV_VAR} variable`);
+	// Allow unwrapped SBOM configs from environment variable for convenience
+	const config = parseConfigContent(envValue, `${CONFIG_ENV_VAR} variable`, true);
 
 	if (config !== undefined) {
 		info(`Loaded Silk release config from ${CONFIG_ENV_VAR} variable`);

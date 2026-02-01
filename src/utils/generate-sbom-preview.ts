@@ -255,7 +255,10 @@ function generateSummaryContent(packages: PackageSBOMPreview[], packageManager: 
 
 	// Detailed SBOM content for each package
 	for (const pkg of packages) {
-		lines.push(`### 📦 ${pkg.name}@${pkg.version}`);
+		// Use warning icon if there are NTIA compliance issues or other warnings
+		const hasWarnings = pkg.warning || (pkg.ntiaCompliance && !pkg.ntiaCompliance.compliant);
+		const headerIcon = pkg.error ? "❌" : hasWarnings ? "⚠️" : "📦";
+		lines.push(`### ${headerIcon} ${pkg.name}@${pkg.version}`);
 		lines.push("");
 
 		if (pkg.error) {

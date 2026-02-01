@@ -394,6 +394,83 @@ describe("load-release-config", () => {
 			expect(result.config).toBeUndefined();
 			expect(result.source.source).toBe("none");
 		});
+
+		it("should auto-wrap unwrapped SBOM config from environment variable", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			// Config without the 'sbom' wrapper - direct SBOM config at root level
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				supplier: { name: "Unwrapped Company", url: "https://example.com" },
+				copyright: { holder: "Unwrapped LLC" },
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config).toEqual({
+				sbom: {
+					supplier: { name: "Unwrapped Company", url: "https://example.com" },
+					copyright: { holder: "Unwrapped LLC" },
+				},
+			});
+			expect(result.source.source).toBe("variable");
+			expect(core.debug).toHaveBeenCalledWith(expect.stringContaining("Detected unwrapped SBOM config"));
+		});
+
+		it("should auto-wrap unwrapped SBOM config with publisher field", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				publisher: "Test Publisher",
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config).toEqual({
+				sbom: {
+					publisher: "Test Publisher",
+				},
+			});
+			expect(result.source.source).toBe("variable");
+		});
+
+		it("should auto-wrap unwrapped SBOM config with documentationUrl field", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				documentationUrl: "https://docs.example.com",
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config).toEqual({
+				sbom: {
+					documentationUrl: "https://docs.example.com",
+				},
+			});
+			expect(result.source.source).toBe("variable");
+		});
+
+		it("should not wrap config that already has sbom key", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			// Config with both sbom key AND supplier at root (sbom key should take precedence)
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				sbom: { supplier: { name: "Wrapped Company" } },
+				supplier: { name: "Root Company" }, // Should be ignored
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config?.sbom?.supplier?.name).toBe("Wrapped Company");
+		});
+
+		it("should return undefined for invalid unwrapped SBOM config", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				supplier: { name: 123 }, // invalid - name should be string
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config).toBeUndefined();
+			expect(result.source.source).toBe("none");
+		});
 	});
 
 	describe("loadSBOMConfig", () => {
