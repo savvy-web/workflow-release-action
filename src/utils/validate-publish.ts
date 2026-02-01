@@ -47,12 +47,14 @@ export interface PublishValidationResult {
  * @param packageManager - Package manager to use
  * @param targetBranch - Target branch for merge base comparison
  * @param dryRun - Whether this is a dry-run
+ * @param rootDirectory - Repository root directory for loading SBOM config
  * @returns Promise resolving to validation result
  */
 export async function validatePublish(
 	packageManager: string,
 	targetBranch: string,
 	dryRun: boolean,
+	rootDirectory?: string,
 ): Promise<PublishValidationResult> {
 	startGroup("Validating package publishing (multi-registry)");
 
@@ -274,6 +276,10 @@ export async function validatePublish(
 			const sbomResult = await validateSBOMGeneration({
 				directory: npmTargetWithProvenance.directory,
 				packageManager,
+				packageName: release.name,
+				packageVersion: release.newVersion,
+				rootDirectory,
+				enhanceMetadata: true,
 			});
 			sbomValidation = sbomResult;
 

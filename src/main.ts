@@ -429,7 +429,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				status: "in_progress",
 			});
 
-			publishResult = await validatePublish(inputs.packageManager, inputs.targetBranch, inputs.dryRun);
+			publishResult = await validatePublish(inputs.packageManager, inputs.targetBranch, inputs.dryRun, process.cwd());
 
 			// Set outputs for backwards compatibility
 			setOutput("npm_publish_ready", publishResult.npmReady);
@@ -513,7 +513,7 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			status: "in_progress",
 		});
 
-		const sbomResult = await generateSBOMPreview(inputs.packageManager, publishResult.validations);
+		const sbomResult = await generateSBOMPreview(inputs.packageManager, publishResult.validations, process.cwd());
 
 		// Complete the SBOM preview check
 		await octokit.rest.checks.update({
