@@ -394,6 +394,94 @@ describe("load-release-config", () => {
 			expect(result.config).toBeUndefined();
 			expect(result.source.source).toBe("none");
 		});
+
+		it("should reject unwrapped SBOM config from environment variable with helpful error", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			// Config without the 'sbom' wrapper - direct SBOM config at root level
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				supplier: { name: "Unwrapped Company", url: "https://example.com" },
+				copyright: { holder: "Unwrapped LLC" },
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config).toBeUndefined();
+			expect(result.source.source).toBe("none");
+			expect(core.warning).toHaveBeenCalledWith(
+				expect.stringContaining("Found SBOM fields (supplier, copyright) at root level"),
+			);
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining('must be wrapped in an "sbom" key'));
+		});
+
+		it("should reject unwrapped config with single SBOM field", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				publisher: "Test Publisher",
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config).toBeUndefined();
+			expect(result.source.source).toBe("none");
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Found SBOM fields (publisher) at root level"));
+		});
+
+		it("should reject unwrapped config with documentationUrl field", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				documentationUrl: "https://docs.example.com",
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config).toBeUndefined();
+			expect(result.source.source).toBe("none");
+			expect(core.warning).toHaveBeenCalledWith(
+				expect.stringContaining("Found SBOM fields (documentationUrl) at root level"),
+			);
+		});
+
+		it("should include schema URL in unwrapped config error message", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				supplier: { name: "Test" },
+			});
+
+			loadReleaseConfig("/repo");
+
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("silk-release.schema.json"));
+		});
+
+		it("should accept config that has sbom key along with other non-SBOM root fields", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			// Config with sbom key should be accepted even if there are also extra root-level fields
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				sbom: { supplier: { name: "Wrapped Company" } },
+				someOtherField: "value", // Non-SBOM field is fine
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config?.sbom?.supplier?.name).toBe("Wrapped Company");
+			expect(result.source.source).toBe("variable");
+		});
+
+		it("should also reject unwrapped config in local files", () => {
+			vi.mocked(existsSync).mockImplementation((path) => {
+				return String(path).endsWith(".github/silk-release.json");
+			});
+			vi.mocked(readFileSync).mockReturnValue(
+				JSON.stringify({
+					supplier: { name: "Local Unwrapped" },
+				}),
+			);
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config).toBeUndefined();
+			expect(result.source.source).toBe("none");
+			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Found SBOM fields (supplier) at root level"));
+		});
 	});
 
 	describe("loadSBOMConfig", () => {

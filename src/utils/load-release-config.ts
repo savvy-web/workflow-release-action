@@ -84,6 +84,25 @@ function validateSBOMConfig(config: unknown): string[] {
 }
 
 /**
+ * SBOM config fields that indicate an unwrapped configuration
+ */
+const SBOM_CONFIG_FIELDS = ["supplier", "copyright", "publisher", "documentationUrl"] as const;
+
+/**
+ * Check if a parsed config appears to be an unwrapped SBOMMetadataConfig
+ *
+ * @remarks
+ * Detects if the config contains SBOM fields at the root level rather than
+ * being wrapped in an `sbom` key. This is used to provide helpful error messages.
+ *
+ * @param config - Parsed configuration object
+ * @returns Array of SBOM field names found at root level, empty if none
+ */
+function detectUnwrappedSBOMFields(config: Record<string, unknown>): string[] {
+	return SBOM_CONFIG_FIELDS.filter((field) => config[field] !== undefined);
+}
+
+/**
  * Parse and validate configuration content
  *
  * @param content - Raw JSON/JSONC content
@@ -93,23 +112,37 @@ function validateSBOMConfig(config: unknown): string[] {
 function parseConfigContent(content: string, source: string): ReleaseConfig | undefined {
 	try {
 		const errors: Array<{ error: number; offset: number; length: number }> = [];
-		const parsed = parseJsonc(content, errors) as ReleaseConfig;
+		const parsed = parseJsonc(content, errors) as Record<string, unknown>;
 
 		if (errors.length > 0) {
 			warning(`Failed to parse config from ${source}: JSON syntax error at offset ${errors[0].offset}`);
 			return undefined;
 		}
 
+		// Check for unwrapped SBOM config (common mistake)
+		const unwrappedFields = detectUnwrappedSBOMFields(parsed);
+		if (unwrappedFields.length > 0 && parsed.sbom === undefined) {
+			warning(
+				`Invalid config structure from ${source}: Found SBOM fields (${unwrappedFields.join(", ")}) at root level.\n` +
+					`  The configuration must be wrapped in an "sbom" key.\n` +
+					`  Expected: { "sbom": { "supplier": {...}, ... } }\n` +
+					`  Found:    { "supplier": {...}, ... }\n` +
+					`  See schema: https://raw.githubusercontent.com/savvy-web/workflow-release-action/main/.github/silk-release.schema.json`,
+			);
+			return undefined;
+		}
+
 		// Validate the sbom section if present
-		if (parsed.sbom !== undefined) {
-			const validationErrors = validateSBOMConfig(parsed.sbom);
+		const releaseConfig = parsed as ReleaseConfig;
+		if (releaseConfig.sbom !== undefined) {
+			const validationErrors = validateSBOMConfig(releaseConfig.sbom);
 			if (validationErrors.length > 0) {
 				warning(`Invalid SBOM config from ${source}:\n${validationErrors.map((e) => `  - ${e}`).join("\n")}`);
 				return undefined;
 			}
 		}
 
-		return parsed;
+		return releaseConfig;
 	} catch (error) {
 		warning(`Failed to parse config from ${source}: ${error instanceof Error ? error.message : String(error)}`);
 		return undefined;
@@ -160,7 +193,10 @@ function loadConfigFromLocalRepo(rootDir: string): ReleaseConfig | undefined {
  * and pass it to the workflow as an environment variable. The variable can
  * be defined at the repository or organization level.
  *
- * @returns Configuration or undefined if not set
+ * The variable must contain a valid ReleaseConfig with the SBOM config
+ * wrapped in an `sbom` key: `{ "sbom": { "supplier": {...} } }`
+ *
+ * @returns Configuration or undefined if not set or invalid
  */
 function loadConfigFromEnvVar(): ReleaseConfig | undefined {
 	const envValue = process.env[CONFIG_ENV_VAR];
