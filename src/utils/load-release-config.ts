@@ -84,20 +84,22 @@ function validateSBOMConfig(config: unknown): string[] {
 }
 
 /**
- * Check if a parsed config is a direct SBOMMetadataConfig (unwrapped)
+ * SBOM config fields that indicate an unwrapped configuration
+ */
+const SBOM_CONFIG_FIELDS = ["supplier", "copyright", "publisher", "documentationUrl"] as const;
+
+/**
+ * Check if a parsed config appears to be an unwrapped SBOMMetadataConfig
  *
  * @remarks
  * Detects if the config contains SBOM fields at the root level rather than
- * being wrapped in an `sbom` key. This allows users to store the SBOM template
- * directly in the environment variable without the wrapper.
+ * being wrapped in an `sbom` key. This is used to provide helpful error messages.
  *
  * @param config - Parsed configuration object
- * @returns True if config appears to be an unwrapped SBOMMetadataConfig
+ * @returns Array of SBOM field names found at root level, empty if none
  */
-function isUnwrappedSBOMConfig(config: Record<string, unknown>): boolean {
-	// Check for characteristic SBOM config fields at root level
-	const sbomFields = ["supplier", "copyright", "publisher", "documentationUrl"];
-	return sbomFields.some((field) => config[field] !== undefined);
+function detectUnwrappedSBOMFields(config: Record<string, unknown>): string[] {
+	return SBOM_CONFIG_FIELDS.filter((field) => config[field] !== undefined);
 }
 
 /**
@@ -105,14 +107,9 @@ function isUnwrappedSBOMConfig(config: Record<string, unknown>): boolean {
  *
  * @param content - Raw JSON/JSONC content
  * @param source - Source description for error messages
- * @param allowUnwrapped - Whether to detect and wrap unwrapped SBOM configs
  * @returns Parsed configuration or undefined if invalid
  */
-function parseConfigContent(
-	content: string,
-	source: string,
-	allowUnwrapped: boolean = false,
-): ReleaseConfig | undefined {
+function parseConfigContent(content: string, source: string): ReleaseConfig | undefined {
 	try {
 		const errors: Array<{ error: number; offset: number; length: number }> = [];
 		const parsed = parseJsonc(content, errors) as Record<string, unknown>;
@@ -122,16 +119,17 @@ function parseConfigContent(
 			return undefined;
 		}
 
-		// Check if this is an unwrapped SBOM config (e.g., { supplier: {...} } instead of { sbom: { supplier: {...} } })
-		if (allowUnwrapped && isUnwrappedSBOMConfig(parsed) && parsed.sbom === undefined) {
-			debug(`Detected unwrapped SBOM config from ${source}, wrapping in 'sbom' key`);
-			const wrapped: ReleaseConfig = { sbom: parsed as SBOMMetadataConfig };
-			const validationErrors = validateSBOMConfig(wrapped.sbom);
-			if (validationErrors.length > 0) {
-				warning(`Invalid SBOM config from ${source}:\n${validationErrors.map((e) => `  - ${e}`).join("\n")}`);
-				return undefined;
-			}
-			return wrapped;
+		// Check for unwrapped SBOM config (common mistake)
+		const unwrappedFields = detectUnwrappedSBOMFields(parsed);
+		if (unwrappedFields.length > 0 && parsed.sbom === undefined) {
+			warning(
+				`Invalid config structure from ${source}: Found SBOM fields (${unwrappedFields.join(", ")}) at root level.\n` +
+					`  The configuration must be wrapped in an "sbom" key.\n` +
+					`  Expected: { "sbom": { "supplier": {...}, ... } }\n` +
+					`  Found:    { "supplier": {...}, ... }\n` +
+					`  See schema: https://raw.githubusercontent.com/savvy-web/workflow-release-action/main/.github/silk-release.schema.json`,
+			);
+			return undefined;
 		}
 
 		// Validate the sbom section if present
@@ -195,13 +193,10 @@ function loadConfigFromLocalRepo(rootDir: string): ReleaseConfig | undefined {
  * and pass it to the workflow as an environment variable. The variable can
  * be defined at the repository or organization level.
  *
- * The variable can contain either:
- * - A full ReleaseConfig: `{ "sbom": { "supplier": {...} } }`
- * - An unwrapped SBOMMetadataConfig: `{ "supplier": {...} }`
+ * The variable must contain a valid ReleaseConfig with the SBOM config
+ * wrapped in an `sbom` key: `{ "sbom": { "supplier": {...} } }`
  *
- * Unwrapped configs are automatically detected and wrapped for convenience.
- *
- * @returns Configuration or undefined if not set
+ * @returns Configuration or undefined if not set or invalid
  */
 function loadConfigFromEnvVar(): ReleaseConfig | undefined {
 	const envValue = process.env[CONFIG_ENV_VAR];
@@ -212,8 +207,7 @@ function loadConfigFromEnvVar(): ReleaseConfig | undefined {
 
 	debug(`Found ${CONFIG_ENV_VAR} environment variable`);
 
-	// Allow unwrapped SBOM configs from environment variable for convenience
-	const config = parseConfigContent(envValue, `${CONFIG_ENV_VAR} variable`, true);
+	const config = parseConfigContent(envValue, `${CONFIG_ENV_VAR} variable`);
 
 	if (config !== undefined) {
 		info(`Loaded Silk release config from ${CONFIG_ENV_VAR} variable`);
