@@ -193,6 +193,15 @@ function loadConfigFromLocalRepo(rootDir: string): ReleaseConfig | undefined {
  * and pass it to the workflow as an environment variable. The variable can
  * be defined at the repository or organization level.
  *
+ * **Important:** Organization/repository variables must be explicitly passed
+ * to the action as environment variables in the workflow:
+ *
+ * ```yaml
+ * - uses: savvy-web/workflow-release-action@main
+ *   env:
+ *     SILK_RELEASE_SBOM_TEMPLATE: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
+ * ```
+ *
  * The variable must contain a valid ReleaseConfig with the SBOM config
  * wrapped in an `sbom` key: `{ "sbom": { "supplier": {...} } }`
  *
@@ -202,15 +211,19 @@ function loadConfigFromEnvVar(): ReleaseConfig | undefined {
 	const envValue = process.env[CONFIG_ENV_VAR];
 
 	if (!envValue) {
+		debug(`${CONFIG_ENV_VAR} environment variable not set`);
 		return undefined;
 	}
 
-	debug(`Found ${CONFIG_ENV_VAR} environment variable`);
+	info(`Found ${CONFIG_ENV_VAR} environment variable (${envValue.length} chars)`);
 
 	const config = parseConfigContent(envValue, `${CONFIG_ENV_VAR} variable`);
 
 	if (config !== undefined) {
 		info(`Loaded Silk release config from ${CONFIG_ENV_VAR} variable`);
+		if (config.sbom?.supplier?.name) {
+			info(`  Supplier: ${config.sbom.supplier.name}`);
+		}
 		debug(`Release config: ${JSON.stringify(config)}`);
 		return config;
 	}

@@ -360,6 +360,19 @@ function generateSummaryContent(packages: PackageSBOMPreview[], packageManager: 
 				lines.push("");
 			}
 		}
+
+		// Raw SBOM JSON for debugging
+		if (pkg.sbom) {
+			lines.push("<details>");
+			lines.push("<summary>🔍 View raw SBOM JSON</summary>");
+			lines.push("");
+			lines.push("```json");
+			lines.push(JSON.stringify(pkg.sbom, null, 2));
+			lines.push("```");
+			lines.push("");
+			lines.push("</details>");
+			lines.push("");
+		}
 	}
 
 	// Footer with info about SBOM
