@@ -45,6 +45,10 @@ export interface SBOMPreviewResult {
 	checkTitle: string;
 	/** Whether all SBOMs generated successfully */
 	success: boolean;
+	/** Whether any packages have NTIA compliance warnings */
+	hasComplianceWarnings: boolean;
+	/** Summary of compliance issues (for outcome display) */
+	complianceSummary?: string;
 }
 
 /**
@@ -211,11 +215,33 @@ export async function generateSBOMPreview(
 				? `${packages.length} SBOM(s) generated successfully`
 				: `${successCount}/${packages.length} SBOM(s) generated`;
 
+	// Check for NTIA compliance warnings
+	const packagesWithWarnings = packages.filter((p) => p.ntiaCompliance && !p.ntiaCompliance.compliant);
+	const hasComplianceWarnings = packagesWithWarnings.length > 0;
+
+	// Generate compliance summary for outcome display
+	let complianceSummary: string | undefined;
+	if (hasComplianceWarnings) {
+		const missingFields = new Set<string>();
+		for (const pkg of packagesWithWarnings) {
+			if (pkg.ntiaCompliance) {
+				for (const field of pkg.ntiaCompliance.fields) {
+					if (!field.passed) {
+						missingFields.add(field.name);
+					}
+				}
+			}
+		}
+		complianceSummary = `Missing: ${Array.from(missingFields).join(", ")}`;
+	}
+
 	return {
 		packages,
 		summaryContent,
 		checkTitle,
 		success: allSuccess,
+		hasComplianceWarnings,
+		complianceSummary,
 	};
 }
 

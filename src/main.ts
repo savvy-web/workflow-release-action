@@ -565,7 +565,9 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 				name: checkNames[4],
 				success: sbomResult.success,
 				checkId: checkIds[4],
-				outcome: sbomResult.checkTitle,
+				outcome: sbomResult.hasComplianceWarnings
+					? `${sbomResult.checkTitle} (⚠️ ${sbomResult.complianceSummary})`
+					: sbomResult.checkTitle,
 			},
 		];
 
