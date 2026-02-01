@@ -75,6 +75,29 @@ inputs:
     required: false
     default: ""
 
+  # SBOM metadata configuration
+  sbom-config:
+    description: |
+      SBOM metadata configuration (JSON). Provides supplier, copyright, and other
+      metadata for NTIA-compliant SBOM generation.
+
+      Format: JSON with an "sbom" key containing the metadata:
+      {
+        "sbom": {
+          "supplier": {
+            "name": "Your Company",
+            "url": "https://company.com",
+            "contact": { "email": "security@company.com" }
+          },
+          "copyright": { "holder": "Your Company LLC" }
+        }
+      }
+
+      Can also be passed via SILK_RELEASE_SBOM_TEMPLATE environment variable.
+      Input takes precedence over environment variable.
+    required: false
+    default: ""
+
   # Custom registry authentication
   # NOTE: JSR uses OIDC trusted publishing - no tokens needed
   # NOTE: GitHub Packages uses the GitHub App token automatically

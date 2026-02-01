@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { debug, info, warning } from "@actions/core";
+import { debug, getInput, info, warning } from "@actions/core";
 import { parse as parseJsonc } from "jsonc-parser";
 import type { ReleaseConfig, SBOMMetadataConfig } from "../types/sbom-config.js";
 
@@ -13,6 +13,11 @@ const CONFIG_FILE_NAMES = ["silk-release.json", "silk-release.jsonc"] as const;
  * Environment variable name for variable-based configuration
  */
 const CONFIG_ENV_VAR = "SILK_RELEASE_SBOM_TEMPLATE";
+
+/**
+ * Action input name for SBOM configuration
+ */
+const CONFIG_INPUT_NAME = "sbom-config";
 
 /**
  * Validate SBOM metadata configuration
@@ -232,11 +237,51 @@ function loadConfigFromEnvVar(): ReleaseConfig | undefined {
 }
 
 /**
+ * Load configuration from sbom-config action input
+ *
+ * @remarks
+ * This allows the SBOM configuration to be passed directly as an action input,
+ * which is useful for reusable workflows where environment variables don't
+ * propagate through the workflow_call chain.
+ *
+ * @returns Configuration or undefined if not set or invalid
+ */
+function loadConfigFromInput(): ReleaseConfig | undefined {
+	let inputValue: string;
+	try {
+		inputValue = getInput(CONFIG_INPUT_NAME);
+	} catch {
+		// getInput may throw if we're not in an action context
+		return undefined;
+	}
+
+	if (!inputValue) {
+		debug(`${CONFIG_INPUT_NAME} action input not set`);
+		return undefined;
+	}
+
+	info(`Found ${CONFIG_INPUT_NAME} action input (${inputValue.length} chars)`);
+
+	const config = parseConfigContent(inputValue, `${CONFIG_INPUT_NAME} input`);
+
+	if (config !== undefined) {
+		info(`Loaded Silk release config from ${CONFIG_INPUT_NAME} input`);
+		if (config.sbom?.supplier?.name) {
+			info(`  Supplier: ${config.sbom.supplier.name}`);
+		}
+		debug(`Release config: ${JSON.stringify(config)}`);
+		return config;
+	}
+
+	return undefined;
+}
+
+/**
  * Configuration source information
  */
 export interface ConfigSource {
 	/** Where the configuration was loaded from */
-	source: "local" | "variable" | "none";
+	source: "local" | "input" | "variable" | "none";
 	/** Path or identifier of the config location */
 	location?: string;
 }
@@ -260,12 +305,13 @@ export interface LoadReleaseConfigResult {
  * 1. **Local repository**: `.github/silk-release.json` or `.github/silk-release.jsonc`
  *    in the repository being released
  *
- * 2. **Variable**: `SILK_RELEASE_SBOM_TEMPLATE` environment variable, which should be
- *    populated from a repository or organization variable
+ * 2. **Action input**: `sbom-config` input parameter (useful for reusable workflows)
+ *
+ * 3. **Environment variable**: `SILK_RELEASE_SBOM_TEMPLATE` environment variable
  *
  * The first configuration found is used. This allows:
  * - Repository-specific config in the repo itself
- * - Organization-wide defaults via org-level variables
+ * - Organization-wide defaults via action input or environment variable
  *
  * @param rootDir - Repository root directory (defaults to process.cwd())
  * @returns Release configuration with source information
@@ -290,7 +336,16 @@ export function loadReleaseConfig(rootDir?: string): LoadReleaseConfigResult {
 		};
 	}
 
-	// 2. Check environment variable
+	// 2. Check action input (preferred for reusable workflows)
+	const inputConfig = loadConfigFromInput();
+	if (inputConfig !== undefined) {
+		return {
+			config: inputConfig,
+			source: { source: "input", location: CONFIG_INPUT_NAME },
+		};
+	}
+
+	// 3. Check environment variable
 	const envConfig = loadConfigFromEnvVar();
 	if (envConfig !== undefined) {
 		return {

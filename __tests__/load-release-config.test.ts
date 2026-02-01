@@ -13,6 +13,7 @@ vi.mock("@actions/core", () => ({
 	debug: vi.fn(),
 	info: vi.fn(),
 	warning: vi.fn(),
+	getInput: vi.fn(),
 }));
 
 describe("load-release-config", () => {
@@ -481,6 +482,100 @@ describe("load-release-config", () => {
 			expect(result.config).toBeUndefined();
 			expect(result.source.source).toBe("none");
 			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Found SBOM fields (supplier) at root level"));
+		});
+
+		it("should load config from sbom-config action input", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			vi.mocked(core.getInput).mockReturnValue(
+				JSON.stringify({
+					sbom: { supplier: { name: "Input Company" } },
+				}),
+			);
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config).toEqual({
+				sbom: { supplier: { name: "Input Company" } },
+			});
+			expect(result.source.source).toBe("input");
+			expect(result.source.location).toBe("sbom-config");
+		});
+
+		it("should prefer local file over action input", () => {
+			vi.mocked(existsSync).mockImplementation((path) => {
+				return String(path).endsWith(".github/silk-release.json");
+			});
+			vi.mocked(readFileSync).mockReturnValue(
+				JSON.stringify({
+					sbom: { supplier: { name: "Local Company" } },
+				}),
+			);
+			vi.mocked(core.getInput).mockReturnValue(
+				JSON.stringify({
+					sbom: { supplier: { name: "Input Company" } },
+				}),
+			);
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config?.sbom?.supplier?.name).toBe("Local Company");
+			expect(result.source.source).toBe("local");
+		});
+
+		it("should prefer action input over environment variable", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			vi.mocked(core.getInput).mockReturnValue(
+				JSON.stringify({
+					sbom: { supplier: { name: "Input Company" } },
+				}),
+			);
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				sbom: { supplier: { name: "Env Company" } },
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config?.sbom?.supplier?.name).toBe("Input Company");
+			expect(result.source.source).toBe("input");
+		});
+
+		it("should handle empty sbom-config input", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			vi.mocked(core.getInput).mockReturnValue("");
+
+			const result = loadReleaseConfig("/repo");
+
+			expect(result.config).toBeUndefined();
+			expect(result.source.source).toBe("none");
+		});
+
+		it("should handle getInput throwing (not in action context)", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			vi.mocked(core.getInput).mockImplementation(() => {
+				throw new Error("Input required and not supplied: sbom-config");
+			});
+			process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({
+				sbom: { supplier: { name: "Fallback Env" } },
+			});
+
+			const result = loadReleaseConfig("/repo");
+
+			// Should fall back to env var
+			expect(result.config?.sbom?.supplier?.name).toBe("Fallback Env");
+			expect(result.source.source).toBe("variable");
+		});
+
+		it("should log supplier name when loading from input", () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+			vi.mocked(core.getInput).mockReturnValue(
+				JSON.stringify({
+					sbom: { supplier: { name: "Test Supplier Inc" } },
+				}),
+			);
+
+			loadReleaseConfig("/repo");
+
+			expect(core.info).toHaveBeenCalledWith("  Supplier: Test Supplier Inc");
 		});
 	});
 
