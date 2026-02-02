@@ -51,7 +51,7 @@
 		"@savvy-web/github-action-builder": "^0.1.0",
 		"@savvy-web/lint-staged": "^0.1.2",
 		"@types/node": "^25.1.0",
-		"@typescript/native-preview": "7.0.0-dev.20260131.1",
+		"@typescript/native-preview": "7.0.0-dev.20260201.1",
 		"@vitest/coverage-v8": "^4.0.18",
 		"husky": "^9.1.7",
 		"markdownlint-cli2": "^0.20.0",
