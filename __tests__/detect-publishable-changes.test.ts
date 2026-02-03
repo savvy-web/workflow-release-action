@@ -520,4 +520,112 @@ describe("detect-publishable-changes", () => {
 		expect(result.packages.length).toBe(1);
 		expect(core.debug).toHaveBeenCalledWith('Root package "@test/pkg-a" already in package map from workspaces');
 	});
+
+	it("should aggregate releases from changesets when top-level releases is empty", async () => {
+		// This happens with private packages where changesets doesn't populate top-level releases
+		// but the releases are nested in changesets[].releases
+		changesetStatusContent = JSON.stringify({
+			releases: [], // Empty top-level releases (private package behavior)
+			changesets: [
+				{
+					id: "feature-change",
+					summary: "Add new feature",
+					releases: [{ name: "@test/private-pkg", type: "minor" }],
+				},
+			],
+		});
+
+		vi.mocked(getWorkspaces).mockReturnValue([
+			{
+				name: "@test/private-pkg",
+				path: "/test/workspace",
+				packageJson: {
+					name: "@test/private-pkg",
+					version: "1.0.0",
+					private: true,
+					packageJsonPath: "/test/workspace/package.json",
+					publishConfig: { access: "public", targets: [{ protocol: "npm" }] },
+				},
+			},
+		]);
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(core.info).toHaveBeenCalledWith("Aggregated 1 release(s) from changesets");
+		expect(result.hasChanges).toBe(true);
+		expect(result.packages.length).toBe(1);
+		expect(result.packages[0].name).toBe("@test/private-pkg");
+	});
+
+	it("should not aggregate when top-level releases already has packages", async () => {
+		changesetStatusContent = JSON.stringify({
+			releases: [{ name: "@test/public-pkg", newVersion: "2.0.0", type: "major" }],
+			changesets: [
+				{
+					id: "breaking-change",
+					summary: "Breaking change",
+					releases: [{ name: "@test/public-pkg", type: "major" }],
+				},
+			],
+		});
+
+		vi.mocked(getWorkspaces).mockReturnValue([
+			{
+				name: "@test/public-pkg",
+				path: "/test/workspace/packages/public",
+				packageJson: {
+					name: "@test/public-pkg",
+					version: "1.0.0",
+					packageJsonPath: "/test/workspace/packages/public/package.json",
+					publishConfig: { access: "public" },
+				},
+			},
+		]);
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		// Should NOT have called aggregation
+		expect(core.info).not.toHaveBeenCalledWith(expect.stringContaining("Aggregated"));
+		expect(result.hasChanges).toBe(true);
+		expect(result.packages.length).toBe(1);
+	});
+
+	it("should deduplicate packages when aggregating from multiple changesets", async () => {
+		changesetStatusContent = JSON.stringify({
+			releases: [],
+			changesets: [
+				{
+					id: "change-1",
+					summary: "Feature 1",
+					releases: [{ name: "@test/pkg", type: "minor" }],
+				},
+				{
+					id: "change-2",
+					summary: "Feature 2",
+					releases: [{ name: "@test/pkg", type: "patch" }], // Same package, different type
+				},
+			],
+		});
+
+		vi.mocked(getWorkspaces).mockReturnValue([
+			{
+				name: "@test/pkg",
+				path: "/test/workspace",
+				packageJson: {
+					name: "@test/pkg",
+					version: "1.0.0",
+					private: true,
+					packageJsonPath: "/test/workspace/package.json",
+					publishConfig: { access: "public" },
+				},
+			},
+		]);
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		// Should only aggregate once (first occurrence wins)
+		expect(core.info).toHaveBeenCalledWith("Aggregated 1 release(s) from changesets");
+		expect(result.hasChanges).toBe(true);
+		expect(result.packages.length).toBe(1);
+	});
 });

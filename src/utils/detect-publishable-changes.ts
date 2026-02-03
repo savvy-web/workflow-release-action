@@ -172,6 +172,35 @@ export async function detectPublishableChanges(
 			changesetStatus = { releases: [], changesets: [] };
 		} else {
 			changesetStatus = JSON.parse(trimmedOutput) as ChangesetStatus;
+
+			// If top-level releases is empty but changesets have releases, aggregate them
+			// This handles private packages where changesets doesn't populate top-level releases
+			if (
+				(!changesetStatus.releases || changesetStatus.releases.length === 0) &&
+				changesetStatus.changesets.length > 0
+			) {
+				const aggregatedReleases = new Map<string, ChangesetPackage>();
+				for (const cs of changesetStatus.changesets) {
+					if (cs.releases) {
+						for (const rel of cs.releases) {
+							// Use the first occurrence of each package (type from first changeset)
+							if (!aggregatedReleases.has(rel.name)) {
+								aggregatedReleases.set(rel.name, {
+									name: rel.name,
+									type: rel.type as ChangesetPackage["type"],
+									oldVersion: "", // Will be populated later from package.json
+									newVersion: "", // Will be populated later from package.json
+								});
+							}
+						}
+					}
+				}
+				if (aggregatedReleases.size > 0) {
+					changesetStatus.releases = Array.from(aggregatedReleases.values());
+					info(`Aggregated ${changesetStatus.releases.length} release(s) from changesets`);
+				}
+			}
+
 			info(`Parsed ${changesetStatus.changesets.length} changesets, ${changesetStatus.releases.length} releases`);
 		}
 	} catch (err) {
