@@ -61,9 +61,18 @@ export async function validatePublish(
 	// Get changeset status to find packages with version changes
 	info("Getting changeset status");
 	const changesetStatus = await getChangesetStatus(packageManager, targetBranch);
-	info(`Found ${changesetStatus.releases.length} package(s) with version changes`);
 
-	if (changesetStatus.releases.length === 0) {
+	// Filter out packages with type "none" - these have no version bump and don't need publishing
+	// This can include workspace packages that are not being released
+	const releasesToValidate = changesetStatus.releases.filter((r) => r.type !== "none");
+	info(
+		`Found ${releasesToValidate.length} package(s) with version changes` +
+			(changesetStatus.releases.length > releasesToValidate.length
+				? ` (filtered out ${changesetStatus.releases.length - releasesToValidate.length} packages with no version bump)`
+				: ""),
+	);
+
+	if (releasesToValidate.length === 0) {
 		info("No packages to validate");
 		endGroup();
 
@@ -83,7 +92,7 @@ export async function validatePublish(
 	const packageTargetsMap = new Map<string, { path: string; targets: ResolvedTarget[] }>();
 	const packageDiscoveryErrors = new Map<string, string>();
 
-	for (const release of changesetStatus.releases) {
+	for (const release of releasesToValidate) {
 		// Find the workspace package path (not the publish directory)
 		const workspacePath = findPackagePath(release.name);
 		if (!workspacePath) {
@@ -139,7 +148,7 @@ export async function validatePublish(
 	// Validate each package and its targets
 	const validations: PackagePublishValidation[] = [];
 
-	for (const release of changesetStatus.releases) {
+	for (const release of releasesToValidate) {
 		// Check if package had discovery errors
 		const discoveryError = packageDiscoveryErrors.get(release.name);
 		if (discoveryError) {
@@ -320,7 +329,7 @@ export async function validatePublish(
 	const currentVersions = new Map<string, string>();
 	const changesetCounts = countChangesetsPerPackage(changesetStatus.changesets);
 
-	for (const release of changesetStatus.releases) {
+	for (const release of releasesToValidate) {
 		bumpTypes.set(release.name, release.type);
 		// oldVersion is the current version before the bump (from merge base)
 		if (release.oldVersion) {

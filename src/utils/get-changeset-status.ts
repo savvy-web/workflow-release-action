@@ -8,7 +8,14 @@ import { exec } from "@actions/exec";
  */
 export interface ChangesetStatusResult {
 	/** Packages with version changes */
-	releases: Array<{ name: string; oldVersion?: string; newVersion: string; type: string }>;
+	releases: Array<{
+		name: string;
+		oldVersion?: string;
+		newVersion: string;
+		type: string;
+		/** Changeset IDs associated with this release */
+		changesets?: string[];
+	}>;
 	/** Changeset information */
 	changesets: Array<{
 		/** Changeset ID */
@@ -81,7 +88,7 @@ export async function getChangesetStatus(
 
 	// If successful and has output, parse and return
 	if (exitCode === 0 && output.trim()) {
-		return JSON.parse(output.trim());
+		return JSON.parse(output.trim()) as ChangesetStatusResult;
 	}
 
 	// Handle case where changesets have already been consumed (versioned)
