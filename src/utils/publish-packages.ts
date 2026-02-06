@@ -370,8 +370,7 @@ export async function publishPackages(
 		const targets = resolveTargets(workspacePath, pkgJson);
 
 		if (targets.length === 0) {
-			info(`Package ${release.name} has no publish targets (private or no publishConfig)`);
-			continue;
+			info(`Package ${release.name} has no publish targets (version-only - GitHub release only)`);
 		}
 
 		packageTargetsMap.set(release.name, {

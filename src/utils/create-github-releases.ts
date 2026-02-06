@@ -436,6 +436,10 @@ export async function createGitHubReleases(
 			}
 		}
 
+		if (publishedTargets.length === 0) {
+			releaseNotes += "> This is a version-only release. No packages were published to a registry.\n\n";
+		}
+
 		if (publishedTargets.length > 0) {
 			releaseNotes += "---\n\n";
 			releaseNotes += "### Publish Summary\n\n";

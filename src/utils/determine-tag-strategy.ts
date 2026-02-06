@@ -91,8 +91,11 @@ export function isMonorepoForTagging(): boolean {
  * @returns Tag strategy with tags to create
  */
 export function determineTagStrategy(publishResults: PackagePublishResult[]): TagStrategyResult {
-	// Filter to only successfully published packages
-	const successfulPackages = publishResults.filter((pkg) => pkg.targets.some((t) => t.success));
+	// Filter to only successful packages: those with at least one successful target,
+	// or version-only packages (empty targets array - nothing to fail)
+	const successfulPackages = publishResults.filter(
+		(pkg) => pkg.targets.length === 0 || pkg.targets.some((t) => t.success),
+	);
 
 	if (successfulPackages.length === 0) {
 		info("No packages were published successfully, no tags to create");
@@ -195,7 +198,10 @@ export function determineReleaseType(
 	publishResults: PackagePublishResult[],
 	bumpTypes: Map<string, string>,
 ): "major" | "minor" | "patch" {
-	const successfulPackages = publishResults.filter((pkg) => pkg.targets.some((t) => t.success));
+	// Include version-only packages (empty targets) in release type determination
+	const successfulPackages = publishResults.filter(
+		(pkg) => pkg.targets.length === 0 || pkg.targets.some((t) => t.success),
+	);
 
 	// Get bump types for successful packages
 	const bumps = successfulPackages

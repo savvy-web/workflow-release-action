@@ -378,6 +378,27 @@ describe("determine-tag-strategy", () => {
 			expect(result.tags[0].name).toBe("@org/pkg-a@1.0.0");
 		});
 
+		it("includes version-only packages (empty targets) in tag strategy", () => {
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/version-only",
+					version: "1.0.0",
+					targets: [], // No publish targets - version-only package
+				},
+			];
+
+			const result = determineTagStrategy(publishResults);
+
+			expect(result.strategy).toBe("single");
+			expect(result.tags).toHaveLength(1);
+			expect(result.tags[0]).toEqual({
+				name: "1.0.0",
+				packageName: "@org/version-only",
+				version: "1.0.0",
+			});
+			expect(result.isFixedVersioning).toBe(true);
+		});
+
 		it("uses single tag when all packages are in same fixed group", () => {
 			vi.mocked(releaseSummaryHelpers.getAllWorkspacePackages).mockReturnValue([
 				{
@@ -670,6 +691,21 @@ describe("determine-tag-strategy", () => {
 			const result = determineReleaseType(publishResults, bumpTypes);
 
 			expect(result).toBe("patch");
+		});
+
+		it("includes version-only packages (empty targets) in release type", () => {
+			const publishResults: PackagePublishResult[] = [
+				{
+					name: "@org/version-only",
+					version: "2.0.0",
+					targets: [], // No publish targets - version-only package
+				},
+			];
+			const bumpTypes = new Map([["@org/version-only", "major"]]);
+
+			const result = determineReleaseType(publishResults, bumpTypes);
+
+			expect(result).toBe("major");
 		});
 
 		it("ignores failed packages", () => {

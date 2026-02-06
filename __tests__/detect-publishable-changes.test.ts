@@ -87,6 +87,7 @@ describe("detect-publishable-changes", () => {
 
 		expect(result.hasChanges).toBe(false);
 		expect(result.packages).toEqual([]);
+		expect(result.versionOnlyPackages).toEqual([]);
 		expect(result.checkId).toBe(12345);
 		expect(mockOctokit.rest.checks.create).toHaveBeenCalled();
 	});
@@ -237,7 +238,7 @@ describe("detect-publishable-changes", () => {
 		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to read/parse changeset status"));
 	});
 
-	it("should skip packages without publishConfig.access", async () => {
+	it("should classify packages without publishConfig.access as version-only", async () => {
 		changesetStatusContent = JSON.stringify({
 			releases: [{ name: "@test/no-access", newVersion: "1.0.0", type: "minor" }],
 			changesets: [],
@@ -257,8 +258,10 @@ describe("detect-publishable-changes", () => {
 
 		const result = await detectPublishableChanges("pnpm", false);
 
-		expect(result.hasChanges).toBe(false);
+		expect(result.hasChanges).toBe(true);
 		expect(result.packages).toEqual([]);
+		expect(result.versionOnlyPackages.length).toBe(1);
+		expect(result.versionOnlyPackages[0].name).toBe("@test/no-access");
 	});
 
 	it("should warn when package.json is not found", async () => {
@@ -588,6 +591,47 @@ describe("detect-publishable-changes", () => {
 		expect(core.info).not.toHaveBeenCalledWith(expect.stringContaining("Aggregated"));
 		expect(result.hasChanges).toBe(true);
 		expect(result.packages.length).toBe(1);
+	});
+
+	it("should separate publishable and version-only packages in mixed scenario", async () => {
+		changesetStatusContent = JSON.stringify({
+			releases: [
+				{ name: "@test/publishable", newVersion: "1.0.0", type: "minor" },
+				{ name: "@test/private-only", newVersion: "2.0.0", type: "patch" },
+			],
+			changesets: [{ id: "change-1", summary: "Test", releases: [] }],
+		});
+
+		vi.mocked(getWorkspaces).mockReturnValue([
+			{
+				name: "@test/publishable",
+				path: "/test/workspace/packages/publishable",
+				packageJson: {
+					name: "@test/publishable",
+					version: "0.0.0",
+					packageJsonPath: "/test/workspace/packages/publishable/package.json",
+					publishConfig: { access: "public" },
+				},
+			},
+			{
+				name: "@test/private-only",
+				path: "/test/workspace/packages/private-only",
+				packageJson: {
+					name: "@test/private-only",
+					version: "0.0.0",
+					private: true,
+					packageJsonPath: "/test/workspace/packages/private-only/package.json",
+				}, // No publishConfig
+			},
+		]);
+
+		const result = await detectPublishableChanges("pnpm", false);
+
+		expect(result.hasChanges).toBe(true);
+		expect(result.packages.length).toBe(1);
+		expect(result.packages[0].name).toBe("@test/publishable");
+		expect(result.versionOnlyPackages.length).toBe(1);
+		expect(result.versionOnlyPackages[0].name).toBe("@test/private-only");
 	});
 
 	it("should deduplicate packages when aggregating from multiple changesets", async () => {

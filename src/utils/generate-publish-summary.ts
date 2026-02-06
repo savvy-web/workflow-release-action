@@ -563,12 +563,15 @@ export function generatePublishResultsSummary(results: PackagePublishResult[], d
 	sections.push("|---|---------|---------|---------|");
 
 	for (const pkg of results) {
-		const pkgSuccess = pkg.targets.every((t) => t.success);
+		const isVersionOnly = pkg.targets.length === 0;
+		const pkgSuccess = isVersionOnly || pkg.targets.every((t) => t.success);
 		const status = pkgSuccess ? "\u2705" : "\u274C";
 		const successCount = pkg.targets.filter((t) => t.success).length;
-		const targetSummary = pkgSuccess
-			? `\u2705 ${pkg.targets.length}/${pkg.targets.length}`
-			: `\u274C ${successCount}/${pkg.targets.length}`;
+		const targetSummary = isVersionOnly
+			? "\u{1F3F7}\uFE0F Version only"
+			: pkgSuccess
+				? `\u2705 ${pkg.targets.length}/${pkg.targets.length}`
+				: `\u274C ${successCount}/${pkg.targets.length}`;
 		sections.push(`| ${status} | ${pkg.name} | ${pkg.version} | ${targetSummary} |`);
 	}
 	sections.push("");

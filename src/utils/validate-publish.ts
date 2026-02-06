@@ -167,7 +167,7 @@ export async function validatePublish(
 
 		const packageInfo = packageTargetsMap.get(release.name);
 		if (!packageInfo || packageInfo.targets.length === 0) {
-			info(`Package ${release.name} has no publish targets (private or no publishConfig)`);
+			info(`Package ${release.name} has no publish targets (version-only — GitHub release only)`);
 			validations.push({
 				name: release.name,
 				version: release.newVersion,

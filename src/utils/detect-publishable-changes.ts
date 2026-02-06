@@ -9,7 +9,7 @@ import { summaryWriter } from "./summary-writer.js";
 /**
  * Package information from changeset status
  */
-interface ChangesetPackage {
+export interface ChangesetPackage {
 	/** Package name */
 	name: string;
 	/** Current version before changeset application */
@@ -85,6 +85,7 @@ export async function detectPublishableChanges(
 ): Promise<{
 	hasChanges: boolean;
 	packages: ChangesetPackage[];
+	versionOnlyPackages: ChangesetPackage[];
 	checkId: number;
 }> {
 	const token = getState("token");
@@ -322,8 +323,9 @@ export async function detectPublishableChanges(
 		info("📦 No packages found in workspace");
 	}
 
-	// Filter for publishable packages
+	// Filter for publishable packages and version-only packages
 	const publishablePackages: ChangesetPackage[] = [];
+	const versionOnlyPackages: ChangesetPackage[] = [];
 
 	for (const release of changesetStatus.releases) {
 		// Skip if no version bump
@@ -354,21 +356,22 @@ export async function detectPublishableChanges(
 			info(`✓ ${release.name} is publishable (access: ${packageJson.publishConfig?.access})`);
 			publishablePackages.push(release);
 		} else {
-			// Log at info level so users can see why packages are skipped
-			const reason =
-				packageJson.private && !hasPublishConfig
-					? "package is private without publishConfig.access"
-					: "missing publishConfig.access (public or restricted)";
-			info(`⚪ Skipping ${release.name}: ${reason}`);
+			// Package has changesets but no publish targets - version-only (GitHub release only)
+			info(`🏷️ ${release.name}: version-only (GitHub release only)`);
+			versionOnlyPackages.push(release);
 		}
 	}
 
 	// Create GitHub check run
 	const checkTitle = dryRun ? "🧪 Detect Publishable Changes (Dry Run)" : "Detect Publishable Changes";
+	const totalReleasable = publishablePackages.length + versionOnlyPackages.length;
 	const checkSummary =
-		publishablePackages.length > 0
-			? `Found ${publishablePackages.length} publishable package(s) with changes`
-			: "No publishable packages with changes";
+		totalReleasable > 0
+			? `Found ${totalReleasable} releasable package(s) with changes` +
+				(versionOnlyPackages.length > 0
+					? ` (${publishablePackages.length} publishable, ${versionOnlyPackages.length} version-only)`
+					: "")
+			: "No releasable packages with changes";
 
 	// Build check details using summaryWriter
 	// The checks API output field expects markdown, not HTML
@@ -384,6 +387,15 @@ export async function detectPublishableChanges(
 			: "_No publishable packages found_";
 
 	checkDetailSections.push({ heading: "Publishable Packages", content: packagesContent });
+
+	if (versionOnlyPackages.length > 0) {
+		const versionOnlyContent = summaryWriter.list(
+			versionOnlyPackages.map(
+				(pkg) => `**${pkg.name}**: \`${pkg.oldVersion}\` → \`${pkg.newVersion}\` (${pkg.type}) — GitHub release only`,
+			),
+		);
+		checkDetailSections.push({ heading: "Version-Only Packages", content: versionOnlyContent });
+	}
 
 	if (dryRun) {
 		checkDetailSections.push({
@@ -429,13 +441,27 @@ export async function detectPublishableChanges(
 			: "_No publishable packages found_";
 
 	jobSummarySections.push({ heading: "Publishable Packages", level: 3, content: jobPackagesContent });
+
+	if (versionOnlyPackages.length > 0) {
+		const jobVersionOnlyContent = summaryWriter.table(
+			["Package", "Current", "Next", "Type"],
+			versionOnlyPackages.map((pkg) => [pkg.name, pkg.oldVersion, pkg.newVersion, pkg.type]),
+		);
+		jobSummarySections.push({
+			heading: "Version-Only Packages (GitHub release only)",
+			level: 3,
+			content: jobVersionOnlyContent,
+		});
+	}
+
 	jobSummarySections.push({ heading: "Changeset Summary", level: 3, content: changesetContent });
 
 	await summaryWriter.write(summaryWriter.build(jobSummarySections));
 
 	return {
-		hasChanges: publishablePackages.length > 0,
+		hasChanges: publishablePackages.length > 0 || versionOnlyPackages.length > 0,
 		packages: publishablePackages,
+		versionOnlyPackages,
 		checkId: checkRun.id,
 	};
 }

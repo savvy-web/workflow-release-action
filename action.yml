@@ -135,9 +135,13 @@ outputs:
 
   # Phase 1: Detection outputs
   has_changes:
-    description: Whether publishable changes were detected
+    description: Whether releasable changes were detected (publishable or version-only)
   publishable_packages:
-    description: JSON array of packages with changes
+    description: JSON array of packages with registry publish targets
+  version_only_packages:
+    description: JSON array of version-only packages (GitHub release only, no registry publishing)
+  releasable_packages:
+    description: JSON array of all releasable packages (publishable + version-only combined)
 
   # Phase 1: Branch outputs
   release_branch_exists:

@@ -132,7 +132,7 @@ describe("publish-packages", () => {
 		expect(result.totalPackages).toBe(0);
 	});
 
-	it("skips private packages without publishConfig", async () => {
+	it("tracks private packages without publishConfig as version-only", async () => {
 		vi.mocked(getChangesetStatus).mockResolvedValue({
 			releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
 			changesets: [],
@@ -146,11 +146,19 @@ describe("publish-packages", () => {
 				private: true,
 			}),
 		);
+		// Build succeeds (needed since version-only packages still go through build)
+		vi.mocked(exec.exec).mockResolvedValue(0);
 
 		const result = await publishPackages("pnpm", "main", false);
 
-		expect(core.info).toHaveBeenCalledWith("Package @org/pkg-a has no publish targets (private or no publishConfig)");
-		expect(result.totalPackages).toBe(0);
+		expect(core.info).toHaveBeenCalledWith(
+			"Package @org/pkg-a has no publish targets (version-only - GitHub release only)",
+		);
+		// Version-only packages are now tracked in packageTargetsMap with 0 targets
+		expect(result.totalPackages).toBe(1);
+		expect(result.success).toBe(true);
+		expect(result.packages.length).toBe(1);
+		expect(result.packages[0].targets).toEqual([]);
 	});
 
 	it("fails if build fails with non-zero exit code", async () => {

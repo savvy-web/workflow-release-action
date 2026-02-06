@@ -216,6 +216,11 @@ async function runPhase1BranchManagement(inputs: {
 
 		setOutput("has_changes", detectionResult.hasChanges);
 		setOutput("publishable_packages", JSON.stringify(detectionResult.packages));
+		setOutput("version_only_packages", JSON.stringify(detectionResult.versionOnlyPackages));
+		setOutput(
+			"releasable_packages",
+			JSON.stringify([...detectionResult.packages, ...detectionResult.versionOnlyPackages]),
+		);
 		setOutput("detection_check_id", detectionResult.checkId);
 
 		logger.endStep();
@@ -417,6 +422,9 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			validations: [],
 		};
 
+		// Track whether we have version-only packages (no publish targets but have changesets)
+		let hasVersionOnlyPackages = false;
+
 		// Only continue with publish validation if builds passed
 		if (buildResult.success) {
 			// Step 3: Validate publishing (multi-registry)
@@ -437,9 +445,21 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 			setOutput("publish_results", JSON.stringify(publishResult.validations));
 
 			// Determine check conclusion
-			const conclusion = publishResult.totalTargets === 0 ? "skipped" : publishResult.success ? "success" : "failure";
-			const title =
-				publishResult.totalTargets === 0
+			// When totalTargets === 0 but validations exist, we have version-only packages
+			hasVersionOnlyPackages =
+				publishResult.totalTargets === 0 &&
+				publishResult.validations.length > 0 &&
+				publishResult.validations.some((v) => !v.discoveryError);
+			const conclusion = hasVersionOnlyPackages
+				? "success"
+				: publishResult.totalTargets === 0
+					? "skipped"
+					: publishResult.success
+						? "success"
+						: "failure";
+			const title = hasVersionOnlyPackages
+				? "Version-only packages — GitHub release only"
+				: publishResult.totalTargets === 0
 					? "No packages to validate"
 					: publishResult.success
 						? `All ${publishResult.readyTargets} target(s) ready to publish`
@@ -632,6 +652,19 @@ async function runPhase2Validation(inputs: Inputs): Promise<void> {
 					commentSections.push({
 						content: publishResult.summary,
 					});
+				}
+
+				// Add version-only packages section if applicable
+				if (buildResult.success && hasVersionOnlyPackages) {
+					const versionOnlyPkgs = publishResult.validations.filter((v) => v.targets.length === 0 && !v.discoveryError);
+					if (versionOnlyPkgs.length > 0) {
+						commentSections.push({
+							heading: "🏷️ Version-Only Packages",
+							level: 3,
+							content: `${summaryWriter.list(versionOnlyPkgs.map((v) => `**${v.name}** → ${v.version}`))}
+> These packages will receive version bumps and GitHub releases only. No registry publishing will occur.`,
+						});
+					}
 				}
 
 				// Add release notes preview link

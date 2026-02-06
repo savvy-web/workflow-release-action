@@ -117,12 +117,6 @@ export async function detectReleasedPackagesFromPR(
 				const currentContent = readFileSync(join(process.cwd(), file.filename), "utf-8");
 				const currentPkg = JSON.parse(currentContent) as PackageJson;
 
-				// Skip private packages without publishConfig
-				if (currentPkg.private && !currentPkg.publishConfig) {
-					debug(`Skipping private package: ${currentPkg.name}`);
-					continue;
-				}
-
 				// Get the file content before the PR (from the base commit)
 				const { data: prData } = await octokit.rest.pulls.get({
 					owner: context.repo.owner,
@@ -250,12 +244,6 @@ export async function detectReleasedPackagesFromCommit(token: string): Promise<D
 
 				const currentContent = readFileSync(fullPath, "utf-8");
 				const currentPkg = JSON.parse(currentContent) as PackageJson;
-
-				// Skip private packages without publishConfig
-				if (currentPkg.private && !currentPkg.publishConfig) {
-					debug(`Skipping private package: ${currentPkg.name}`);
-					continue;
-				}
 
 				// Get old version from base commit
 				let oldVersion = "0.0.0";
