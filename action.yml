@@ -1,12 +1,9 @@
 name: Workflow Release
 description: Automated release management with changesets, build validation, and GitHub releases
-
 branding:
   icon: package
   color: blue
-
 inputs:
-  # GitHub App authentication (required)
   app-id:
     description: GitHub App ID for authentication
     required: true
@@ -24,7 +21,6 @@ inputs:
     description: Skip token revocation in post-action (tokens expire after 1 hour anyway)
     required: false
     default: "false"
-
   release-branch:
     description: Release branch name
     required: false
@@ -52,8 +48,6 @@ inputs:
       Valid values: branch-management, validation, publishing, close-issues, none
     required: false
     default: ""
-
-  # Registry authentication
   npm-token:
     description: |
       NPM access token for publishing to npmjs.org (optional).
@@ -74,8 +68,6 @@ inputs:
       Create at: https://www.npmjs.com/settings/tokens
     required: false
     default: ""
-
-  # SBOM metadata configuration
   sbom-config:
     description: |
       SBOM metadata configuration (JSON). Provides supplier, copyright, and other
@@ -97,10 +89,6 @@ inputs:
       Input takes precedence over environment variable.
     required: false
     default: ""
-
-  # Custom registry authentication
-  # NOTE: JSR uses OIDC trusted publishing - no tokens needed
-  # NOTE: GitHub Packages uses the GitHub App token automatically
   custom-registries:
     description: |
       Custom registries with authentication (one per line).
@@ -123,17 +111,13 @@ inputs:
       Note: GitHub Packages authenticates automatically with the GitHub App token
     required: false
     default: ""
-
 outputs:
-  # Token outputs (when using app-id/private-key)
   token:
     description: Generated GitHub App installation token (for use in subsequent steps)
   installation-id:
     description: GitHub App installation ID
   app-slug:
     description: GitHub App slug (URL-friendly name)
-
-  # Phase 1: Detection outputs
   has_changes:
     description: Whether releasable changes were detected (publishable or version-only)
   publishable_packages:
@@ -142,8 +126,6 @@ outputs:
     description: JSON array of version-only packages (GitHub release only, no registry publishing)
   releasable_packages:
     description: JSON array of all releasable packages (publishable + version-only combined)
-
-  # Phase 1: Branch outputs
   release_branch_exists:
     description: Whether the release branch exists
   release_branch_has_open_pr:
@@ -156,8 +138,6 @@ outputs:
     description: Whether the release branch was updated
   has_conflicts:
     description: Whether the update resulted in conflicts
-
-  # Phase 2: Validation outputs
   linked_issues:
     description: JSON array of linked issues
   builds_passed:
@@ -166,8 +146,6 @@ outputs:
     description: Whether packages are ready for NPM publish
   github_packages_ready:
     description: Whether packages are ready for GitHub Packages
-
-  # Multi-registry publish outputs
   released_packages:
     description: JSON array of released packages with name, version, and targets
   release_type:
@@ -180,7 +158,6 @@ outputs:
     description: JSON array of publish results per package and target
   success:
     description: Whether the release was fully successful
-
 runs:
   using: node24
   pre: dist/pre.js

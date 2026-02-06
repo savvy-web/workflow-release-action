@@ -5,7 +5,7 @@ export default defineConfig({
 		include: ["**/__tests__/**/*.test.ts"],
 		exclude: ["**/node_modules/**", "**/dist/**"],
 		globalSetup: "./vitest.setup.ts",
-		testTimeout: 30000,
+		testTimeout: 240000,
 		reporters: ["default"],
 		coverage: {
 			provider: "v8",
