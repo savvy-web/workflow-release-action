@@ -2,11 +2,17 @@
 	"name": "@savvy-web/workflow-release-action",
 	"version": "0.0.0",
 	"private": true,
-	"description": "A private repository for GitHub-related tools and utilities.",
+	"description": "Automated release management GitHub Action with changesets, multi-registry publishing, and GitHub releases.",
+	"homepage": "https://github.com/savvy-web/workflow-release-action#readme",
+	"bugs": {
+		"url": "https://github.com/savvy-web/workflow-release-action/issues"
+	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/savvy-web/workflow-release-action.git"
 	},
+	"license": "MIT",
+	"author": "Savvy Web Systems <spencer@savvyweb.systems> (https://savvyweb.systems)",
 	"type": "module",
 	"scripts": {
 		"build": "turbo run build:prod --log-order=grouped",

@@ -18,3 +18,5 @@ Please include:
 - Any suggested fixes (optional)
 
 We will acknowledge receipt within 72 hours and provide updates as we investigate. We appreciate responsible disclosure and will credit reporters in release notes unless anonymity is requested.
+
+You can also report vulnerabilities through [GitHub Security Advisories](https://github.com/savvy-web/workflow-release-action/security/advisories/new).
