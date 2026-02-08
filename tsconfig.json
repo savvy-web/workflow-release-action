@@ -9,9 +9,14 @@
 		"resolveJsonModule": true,
 		"skipLibCheck": true,
 		"strict": true,
-		"target": "ES2022",
-		"types": ["vitest/globals"]
+		"target": "ES2022"
 	},
 	"exclude": ["node_modules", "dist"],
-	"include": ["**/*.ts", "**/*.test.ts", "types/**/*.d.ts", "**/*.cjs"]
+	"include": [
+		"*.{ts,mts,cts,d.ts}",
+		"lib/**/*.{ts,mts,cts,d.ts}",
+		"src/**/*.{ts,mts,cts,d.ts}",
+		"__tests__/**/*.{ts,mts,cts,d.ts}",
+		"types/**/*.d.ts"
+	]
 }
