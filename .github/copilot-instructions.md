@@ -54,7 +54,7 @@ pnpm lint:fix:unsafe # Apply all fixes (use with caution)
 
 **Expected Output:** "Checked X files in Yms. No fixes applied." (if clean)
 
-**Scope:** Checks TypeScript, JavaScript, JSON, JSONC files using Biome 2.3.6
+**Scope:** Checks TypeScript, JavaScript, JSON, JSONC files using Biome 2.3.14
 **Time:** ~200ms with no issues
 **Failures:** Will exit with code 1 and show errors if any issues found
 

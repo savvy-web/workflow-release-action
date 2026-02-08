@@ -1,7 +1,7 @@
 import * as core from "@actions/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfos } from "workspace-tools";
-import { getWorkspaces } from "workspace-tools";
+import { getWorkspaceInfos } from "workspace-tools";
 import { clearWorkspaceCache, findPackagePath, findPublishablePath } from "../src/utils/find-package-path.js";
 import { cleanupTestEnvironment, setupTestEnvironment } from "./utils/github-mocks.js";
 
@@ -28,7 +28,7 @@ describe("find-package-path", () => {
 
 	describe("findPackagePath", () => {
 		it("should find package path from workspace-tools", () => {
-			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/my-package")]);
+			vi.mocked(getWorkspaceInfos).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/my-package")]);
 
 			const result = findPackagePath("@test/pkg");
 
@@ -37,7 +37,7 @@ describe("find-package-path", () => {
 		});
 
 		it("should return null for unknown package", () => {
-			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/other", "/workspace/pkgs/other")]);
+			vi.mocked(getWorkspaceInfos).mockReturnValue([createWorkspace("@test/other", "/workspace/pkgs/other")]);
 
 			const result = findPackagePath("@test/unknown");
 
@@ -46,19 +46,19 @@ describe("find-package-path", () => {
 		});
 
 		it("should cache workspace data between calls", () => {
-			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/pkg")]);
+			vi.mocked(getWorkspaceInfos).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/pkg")]);
 
 			// First call
 			findPackagePath("@test/pkg");
 			// Second call
 			findPackagePath("@test/pkg");
 
-			// getWorkspaces should only be called once due to caching
-			expect(getWorkspaces).toHaveBeenCalledTimes(1);
+			// getWorkspaceInfos should only be called once due to caching
+			expect(getWorkspaceInfos).toHaveBeenCalledTimes(1);
 		});
 
 		it("should append publishSubdir to path when provided", () => {
-			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/my-package")]);
+			vi.mocked(getWorkspaceInfos).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/my-package")]);
 
 			const result = findPackagePath("@test/pkg", "dist/npm");
 
@@ -67,7 +67,7 @@ describe("find-package-path", () => {
 		});
 
 		it("should handle multiple packages in workspace", () => {
-			vi.mocked(getWorkspaces).mockReturnValue([
+			vi.mocked(getWorkspaceInfos).mockReturnValue([
 				createWorkspace("@test/pkg-a", "/workspace/pkgs/a"),
 				createWorkspace("@test/pkg-b", "/workspace/pkgs/b"),
 				createWorkspace("@test/pkg-c", "/workspace/pkgs/c"),
@@ -79,7 +79,7 @@ describe("find-package-path", () => {
 		});
 
 		it("should log workspace discovery info", () => {
-			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/pkg")]);
+			vi.mocked(getWorkspaceInfos).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/pkg")]);
 
 			findPackagePath("@test/pkg");
 
@@ -89,7 +89,7 @@ describe("find-package-path", () => {
 
 	describe("findPublishablePath", () => {
 		it("should return dist/npm path for package", () => {
-			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/my-package")]);
+			vi.mocked(getWorkspaceInfos).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/my-package")]);
 
 			const result = findPublishablePath("@test/pkg");
 
@@ -97,7 +97,7 @@ describe("find-package-path", () => {
 		});
 
 		it("should return null for unknown package", () => {
-			vi.mocked(getWorkspaces).mockReturnValue([]);
+			vi.mocked(getWorkspaceInfos).mockReturnValue([]);
 
 			const result = findPublishablePath("@test/unknown");
 
@@ -107,18 +107,18 @@ describe("find-package-path", () => {
 
 	describe("clearWorkspaceCache", () => {
 		it("should clear cache and allow fresh workspace discovery", () => {
-			vi.mocked(getWorkspaces).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/pkg")]);
+			vi.mocked(getWorkspaceInfos).mockReturnValue([createWorkspace("@test/pkg", "/workspace/pkgs/pkg")]);
 
 			// First call
 			findPackagePath("@test/pkg");
-			expect(getWorkspaces).toHaveBeenCalledTimes(1);
+			expect(getWorkspaceInfos).toHaveBeenCalledTimes(1);
 
 			// Clear cache
 			clearWorkspaceCache();
 
-			// Second call should invoke getWorkspaces again
+			// Second call should invoke getWorkspaceInfos again
 			findPackagePath("@test/pkg");
-			expect(getWorkspaces).toHaveBeenCalledTimes(2);
+			expect(getWorkspaceInfos).toHaveBeenCalledTimes(2);
 		});
 	});
 });

@@ -3,7 +3,7 @@ import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findProjectRoot, getWorkspaces } from "workspace-tools";
+import { findProjectRoot, getWorkspaceInfos } from "workspace-tools";
 import { detectPublishableChanges } from "../src/utils/detect-publishable-changes.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { MockOctokit } from "./utils/test-types.js";
@@ -57,7 +57,7 @@ describe("detect-publishable-changes", () => {
 
 		// Mock workspace-tools - default to empty workspace
 		vi.mocked(findProjectRoot).mockReturnValue("/test/workspace");
-		vi.mocked(getWorkspaces).mockReturnValue([]);
+		vi.mocked(getWorkspaceInfos).mockReturnValue([]);
 
 		// Mock readFile - handles both changeset status file and root package.json
 		vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
@@ -102,7 +102,7 @@ describe("detect-publishable-changes", () => {
 		});
 
 		// Mock workspace-tools to return packages
-		vi.mocked(getWorkspaces).mockReturnValue([
+		vi.mocked(getWorkspaceInfos).mockReturnValue([
 			{
 				name: "@test/pkg-a",
 				path: "/test/workspace/packages/pkg-a",
@@ -142,7 +142,7 @@ describe("detect-publishable-changes", () => {
 			changesets: [],
 		});
 
-		vi.mocked(getWorkspaces).mockReturnValue([
+		vi.mocked(getWorkspaceInfos).mockReturnValue([
 			{
 				name: "@test/pkg-a",
 				path: "/test/workspace/packages/pkg-a",
@@ -244,7 +244,7 @@ describe("detect-publishable-changes", () => {
 			changesets: [],
 		});
 
-		vi.mocked(getWorkspaces).mockReturnValue([
+		vi.mocked(getWorkspaceInfos).mockReturnValue([
 			{
 				name: "@test/no-access",
 				path: "/test/workspace/packages/no-access",
@@ -271,7 +271,7 @@ describe("detect-publishable-changes", () => {
 		});
 
 		// Return empty workspaces - package not found
-		vi.mocked(getWorkspaces).mockReturnValue([]);
+		vi.mocked(getWorkspaceInfos).mockReturnValue([]);
 
 		const result = await detectPublishableChanges("pnpm", false);
 
@@ -301,7 +301,7 @@ describe("detect-publishable-changes", () => {
 			],
 		});
 
-		vi.mocked(getWorkspaces).mockReturnValue([
+		vi.mocked(getWorkspaceInfos).mockReturnValue([
 			{
 				name: "@test/pkg-a",
 				path: "/test/workspace/packages/pkg-a",
@@ -327,7 +327,7 @@ describe("detect-publishable-changes", () => {
 		});
 
 		// Package not in workspaces
-		vi.mocked(getWorkspaces).mockReturnValue([]);
+		vi.mocked(getWorkspaceInfos).mockReturnValue([]);
 
 		const result = await detectPublishableChanges("pnpm", false);
 
@@ -403,7 +403,7 @@ describe("detect-publishable-changes", () => {
 		});
 
 		// No workspaces, but root package.json matches
-		vi.mocked(getWorkspaces).mockReturnValue([]);
+		vi.mocked(getWorkspaceInfos).mockReturnValue([]);
 		vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
 			const pathStr = String(path);
 			if (pathStr.includes("changeset-status")) {
@@ -432,7 +432,7 @@ describe("detect-publishable-changes", () => {
 	it("should handle findProjectRoot returning undefined", async () => {
 		// Simulate workspace-tools not finding a project root
 		vi.mocked(findProjectRoot).mockReturnValue(undefined as unknown as string);
-		vi.mocked(getWorkspaces).mockReturnValue([]);
+		vi.mocked(getWorkspaceInfos).mockReturnValue([]);
 
 		const result = await detectPublishableChanges("pnpm", false);
 
@@ -440,9 +440,9 @@ describe("detect-publishable-changes", () => {
 		expect(core.debug).toHaveBeenCalledWith("workspace-tools findProjectRoot: null");
 	});
 
-	it("should handle getWorkspaces throwing an error", async () => {
+	it("should handle getWorkspaceInfos throwing an error", async () => {
 		vi.mocked(findProjectRoot).mockReturnValue("/test/workspace");
-		vi.mocked(getWorkspaces).mockImplementation(() => {
+		vi.mocked(getWorkspaceInfos).mockImplementation(() => {
 			throw new Error("workspace-tools error: unsupported lock file");
 		});
 
@@ -453,7 +453,7 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should warn when root package.json has no name field", async () => {
-		vi.mocked(getWorkspaces).mockReturnValue([]);
+		vi.mocked(getWorkspaceInfos).mockReturnValue([]);
 		vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
 			const pathStr = String(path);
 			if (pathStr.includes("changeset-status")) {
@@ -472,7 +472,7 @@ describe("detect-publishable-changes", () => {
 	});
 
 	it("should warn when root package.json read fails", async () => {
-		vi.mocked(getWorkspaces).mockReturnValue([]);
+		vi.mocked(getWorkspaceInfos).mockReturnValue([]);
 		vi.mocked(readFile).mockImplementation(async (path: Parameters<typeof readFile>[0]) => {
 			const pathStr = String(path);
 			if (pathStr.includes("changeset-status")) {
@@ -495,7 +495,7 @@ describe("detect-publishable-changes", () => {
 		});
 
 		// Workspace already contains the package
-		vi.mocked(getWorkspaces).mockReturnValue([
+		vi.mocked(getWorkspaceInfos).mockReturnValue([
 			{
 				name: "@test/pkg-a",
 				path: "/test/workspace/packages/pkg-a",
@@ -538,7 +538,7 @@ describe("detect-publishable-changes", () => {
 			],
 		});
 
-		vi.mocked(getWorkspaces).mockReturnValue([
+		vi.mocked(getWorkspaceInfos).mockReturnValue([
 			{
 				name: "@test/private-pkg",
 				path: "/test/workspace",
@@ -572,7 +572,7 @@ describe("detect-publishable-changes", () => {
 			],
 		});
 
-		vi.mocked(getWorkspaces).mockReturnValue([
+		vi.mocked(getWorkspaceInfos).mockReturnValue([
 			{
 				name: "@test/public-pkg",
 				path: "/test/workspace/packages/public",
@@ -602,7 +602,7 @@ describe("detect-publishable-changes", () => {
 			changesets: [{ id: "change-1", summary: "Test", releases: [] }],
 		});
 
-		vi.mocked(getWorkspaces).mockReturnValue([
+		vi.mocked(getWorkspaceInfos).mockReturnValue([
 			{
 				name: "@test/publishable",
 				path: "/test/workspace/packages/publishable",
@@ -651,7 +651,7 @@ describe("detect-publishable-changes", () => {
 			],
 		});
 
-		vi.mocked(getWorkspaces).mockReturnValue([
+		vi.mocked(getWorkspaceInfos).mockReturnValue([
 			{
 				name: "@test/pkg",
 				path: "/test/workspace",

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { debug, info, warning } from "@actions/core";
-import { getWorkspaces } from "workspace-tools";
+import { getWorkspaceInfos } from "workspace-tools";
 
 /**
  * Cached workspace info to avoid repeated filesystem operations
@@ -20,7 +20,7 @@ function getWorkspaceMap(cwd: string = process.cwd()): Map<string, string> {
 		return cachedWorkspaces;
 	}
 
-	const workspaces = getWorkspaces(cwd);
+	const workspaces = getWorkspaceInfos(cwd) ?? [];
 	cachedWorkspaces = new Map();
 
 	for (const workspace of workspaces) {
