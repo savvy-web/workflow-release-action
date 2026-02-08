@@ -1,5 +1,53 @@
 # @savvy-web/workflow-release-action
 
+## 0.1.0
+
+### Minor Changes
+
+- 9ac5f46: Add configurable supplier metadata for NTIA-compliant SBOMs
+
+  This feature introduces a layered configuration system for SBOM metadata that:
+
+  - Auto-infers metadata from package.json (author, repository, bugs, homepage)
+  - Accepts explicit configuration from `.github/silk-release.json`
+  - Supports fallback to `SILK_RELEASE_SBOM_TEMPLATE` environment variable
+  - Merges inferred and configured values (config wins on conflicts)
+  - Detects copyright start year from npm registry or configuration
+  - Validates against NTIA minimum elements for SBOM compliance
+
+  Configuration lookup order:
+
+  1. `.github/silk-release.json` in your repository
+  2. `SILK_RELEASE_SBOM_TEMPLATE` environment variable (from repo or org variable)
+
+  New configuration options:
+
+  - `sbom.supplier`: Company name, URL, and contact information
+  - `sbom.copyright`: Holder name and optional start year
+  - `sbom.publisher`: Publisher name for the component
+  - `sbom.documentationUrl`: Documentation URL override
+
+  The SBOM preview in validation now includes:
+
+  - NTIA compliance status per package (7 required fields)
+  - License summary
+  - External references (VCS, issue tracker, documentation)
+  - Actionable suggestions for missing compliance fields
+
+  A JSON Schema is provided for IDE autocomplete support. Reference it in your config:
+
+  ```json
+  {
+    "$schema": "https://raw.githubusercontent.com/savvy-web/workflow-release-action/main/.github/silk-release.schema.json"
+  }
+  ```
+
+  Fixes #28
+
+### Patch Changes
+
+- bf71211: Standardizes dependencies with @savvy-web/pnpm-plugin-silk
+
 ## 1.3.5
 
 ### Patch Changes
@@ -9,11 +57,13 @@
   Fixed an issue where tags were created at the wrong commit when release PRs were merged. The workflow now skips `changeset publish` for single-private-package repos and uses manual tag creation to ensure tags are created at the correct release commit.
 
   **Changes:**
+
   - Added "Determine publish command" step to use no-op for single-private-packages
   - Manual tag creation now only runs when `published == 'true'`
   - Prevents `changeset publish` from creating tags that conflict with manual creation
 
   **Impact:**
+
   - Tags will now be created at the release commit (e.g., "chore: release X.X.X")
   - Eliminates duplicate tag errors when release PRs are merged
   - Fixes tag positioning being one commit behind
@@ -21,11 +71,13 @@
 - 8ec59b0: Added comprehensive Copilot instructions document to guide AI coding agents working in this repository. This enhances developer experience when using GitHub Copilot and similar tools.
 
   **Changes:**
+
   - Added `.github/copilot-instructions.md` with detailed repository overview, workflows, and coding standards
   - Added `.github/instructions/.markdownlint.json` to configure Markdown linting for instructions directory
   - Provides context about shared GitHub Actions, reusable workflows, and automation tools
 
   **Impact:**
+
   - Improves AI-assisted development with better repository context
   - Standardizes guidance for coding agents across the codebase
   - Complements existing CLAUDE.md with Copilot-specific documentation
@@ -53,6 +105,7 @@
   GitHub releases now include only the relevant version section from CHANGELOG.md instead of the entire changelog history. The workflow parses the CHANGELOG structure and extracts content between the current version's `## {version}` heading and the next version heading.
 
   **Changes:**
+
   - Updated manual tag creation step in `release-simple.yml` to extract version-specific CHANGELOG section using awk
   - Fixed duplicate heading issue by skipping the version heading line in output
   - Added validation for empty changelog sections with fallback message
@@ -62,6 +115,7 @@
   - Prevents changelog bloat in release descriptions
 
   **Edge Cases Handled:**
+
   - Empty changelog sections: Provides fallback message "No release notes found for this version"
   - Missing version sections: Handled gracefully with validation check
   - Works with standard changesets-generated CHANGELOG format
@@ -75,11 +129,13 @@
 - b237263: Fix release workflow to create simple semver tags and properly publish releases
 
   **Root Causes:**
+
   1. The `check-changesets` job was preventing publish from running after release PR merges
   2. Needed simple semver tags (`1.3.2`) instead of scoped package tags (`@savvy-web/workflow-release-action@1.3.2`)
   3. Manual tag creation was always running, even for multi-package repos where it shouldn't
 
   **Changes:**
+
   - Removed `check-changesets` job from both reusable workflows (changesets handles detection internally)
   - Updated `release-simple.yml` to use `pnpm changeset publish`
   - Updated `package.json` `ci:publish` script to run `changeset publish`
@@ -106,6 +162,7 @@
   - **Updated manual tag creation step** to only run for single-package private repos
 
   **How It Works Now:**
+
   1. **When changesets exist:** Creates release PR with version bumps
   2. **When release PR merges:**
      - Changesets detects version changes and runs publish
@@ -122,6 +179,7 @@
   The `check-changesets` job was preventing the publish step from running when release PRs were merged, because changesets are consumed (deleted) during versioning. The changesets action internally handles detecting release PR merges by checking for version changes.
 
   **Changes:**
+
   - Removed `check-changesets` job and its condition from both reusable workflows
   - Updated `release-simple.yml` to use `pnpm changeset publish` as the publish command
   - Updated `package.json` `ci:publish` script to run `changeset publish`
@@ -130,6 +188,7 @@
   - Added `contents: write` and `pull-requests: write` permissions to main release workflow
 
   **How It Works Now:**
+
   1. **When changesets exist:** Creates release PR with version bumps
   2. **When release PR merges:** Detects version changes, runs publish command, creates tags and GitHub releases
 
@@ -145,6 +204,7 @@
   The release workflow now runs `changeset publish` instead of a no-op echo command. This ensures that git tags are created and GitHub releases are generated with CHANGELOG content, even for private packages that don't publish to NPM.
 
   **Changes:**
+
   - Updated `release-simple.yml` to use `pnpm changeset publish` as the publish command
   - Updated `package.json` `ci:publish` script to run `changeset publish`
   - Fixed `setup-release` action to use full GitHub URL for node action reference
@@ -161,11 +221,13 @@
 - 4a79d88: Refactor release workflow into modular shared actions and reusable workflows
 
   **New Shared Actions:**
+
   - `setup-release` - Centralized release environment setup (GitHub App token, checkout, Node.js)
   - `check-changesets` - Lightweight changeset detection with count outputs
   - `run-changesets` - Configurable changesets execution with version detection
 
   **New Reusable Workflows:**
+
   - `release-standard.yml` - Multi-package releases with NPM publishing
     - Defaults to dry-run mode for safety
     - Explicit opt-in required for production publishing
@@ -175,6 +237,7 @@
     - No NPM publishing
 
   **Breaking Changes:**
+
   - Simplified `release.yml` to use new `release-simple.yml` reusable workflow
   - All workflows and actions now use local paths (`./.github/...`) instead of full GitHub URLs
   - Other repositories calling these workflows should use full URLs (`savvy-web/workflow-release-action/.github/workflows/...@main`)
@@ -186,6 +249,7 @@
 - 7b2c72f: ## New Biome Setup Action
 
   Introduces a new standalone composite action (`.github/actions/biome`) that automatically detects and installs the Biome version from your repository's configuration file. The Node.js setup action now uses this Biome action automatically.
+
   - Detects `biome.jsonc` or `biome.json` (prefers `.jsonc`)
   - Parses the `$schema` field to extract the version (e.g., `https://biomejs.dev/schemas/2.3.14/schema.json` → `2.3.14`)
   - Optional `version` input to override auto-detection and specify version explicitly
@@ -195,6 +259,7 @@
   - Comprehensive README documentation with examples and troubleshooting
 
   ### Workflow Updates
+
   - Node.js setup action automatically runs Biome setup after dependencies install
   - Removes duplicate Biome setup steps from `release.yml` and `validate.yml` workflows
 
@@ -207,6 +272,7 @@
   Adds a new workflow_dispatch workflow that syncs standard workflow labels to repositories with the custom property `workflow:standard`.
 
   ## Key features
+
   - Loads standard labels from `.github/labels.json` configuration file
   - Queries organization for repositories with `workflow:standard` custom property
   - Creates missing standard labels on target repositories
@@ -230,6 +296,7 @@
 - 115f8fe: # Enhance Node.js setup action with improved caching and reliability
 
   Simplifies the Node.js setup composite action with dedicated package manager steps, integrated Turbo cache support, and more robust version detection. Key improvements include:
+
   - Fix node version file detection to prevent parameter conflicts
   - Enable pnpm standalone mode for improved reliability
   - Add comprehensive documentation with usage examples and troubleshooting guides
