@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { debug, error, getState, info, warning } from "@actions/core";
 import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
-import { findProjectRoot, getWorkspaces } from "workspace-tools";
+import { findProjectRoot, getWorkspaceInfos } from "workspace-tools";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
@@ -247,8 +247,8 @@ export async function detectPublishableChanges(
 		debug(`workspace-tools findProjectRoot: ${workspaceRoot || "null"}`);
 
 		if (workspaceRoot) {
-			const workspaces = getWorkspaces(workspaceRoot);
-			debug(`workspace-tools getWorkspaces returned ${workspaces.length} workspace(s)`);
+			const workspaces = getWorkspaceInfos(workspaceRoot) ?? [];
+			debug(`workspace-tools getWorkspaceInfos returned ${workspaces.length} workspace(s)`);
 
 			for (const workspace of workspaces) {
 				packageMap.set(workspace.name, {

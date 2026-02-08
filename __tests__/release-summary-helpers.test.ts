@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as core from "@actions/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findProjectRoot, getWorkspaces } from "workspace-tools";
+import { findProjectRoot, getWorkspaceInfos } from "workspace-tools";
 import {
 	countChangesetsPerPackage,
 	findPackageGroup,
@@ -130,7 +130,7 @@ describe("release-summary-helpers", () => {
 	describe("getAllWorkspacePackages", () => {
 		it("should return all workspace packages with their info", () => {
 			vi.mocked(findProjectRoot).mockReturnValue("/test/workspace");
-			vi.mocked(getWorkspaces).mockReturnValue([
+			vi.mocked(getWorkspaceInfos).mockReturnValue([
 				{
 					name: "@test/pkg-a",
 					path: "/test/workspace/packages/a",
@@ -189,7 +189,7 @@ describe("release-summary-helpers", () => {
 
 		it("should skip packages without name", () => {
 			vi.mocked(findProjectRoot).mockReturnValue("/test/workspace");
-			vi.mocked(getWorkspaces).mockReturnValue([
+			vi.mocked(getWorkspaceInfos).mockReturnValue([
 				{
 					name: "",
 					path: "/test/workspace/packages/unnamed",
@@ -204,7 +204,7 @@ describe("release-summary-helpers", () => {
 
 		it("should default version to 0.0.0 when not specified", () => {
 			vi.mocked(findProjectRoot).mockReturnValue("/test/workspace");
-			vi.mocked(getWorkspaces).mockReturnValue([
+			vi.mocked(getWorkspaceInfos).mockReturnValue([
 				{
 					name: "@test/pkg",
 					path: "/test/workspace/packages/pkg",
@@ -219,7 +219,7 @@ describe("release-summary-helpers", () => {
 
 		it("should count single target when only access is specified", () => {
 			vi.mocked(findProjectRoot).mockReturnValue("/test/workspace");
-			vi.mocked(getWorkspaces).mockReturnValue([
+			vi.mocked(getWorkspaceInfos).mockReturnValue([
 				{
 					name: "@test/pkg",
 					path: "/test/workspace/packages/pkg",

@@ -1,29 +1,46 @@
-#!/bin/sh
+#!/usr/bin/env sh
+# Pre-commit hook with savvy-lint managed section
+# Custom hooks can go above or below the managed section
 
-# Skip pre-commit hook in CI environment
-[ -n "$GITHUB_ACTIONS" ] && exit 0
+# --- BEGIN SAVVY-LINT MANAGED SECTION ---
+# DO NOT EDIT between these markers - managed by savvy-lint
+# Skip in CI environment
+if ! { [ -n "$CI" ] || [ -n "$GITHUB_ACTIONS" ]; }; then
 
-# Re-exec with zsh if not already running in zsh (for GUI git clients like GitKraken)
-if [ -z "$ZSH_VERSION" ]; then
-  exec /bin/zsh "$0" "$@"
+# Get repo root directory
+ROOT=$(git rev-parse --show-toplevel)
+
+# Detect package manager from package.json or lockfiles
+detect_pm() {
+  # Check packageManager field in package.json (e.g., "pnpm@9.0.0")
+  if [ -f "$ROOT/package.json" ]; then
+    pm=$(jq -r '.packageManager // empty' "$ROOT/package.json" 2>/dev/null | cut -d'@' -f1)
+    if [ -n "$pm" ]; then
+      echo "$pm"
+      return
+    fi
+  fi
+
+  # Fallback to lockfile detection
+  if [ -f "$ROOT/pnpm-lock.yaml" ]; then
+    echo "pnpm"
+  elif [ -f "$ROOT/yarn.lock" ]; then
+    echo "yarn"
+  elif [ -f "$ROOT/bun.lock" ]; then
+    echo "bun"
+  else
+    echo "npm"
+  fi
+}
+
+# Run lint-staged with the detected package manager
+PM=$(detect_pm)
+case "$PM" in
+  pnpm) pnpm exec lint-staged --config "$ROOT/lib/configs/lint-staged.config.ts" ;;
+  yarn) yarn exec lint-staged --config "$ROOT/lib/configs/lint-staged.config.ts" ;;
+  bun)  bunx lint-staged --config "$ROOT/lib/configs/lint-staged.config.ts" ;;
+  *)    npx --no -- lint-staged --config "$ROOT/lib/configs/lint-staged.config.ts" ;;
+esac
+
 fi
-
-# Skip pre-commit hook during rebase/squash operations (except final commit)
-[ -f ".git/rebase-merge/interactive" ] && exit 0
-[ -f ".git/rebase-apply/rebasing" ] && exit 0
-
-# Ensure pnpm is in PATH for GUI git clients
-# Source user's zsh configuration to get full environment
-if [ -f "$HOME/.zshenv" ]; then
-  source "$HOME/.zshenv"
-fi
-if [ -n "$ZDOTDIR" ] && [ -f "$ZDOTDIR/.zshenv" ]; then
-  source "$ZDOTDIR/.zshenv"
-fi
-
-# Try to source nvm if available
-export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-
-# Run lint-staged to check and fix staged files
-pnpm exec lint-staged --config ./lib/configs/lint-staged.config.ts
+# --- END SAVVY-LINT MANAGED SECTION ---

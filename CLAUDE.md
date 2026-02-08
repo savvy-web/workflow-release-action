@@ -115,7 +115,7 @@ jobs:
           permission-packages: write
 
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
@@ -224,7 +224,7 @@ gh run view <run-id> --repo savvy-web/workflow-integration --log
 - **Package manager:** pnpm 10.20.0 (enforced via `packageManager` field)
 - **Build system:** Turborepo with strict environment mode
 - **Node.js version:** 24.11.0 (specified in `.nvmrc`)
-- **Linting:** Biome 2.3.6 with strict rules
+- **Linting:** Biome 2.3.14 with strict rules
 - **Testing:** Vitest 4.0.8 with globals enabled
 - **Type checking:** TypeScript with native preview build (`@typescript/native-preview`)
 - **Workspace packages:** Located in `pkgs/*` for TypeScript/JavaScript utilities

@@ -1,16 +1,32 @@
 {
 	"$schema": "https://turborepo.com/schema.v2.json",
+	"globalPassThroughEnv": ["GITHUB_ACTIONS", "CI"],
 	"tasks": {
-		"//#typecheck:all": {
+		"build:prod": {
+			"cache": true,
+			"dependsOn": ["types:check"],
+			"inputs": [
+				"$TURBO_DEFAULT$",
+				"$TURBO_ROOT$/package.json",
+				"$TURBO_ROOT$/tsconfig.json",
+				"$TURBO_ROOT$/pnpm-lock.yaml",
+				"$TURBO_ROOT$/pnpm-workspace.yaml",
+				"action.yml",
+				"package.json",
+				"tsconfig.json",
+				"src/**/*.ts",
+				"lib/**/*.ts",
+				"lib/**/*.mts",
+				"README.md",
+				"LICENSE"
+			],
+			"outputLogs": "full",
+			"outputs": ["dist/**"]
+		},
+		"types:check": {
 			"cache": true,
 			"dependsOn": [],
-			"outputLogs": "errors-only",
-			"outputs": []
-		},
-		"typecheck": {
-			"cache": false,
-			"dependsOn": ["//#typecheck:all"],
-			"env": ["GITHUB_ACTIONS", "GITHUB_OUTPUT"],
+			"inputs": ["*.ts", "src/**/*.ts", "lib/**/*.ts", "lib/**/*.mts"],
 			"outputLogs": "errors-only",
 			"outputs": []
 		}

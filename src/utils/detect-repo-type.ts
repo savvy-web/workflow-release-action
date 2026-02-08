@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { getWorkspaces } from "workspace-tools";
+import type { WorkspaceInfos } from "workspace-tools";
+import { getWorkspaceInfos } from "workspace-tools";
 
 /**
  * Supported package managers for repository detection
@@ -139,7 +140,7 @@ function isIgnoredPackage(packageName: string, ignorePatterns: string[]): boolea
  */
 export function isSinglePackage(): boolean {
 	try {
-		const workspaces = getWorkspaces(process.cwd());
+		const workspaces = getWorkspaceInfos(process.cwd()) ?? [];
 
 		// 0 or 1 workspace = definitely single package
 		if (workspaces.length <= 1) {
@@ -165,7 +166,7 @@ export function isSinglePackage(): boolean {
 		}
 
 		// Count non-ignored, non-root packages
-		const publishablePackages = workspaces.filter((ws) => {
+		const publishablePackages = workspaces.filter((ws: WorkspaceInfos[number]) => {
 			const name = ws.name;
 			// Root package is always publishable (if versioned)
 			if (name === rootPackageName) {
@@ -204,7 +205,7 @@ export function isSinglePackage(): boolean {
  */
 function hasWorkspacePackages(): boolean {
 	try {
-		const workspaces = getWorkspaces(process.cwd());
+		const workspaces = getWorkspaceInfos(process.cwd()) ?? [];
 		return Object.keys(workspaces).length > 1;
 	} catch {
 		return false;

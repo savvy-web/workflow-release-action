@@ -187,7 +187,7 @@
 
   Introduces a new standalone composite action (`.github/actions/biome`) that automatically detects and installs the Biome version from your repository's configuration file. The Node.js setup action now uses this Biome action automatically.
   - Detects `biome.jsonc` or `biome.json` (prefers `.jsonc`)
-  - Parses the `$schema` field to extract the version (e.g., `https://biomejs.dev/schemas/2.3.6/schema.json` → `2.3.6`)
+  - Parses the `$schema` field to extract the version (e.g., `https://biomejs.dev/schemas/2.3.14/schema.json` → `2.3.14`)
   - Optional `version` input to override auto-detection and specify version explicitly
   - Falls back to `latest` with a warning if no config file or version is found
   - Can be used independently: `uses: savvy-web/workflow-release-action/.github/actions/biome@main`

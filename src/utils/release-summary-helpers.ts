@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { debug } from "@actions/core";
-import { findProjectRoot, getWorkspaces } from "workspace-tools";
+import { findProjectRoot, getWorkspaceInfos } from "workspace-tools";
 
 /**
  * Changeset configuration
@@ -119,7 +119,7 @@ export function getAllWorkspacePackages(): WorkspacePackageInfo[] {
 		return [];
 	}
 
-	const workspaces = getWorkspaces(workspaceRoot);
+	const workspaces = getWorkspaceInfos(workspaceRoot) ?? [];
 	const packages: WorkspacePackageInfo[] = [];
 
 	for (const workspace of workspaces) {
