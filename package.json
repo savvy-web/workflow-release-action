@@ -57,7 +57,7 @@
 		"@changesets/cli": "catalog:silk",
 		"@savvy-web/commitlint": "^0.3.1",
 		"@savvy-web/github-action-builder": "^0.1.0",
-		"@savvy-web/lint-staged": "^0.3.1",
+		"@savvy-web/lint-staged": "^0.3.2",
 		"@types/node": "catalog:silk",
 		"@types/semver": "^7.7.1",
 		"@typescript/native-preview": "catalog:silk",
