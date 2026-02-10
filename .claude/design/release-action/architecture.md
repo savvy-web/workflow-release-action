@@ -3,7 +3,7 @@ title: Release Action Architecture
 category: architecture
 status: current
 completeness: 95
-last-synced: 2026-02-08
+last-synced: 2026-02-10
 module: release-action
 ---
 
@@ -147,12 +147,19 @@ Triggers on push to `main` (non-release commits). Three sequential steps:
   changeset files via GraphQL mutations, and opens a PR with standard labels.
   Includes retry logic with exponential backoff for API operations.
 
-- **`update-release-branch.ts`** (835 lines) -- Recreates the branch from
+- **`update-release-branch.ts`** (868 lines) -- Recreates the branch from
   main rather than rebasing (avoids merge conflicts entirely). Collects linked
   issues from changesets BEFORE running the version command (since version
   consumes changesets). Creates an API commit with the main branch HEAD as
-  parent (effectively rebasing onto main). Handles PR reopening if the branch
-  was previously deleted.
+  parent (effectively rebasing onto main). After the version command runs,
+  computes a version-aware PR title for single-package repos (e.g.,
+  "release: 1.2.3") by calling `isSinglePackage()` and reading `package.json`;
+  falls back to `prTitlePrefix` for multi-package repos or on failure. For
+  existing open PRs, updates the title via `pulls.update`. Handles PR
+  reopening if the branch was previously deleted, with a fallback that resets
+  `prNumber` to `null` when the reopen API call fails (e.g., after a
+  force-push), causing the existing "create new PR" block to execute instead
+  of leaving the release branch orphaned without a PR.
 
 ### Phase 2: Release Validation
 
@@ -278,6 +285,7 @@ main.ts
   |     update-release-branch.ts
   |       +-- create-api-commit.ts
   |       +-- parse-changesets.ts
+  |       +-- detect-repo-type.ts
   |
   +-- Phase 2 chain:
   |     link-issues-from-commits.ts
@@ -618,7 +626,7 @@ releases, or publishing to any registry.
 | `src/utils/run-close-linked-issues.ts` | 48 | Thin wrapper for close-linked-issues |
 | `src/utils/summary-writer.ts` | 125 | Type-safe markdown via ts-markdown |
 | `src/utils/topological-sort.ts` | 150 | Kahn's algorithm for dependency ordering |
-| `src/utils/update-release-branch.ts` | 835 | Recreate release branch from main |
+| `src/utils/update-release-branch.ts` | 868 | Recreate release branch from main |
 | `src/utils/update-sticky-comment.ts` | 120 | Idempotent PR comment management |
 | `src/utils/validate-builds.ts` | 232 | Build validation with error annotation |
 | `src/utils/validate-ntia-compliance.ts` | 256 | NTIA minimum elements SBOM validation |

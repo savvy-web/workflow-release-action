@@ -4,6 +4,7 @@ import * as exec from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApiCommit, updateBranchToRef } from "../src/utils/create-api-commit.js";
+import { isSinglePackage } from "../src/utils/detect-repo-type.js";
 import { updateReleaseBranch } from "../src/utils/update-release-branch.js";
 import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
 import type { ExecOptionsWithListeners, MockOctokit } from "./utils/test-types.js";
@@ -13,6 +14,7 @@ vi.mock("@actions/core");
 vi.mock("@actions/exec");
 vi.mock("@actions/github");
 vi.mock("../src/utils/create-api-commit.js");
+vi.mock("../src/utils/detect-repo-type.js");
 vi.mock("node:fs/promises");
 
 describe("update-release-branch", () => {
@@ -74,6 +76,12 @@ describe("update-release-branch", () => {
 
 		// Mock fs.readdir to return no changeset files by default
 		vi.mocked(fs.readdir).mockResolvedValue([]);
+
+		// Mock fs.readFile for package.json version detection
+		vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ version: "1.2.3" }));
+
+		// Mock isSinglePackage to return false by default (multi-package repo)
+		vi.mocked(isSinglePackage).mockReturnValue(false);
 	});
 
 	afterEach(() => {
@@ -360,13 +368,13 @@ describe("update-release-branch", () => {
 		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Created new release PR #123"));
 	});
 
-	it("should handle error when reopening PR", async () => {
+	it("should create new PR when reopen fails", async () => {
 		mockOctokit.rest.pulls.list
 			.mockResolvedValueOnce({ data: [] }) // open PRs
 			.mockResolvedValueOnce({
 				data: [{ number: 789, html_url: "https://github.com/test/pull/789", merged_at: null }],
 			}); // closed PRs
-		mockOctokit.rest.pulls.update.mockRejectedValue(new Error("PR cannot be reopened"));
+		mockOctokit.rest.pulls.update.mockRejectedValue(new Error("state cannot be changed"));
 
 		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
 			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
@@ -380,8 +388,14 @@ describe("update-release-branch", () => {
 		const result = await updateReleaseBranch("pnpm");
 
 		expect(result.success).toBe(true);
-		expect(result.prNumber).toBe(789);
+		// Should warn about the reopen failure
 		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not reopen PR #789"));
+		// Should log intent to create new PR
+		expect(core.info).toHaveBeenCalledWith("Will create a new PR instead");
+		// Should fall through and create a new PR (mock returns number 123)
+		expect(result.prNumber).toBe(123);
+		expect(mockOctokit.rest.pulls.create).toHaveBeenCalled();
+		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("Created new release PR #123"));
 	});
 
 	it("should retry on ECONNRESET errors for version command", async () => {
@@ -646,8 +660,11 @@ describe("update-release-branch", () => {
 			}),
 		);
 		// Should not have duplicated the "Linked Issues" section
-		const updateCall = mockOctokit.rest.pulls.update.mock.calls[0][0];
-		const linkedIssuesCount = (updateCall.body?.match(/## Linked Issues/g) || []).length;
+		// calls[0] is title update, calls[1] is body update with linked issues
+		const bodyUpdateCall = mockOctokit.rest.pulls.update.mock.calls.find(
+			(call: [{ body?: string }]) => call[0].body !== undefined,
+		);
+		const linkedIssuesCount = (bodyUpdateCall?.[0].body?.match(/## Linked Issues/g) || []).length;
 		expect(linkedIssuesCount).toBe(1);
 	});
 
@@ -1124,5 +1141,136 @@ describe("update-release-branch", () => {
 		expect(core.info).toHaveBeenCalledWith(expect.stringContaining("[DRY RUN] Would reopen PR #123"));
 		// Should NOT actually reopen PR in dry-run mode
 		expect(mockOctokit.rest.pulls.update).not.toHaveBeenCalled();
+	});
+
+	it("should update PR title for existing open PR in single-package repo", async () => {
+		// Mock single-package repo
+		vi.mocked(isSinglePackage).mockReturnValue(true);
+		vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ version: "2.0.0" }));
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\nM CHANGELOG.md\n"));
+				}
+			}
+			return 0;
+		});
+
+		const result = await updateReleaseBranch("pnpm");
+
+		expect(result.success).toBe(true);
+		expect(result.prNumber).toBe(456);
+		// Should update the PR title to version-based title
+		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				pull_number: 456,
+				title: "release: 2.0.0",
+			}),
+		);
+		expect(core.info).toHaveBeenCalledWith("✓ Updated PR #456 title to: release: 2.0.0");
+	});
+
+	it("should use prefix title for multi-package repos", async () => {
+		// Mock multi-package repo (default: isSinglePackage returns false)
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		const result = await updateReleaseBranch("pnpm");
+
+		expect(result.success).toBe(true);
+		expect(result.prNumber).toBe(456);
+		// Should update with prefix title (not version-based)
+		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				pull_number: 456,
+				title: "chore: release",
+			}),
+		);
+	});
+
+	it("should use version-based title when creating new PR for single-package repo", async () => {
+		// No existing PR
+		mockOctokit.rest.pulls.list.mockResolvedValue({ data: [] });
+
+		// Mock single-package repo
+		vi.mocked(isSinglePackage).mockReturnValue(true);
+		vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ version: "3.1.0" }));
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		const result = await updateReleaseBranch("pnpm");
+
+		expect(result.success).toBe(true);
+		expect(result.prNumber).toBe(123);
+		// Should create PR with version-based title
+		expect(mockOctokit.rest.pulls.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				title: "release: 3.1.0",
+			}),
+		);
+	});
+
+	it("should handle PR title update error gracefully", async () => {
+		// Mock single-package repo
+		vi.mocked(isSinglePackage).mockReturnValue(true);
+		vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ version: "1.0.0" }));
+
+		// Mock PR title update failure
+		mockOctokit.rest.pulls.update.mockRejectedValue(new Error("API error"));
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		const result = await updateReleaseBranch("pnpm");
+
+		expect(result.success).toBe(true);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Could not update PR title"));
+	});
+
+	it("should fall back to prefix title when readFile fails for single-package repo", async () => {
+		// Mock single-package repo but readFile fails
+		vi.mocked(isSinglePackage).mockReturnValue(true);
+		vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"));
+
+		vi.mocked(exec.exec).mockImplementation(async (cmd, args, options?: ExecOptionsWithListeners) => {
+			if (cmd === "git" && args?.includes("status") && args?.includes("--porcelain")) {
+				if (options?.listeners?.stdout) {
+					options.listeners.stdout(Buffer.from("M package.json\n"));
+				}
+			}
+			return 0;
+		});
+
+		const result = await updateReleaseBranch("pnpm");
+
+		expect(result.success).toBe(true);
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Failed to read version for PR title"));
+		// Should use prefix title as fallback
+		expect(mockOctokit.rest.pulls.update).toHaveBeenCalledWith(
+			expect.objectContaining({
+				pull_number: 456,
+				title: "chore: release",
+			}),
+		);
 	});
 });

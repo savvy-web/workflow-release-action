@@ -1,9 +1,10 @@
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { debug, endGroup, getBooleanInput, getInput, getState, info, startGroup, warning } from "@actions/core";
 import type { ExecOptions } from "@actions/exec";
 import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { createApiCommit, updateBranchToRef } from "./create-api-commit.js";
+import { isSinglePackage } from "./detect-repo-type.js";
 import { summaryWriter } from "./summary-writer.js";
 
 /**
@@ -539,6 +540,7 @@ export async function updateReleaseBranch(packageManager: string): Promise<Updat
 	}
 
 	let versionSummary = "";
+	let prTitle = prTitlePrefix;
 
 	if (hasChanges) {
 		// Generate version summary from changed files
@@ -549,6 +551,21 @@ export async function updateReleaseBranch(packageManager: string): Promise<Updat
 
 		info("New version changes:");
 		info(versionSummary);
+
+		// Detect single-package repo and compute version-aware PR title
+		const singlePackage = isSinglePackage();
+		if (singlePackage) {
+			try {
+				const packageJsonContent = await readFile("package.json", "utf-8");
+				const packageJson = JSON.parse(packageJsonContent) as { version?: string };
+				if (packageJson.version) {
+					prTitle = `release: ${packageJson.version}`;
+					info(`Single-package repo detected, using PR title: ${prTitle}`);
+				}
+			} catch (error) {
+				warning(`Failed to read version for PR title: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 
 		// Stage all changes for the API commit
 		if (!dryRun) {
@@ -595,16 +612,32 @@ export async function updateReleaseBranch(packageManager: string): Promise<Updat
 			info(`✓ Reopened PR #${prNumber}`);
 		} catch (err) {
 			warning(`Could not reopen PR #${prNumber}: ${err instanceof Error ? err.message : String(err)}`);
+			info("Will create a new PR instead");
+			prNumber = null;
 		}
 		endGroup();
 	} else if (prWasClosed && prNumber && dryRun) {
 		info(`[DRY RUN] Would reopen PR #${prNumber}`);
 	}
 
+	// Update PR title for existing open PRs (not closed/reopened, not new)
+	if (prNumber && !prWasClosed && !dryRun) {
+		try {
+			await github.rest.pulls.update({
+				owner: context.repo.owner,
+				repo: context.repo.repo,
+				pull_number: prNumber,
+				title: prTitle,
+			});
+			info(`✓ Updated PR #${prNumber} title to: ${prTitle}`);
+		} catch (err) {
+			warning(`Could not update PR title: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
 	// Create new PR if none exists (branch exists but PR was merged and deleted)
 	if (!prNumber && !dryRun) {
 		startGroup("Creating new release PR");
-		const prTitle = prTitlePrefix;
 
 		// Build PR body using summaryWriter (markdown, not HTML)
 		const prBodySections: Array<{ heading?: string; level?: 2 | 3; content: string }> = [
