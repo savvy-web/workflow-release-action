@@ -1,5 +1,11 @@
 # @savvy-web/workflow-release-action
 
+## 0.1.2
+
+### Patch Changes
+
+- 7aff0ea: Fix branch management: create new PR when reopen fails after branch recreation, and update PR title with version for single-package repos on subsequent changesets.
+
 ## 0.1.1
 
 ### Patch Changes
