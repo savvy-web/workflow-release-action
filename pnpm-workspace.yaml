@@ -1,4 +1,4 @@
 packages:
   - .
 configDependencies:
-  "@savvy-web/pnpm-plugin-silk": 0.4.4+sha512-ASwjt8EwZVXa6QRsOWMNk479qZ8E9Rz26euitA1jVq4Jx9vuRXEALRVAHn0FrzIAka67PlfhqwBPcgRABiH8aw==
+  "@savvy-web/pnpm-plugin-silk": 0.5.1+sha512-Ldqg0b7SdIL2+4KruvKk7cQQZT59cQAWu3DT84Ehl4juXDrfJQq6Hir5kQwREO344iiN37AzVFR7ISs7NNF8Ww==
