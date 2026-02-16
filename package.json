@@ -1,6 +1,6 @@
 {
 	"name": "@savvy-web/workflow-release-action",
-	"version": "0.1.2",
+	"version": "0.1.3",
 	"private": true,
 	"description": "Automated release management GitHub Action with changesets, multi-registry publishing, and GitHub releases.",
 	"homepage": "https://github.com/savvy-web/workflow-release-action#readme",
