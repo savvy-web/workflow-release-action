@@ -1,5 +1,13 @@
 # @savvy-web/workflow-release-action
 
+## 0.1.3
+
+### Patch Changes
+
+### Features
+
+- [`eb6a7a7`](https://github.com/savvy-web/workflow-release-action/commit/eb6a7a7f65c973e63bbf884c1d7ea3715eab4215) Support for @savvy-web/changesets
+
 ## 0.1.2
 
 ### Patch Changes
