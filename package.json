@@ -36,7 +36,7 @@
 		"validate": "github-action-builder validate"
 	},
 	"dependencies": {
-		"@actions/attest": "^2.2.1",
+		"@actions/attest": "^3.0.0",
 		"@actions/cache": "^6.0.0",
 		"@actions/core": "^3.0.0",
 		"@actions/exec": "^3.0.0",
@@ -54,7 +54,7 @@
 		"workspace-tools": "0.41.0"
 	},
 	"devDependencies": {
-		"@changesets/cli": "catalog:silk",
+		"@savvy-web/changesets": "^0.1.1",
 		"@savvy-web/commitlint": "^0.3.2",
 		"@savvy-web/github-action-builder": "^0.1.2",
 		"@savvy-web/lint-staged": "^0.4.0",

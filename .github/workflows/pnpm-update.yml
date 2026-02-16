@@ -56,6 +56,7 @@ jobs:
           run: |
             pnpm savvy-commit init --force
             pnpm savvy-lint init --force
+            pnpm savvy-changesets init --force
             pnpm lint:fix
       - name: Summary
         if: always()

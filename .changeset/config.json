@@ -1,9 +1,12 @@
 {
 	"$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
-	"changelog": "@changesets/cli/changelog",
+	"changelog": [
+		"@savvy-web/changesets/changelog",
+		{
+			"repo": "savvy-web/workflow-release-action"
+		}
+	],
 	"commit": false,
-	"fixed": [],
-	"linked": [],
 	"access": "restricted",
 	"baseBranch": "main",
 	"updateInternalDependencies": "patch",

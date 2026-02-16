@@ -13,6 +13,7 @@
 		"**/CHANGELOG.md",
 		"**/.claude/plans"
 	],
+	"customRules": ["@savvy-web/changesets/markdownlint"],
 	"config": {
 		"default": true,
 		"MD001": true,
@@ -80,6 +81,9 @@
 		"MD059": true,
 		"MD060": {
 			"style": "compact"
-		}
+		},
+		"changeset-heading-hierarchy": false,
+		"changeset-required-sections": false,
+		"changeset-content-structure": false
 	}
 }
