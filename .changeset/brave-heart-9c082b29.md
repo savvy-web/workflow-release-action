@@ -1,4 +1,5 @@
 ---
+"@savvy-web/workflow-release-action": patch
 ---
 
 ## Bug Fixes
