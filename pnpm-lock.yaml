@@ -4,34 +4,13 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-catalogs:
-  silk:
-    '@types/node':
-      specifier: ^25.2.3
-      version: 25.2.3
-    '@typescript/native-preview':
-      specifier: 7.0.0-dev.20260217.1
-      version: 7.0.0-dev.20260217.1
-    '@vitest/coverage-v8':
-      specifier: ^4.0.18
-      version: 4.0.18
-    turbo:
-      specifier: ^2.8.9
-      version: 2.8.9
-    typescript:
-      specifier: ^5.9.3
-      version: 5.9.3
-    vitest:
-      specifier: ^4.0.18
-      version: 4.0.18
-
 overrides:
   '@isaacs/brace-expansion': ^5.0.1
   lodash: ^4.17.23
   markdown-it: ^14.1.1
   tmp: ^0.2.4
 
-pnpmfileChecksum: sha256-16+mM2LnerrX3SpyMygmC0B/maIfLEZyKJoK6J1yHlI=
+pnpmfileChecksum: sha256-4o+XvtdGPwEfG8f3fufVazlnEb1pzkIdrCypGH0JgU0=
 
 importers:
 
@@ -83,7 +62,7 @@ importers:
         specifier: ^1.3.0
         version: 1.3.0
       workspace-tools:
-        specifier: 0.41.0
+        specifier: ^0.41.0
         version: 0.41.0
     devDependencies:
       '@savvy-web/changesets':
@@ -93,32 +72,14 @@ importers:
         specifier: ^0.3.3
         version: 0.3.3(c881629441b0c58c10eb6f71aa03cb23)
       '@savvy-web/github-action-builder':
-        specifier: ^0.1.3
-        version: 0.1.3(@effect/cluster@0.56.4(@effect/platform@0.94.5(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/workflow@0.16.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(effect@3.19.18))(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@types/node@25.2.3)(@typescript/native-preview@7.0.0-dev.20260217.1)(typescript@5.9.3)
+        specifier: ^0.1.4
+        version: 0.1.4(@effect/cluster@0.56.4(@effect/platform@0.94.5(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/workflow@0.16.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(effect@3.19.18))(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@types/node@25.2.3)(@typescript/native-preview@7.0.0-dev.20260217.1)(typescript@5.9.3)
       '@savvy-web/lint-staged':
-        specifier: ^0.4.4
-        version: 0.4.4(774616381b3675527684e01e1a28c6ae)
-      '@types/node':
-        specifier: catalog:silk
-        version: 25.2.3
-      '@types/semver':
-        specifier: ^7.7.1
-        version: 7.7.1
-      '@typescript/native-preview':
-        specifier: catalog:silk
-        version: 7.0.0-dev.20260217.1
-      '@vitest/coverage-v8':
-        specifier: catalog:silk
-        version: 4.0.18(vitest@4.0.18(@types/node@25.2.3)(jiti@2.6.1)(yaml@2.8.2))
-      turbo:
-        specifier: catalog:silk
-        version: 2.8.9
-      typescript:
-        specifier: catalog:silk
-        version: 5.9.3
-      vitest:
-        specifier: catalog:silk
-        version: 4.0.18(@types/node@25.2.3)(jiti@2.6.1)(yaml@2.8.2)
+        specifier: ^0.4.5
+        version: 0.4.5(774616381b3675527684e01e1a28c6ae)
+      '@savvy-web/vitest':
+        specifier: ^0.1.0
+        version: 0.1.0(@types/node@25.2.3)(@typescript/native-preview@7.0.0-dev.20260217.1)(@vitest/coverage-v8@4.0.18(vitest@4.0.18(@types/node@25.2.3)(jiti@2.6.1)(yaml@2.8.2)))(typescript@5.9.3)(vitest@4.0.18(@types/node@25.2.3)(jiti@2.6.1)(yaml@2.8.2))
 
 packages:
 
@@ -1089,31 +1050,40 @@ packages:
       commitizen:
         optional: true
 
-  '@savvy-web/github-action-builder@0.1.3':
-    resolution: {integrity: sha512-nElrqH9T/0NRsCYkcTLNNRuSyYJ+fJT1aVIvYUwIkWRGAYSl7Ohem00sCSboRm1J8A0bPz3I6VuukkC3x68qyg==}
+  '@savvy-web/github-action-builder@0.1.4':
+    resolution: {integrity: sha512-7+LtX9GGLCMEl2OcgmvCpPz/04TQsBHh0ZR6zCOcCouf6gFqzZvMdb3Snzvag7WM9XbbHNkbU4R3Sd0sAWP0ew==}
     hasBin: true
     peerDependencies:
-      '@types/node': ^25.2.3
-      '@typescript/native-preview': 7.0.0-dev.20260214.1
+      '@types/node': ^25.2.0
+      '@typescript/native-preview': ^7.0.0-dev.20260124.1
       typescript: ^5.9.3
 
-  '@savvy-web/lint-staged@0.4.4':
-    resolution: {integrity: sha512-n614P/V5/rOuqypKrKWO+H03rATGWbZlwYyKCNaM9NAzDhoXpvQSmlyPCsI2gBC83GNKW15ehc9Agc2+FsuJxA==}
+  '@savvy-web/lint-staged@0.4.5':
+    resolution: {integrity: sha512-mrN2Xy4OPOF/8S6E/MV+DBuxRMIL4jdxBhjCBrQcKNYTSnEeB6zW/qRGL9RMNZ6E0kdQx0T0Xpi+Z+dBgcZXbA==}
     engines: {node: '>=24.0.0'}
     hasBin: true
     peerDependencies:
       '@biomejs/biome': 2.4.1
-      '@types/node': ^25.2.3
-      '@typescript/native-preview': 7.0.0-dev.20260217.1
-      husky: ^9.1.7
-      lint-staged: ^16.2.7
+      '@types/node': ^25.2.0
+      '@typescript/native-preview': ^7.0.0-dev.20260124.1
+      husky: ^9.1.0
+      lint-staged: ^16.2.0
       markdownlint-cli2: ^0.21.0
       markdownlint-cli2-formatter-codequality: ^0.0.7
-      turbo: ^2.8.9
+      turbo: ^2.8.0
       typescript: ^5.9.3
     peerDependenciesMeta:
       '@biomejs/biome':
         optional: true
+
+  '@savvy-web/vitest@0.1.0':
+    resolution: {integrity: sha512-cfK6B3GGRHiU1OgTw80e60w7b1WPSIcryecO19RE0qqPxmOnsP06BxQAHzPnsOXy2wiHorWbR8qlLjA9ZbGeXQ==}
+    peerDependencies:
+      '@types/node': ^25.2.3
+      '@typescript/native-preview': ^7.0.0-dev.20260216.1
+      '@vitest/coverage-v8': ^4.0.18
+      typescript: ^5.9.3
+      vitest: ^4.0.18
 
   '@sigstore/bundle@3.1.0':
     resolution: {integrity: sha512-Mm1E3/CmDDCz3nDhFKTuYdB47EdRFRQMOE/EAbiG1MJW77/w1b3P7Qx7JSrVJs8PfwOLOVcKQCHErIwCTyPbag==}
@@ -1171,9 +1141,6 @@ packages:
   '@types/parse-path@7.1.0':
     resolution: {integrity: sha512-EULJ8LApcVEPbrfND0cRQqutIOdiIgJ1Mgrhpy755r14xMohPTEpkV/k28SJvuOs9bHRFW8x+KeDAEPiGQPB9Q==}
     deprecated: This is a stub types definition. parse-path provides its own type definitions, so you do not need this installed.
-
-  '@types/semver@7.7.1':
-    resolution: {integrity: sha512-FmgJfu+MOcQ370SD0ev7EI8TlCAfKYU+B4m5T3yXc1CiRN94g/SZPtsCkk506aUDtlMnFZvasDwHHUcZUEaYuA==}
 
   '@types/unist@2.0.11':
     resolution: {integrity: sha512-CmBKiL6NNo/OqgmMn95Fk9Whlp2mtvIv+KNpQKN2F4SjvrEesubTRWGYSg+BnWZOnlCaSTU1sMpsBOzgbYhnsA==}
@@ -4223,7 +4190,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@savvy-web/github-action-builder@0.1.3(@effect/cluster@0.56.4(@effect/platform@0.94.5(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/workflow@0.16.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(effect@3.19.18))(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@types/node@25.2.3)(@typescript/native-preview@7.0.0-dev.20260217.1)(typescript@5.9.3)':
+  '@savvy-web/github-action-builder@0.1.4(@effect/cluster@0.56.4(@effect/platform@0.94.5(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/workflow@0.16.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(effect@3.19.18))(effect@3.19.18))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@effect/platform@0.94.5(effect@3.19.18))(effect@3.19.18))(@types/node@25.2.3)(@typescript/native-preview@7.0.0-dev.20260217.1)(typescript@5.9.3)':
     dependencies:
       '@effect/cli': 0.73.2(@effect/platform@0.94.5(effect@3.19.18))(@effect/printer-ansi@0.47.0(@effect/typeclass@0.38.0(effect@3.19.18))(effect@3.19.18))(@effect/printer@0.47.0(@effect/typeclass@0.38.0(effect@3.19.18))(effect@3.19.18))(effect@3.19.18)
       '@effect/platform': 0.94.5(effect@3.19.18)
@@ -4245,7 +4212,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@savvy-web/lint-staged@0.4.4(774616381b3675527684e01e1a28c6ae)':
+  '@savvy-web/lint-staged@0.4.5(774616381b3675527684e01e1a28c6ae)':
     dependencies:
       '@effect/cli': 0.73.2(@effect/platform@0.94.5(effect@3.19.18))(@effect/printer-ansi@0.47.0(@effect/typeclass@0.38.0(effect@3.19.18))(effect@3.19.18))(@effect/printer@0.47.0(@effect/typeclass@0.38.0(effect@3.19.18))(effect@3.19.18))(effect@3.19.18)
       '@effect/platform': 0.94.5(effect@3.19.18)
@@ -4279,6 +4246,15 @@ snapshots:
       - jiti
       - supports-color
       - utf-8-validate
+
+  '@savvy-web/vitest@0.1.0(@types/node@25.2.3)(@typescript/native-preview@7.0.0-dev.20260217.1)(@vitest/coverage-v8@4.0.18(vitest@4.0.18(@types/node@25.2.3)(jiti@2.6.1)(yaml@2.8.2)))(typescript@5.9.3)(vitest@4.0.18(@types/node@25.2.3)(jiti@2.6.1)(yaml@2.8.2))':
+    dependencies:
+      '@types/node': 25.2.3
+      '@typescript/native-preview': 7.0.0-dev.20260217.1
+      '@vitest/coverage-v8': 4.0.18(vitest@4.0.18(@types/node@25.2.3)(jiti@2.6.1)(yaml@2.8.2))
+      typescript: 5.9.3
+      vitest: 4.0.18(@types/node@25.2.3)(jiti@2.6.1)(yaml@2.8.2)
+      workspace-tools: 0.41.0
 
   '@sigstore/bundle@3.1.0':
     dependencies:
@@ -4336,8 +4312,6 @@ snapshots:
     dependencies:
       parse-path: 7.1.0
 
-  '@types/semver@7.7.1': {}
-
   '@types/unist@2.0.11': {}
 
   '@types/unist@3.0.3': {}
@@ -4356,8 +4330,8 @@ snapshots:
 
   '@typescript-eslint/project-service@8.46.4(typescript@5.9.3)':
     dependencies:
-      '@typescript-eslint/tsconfig-utils': 8.46.4(typescript@5.9.3)
-      '@typescript-eslint/types': 8.46.4
+      '@typescript-eslint/tsconfig-utils': 8.56.0(typescript@5.9.3)
+      '@typescript-eslint/types': 8.56.0
       debug: 4.4.3
       typescript: 5.9.3
     transitivePeerDependencies:

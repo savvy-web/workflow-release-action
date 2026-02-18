@@ -1,4 +1,5 @@
 import type { ExecOptions } from "@actions/exec";
+// biome-ignore lint/correctness/noUndeclaredDependencies: only used for type definitions in tests
 import type { vi } from "vitest";
 
 /**
