@@ -16,7 +16,7 @@
 		"*.{ts,mts,cts,d.ts}",
 		"lib/**/*.{ts,mts,cts,d.ts}",
 		"src/**/*.{ts,mts,cts,d.ts}",
-		"__tests__/**/*.{ts,mts,cts,d.ts}",
+		"__test__/**/*.{ts,mts,cts,d.ts}",
 		"types/**/*.d.ts"
 	]
 }
