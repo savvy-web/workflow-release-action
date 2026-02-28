@@ -208,7 +208,7 @@ export async function validatePublish(
 			}
 
 			// Pre-validate the target
-			const preValidation = await preValidateTarget(target, release.name, release.newVersion);
+			const preValidation = await preValidateTarget(target);
 			targetPreValidations.set(target, preValidation);
 
 			if (!preValidation.valid) {
