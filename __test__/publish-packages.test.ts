@@ -1055,6 +1055,98 @@ describe("publish-packages", () => {
 			expect(result.success).toBe(false);
 			// Error should mention the specific directory that failed
 			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("dist/npm"));
+			// Abort gate: NO targets should be published when any pack fails
+			expect(publishToTarget).not.toHaveBeenCalled();
+		});
+
+		it("pack failure aborts all targets for the package", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "2.0.0", type: "major" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "2.0.0",
+					publishConfig: {
+						access: "public",
+						targets: [
+							{ protocol: "npm", registry: "https://registry.npmjs.org/", directory: "dist/npm" },
+							{ protocol: "npm", registry: "https://npm.pkg.github.com/", directory: "dist/github" },
+						],
+					},
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			// Both directories fail to pack
+			vi.mocked(packAndComputeDigest).mockResolvedValue(undefined);
+
+			const result = await publishPackages("pnpm", "main", false);
+
+			expect(result.success).toBe(false);
+			// Should report abort with both failed directories
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("Aborting publish"));
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("dist/npm"));
+			expect(core.error).toHaveBeenCalledWith(expect.stringContaining("dist/github"));
+			// publishToTarget should never be called
+			expect(publishToTarget).not.toHaveBeenCalled();
+			// Both targets should have failure results
+			expect(result.packages).toHaveLength(1);
+			expect(result.packages[0].targets).toHaveLength(2);
+			for (const target of result.packages[0].targets) {
+				expect(target.success).toBe(false);
+				expect(target.error).toContain("Aborted");
+			}
+		});
+
+		it("all targets skip = package succeeds (rerun scenario)", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "@org/pkg-a", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/pkg-a");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			vi.mocked(fs.readFileSync).mockReturnValue(
+				JSON.stringify({
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					publishConfig: {
+						access: "public",
+						targets: [
+							{ protocol: "npm", registry: "https://registry.npmjs.org/", directory: "dist/npm" },
+							{ protocol: "npm", registry: "https://npm.pkg.github.com/", directory: "dist/github" },
+						],
+					},
+				}),
+			);
+			vi.mocked(exec.exec).mockResolvedValue(0);
+
+			// Both targets already published with identical content
+			vi.mocked(checkVersionExists).mockResolvedValue({
+				success: true,
+				versionExists: true,
+				versionInfo: {
+					name: "@org/pkg-a",
+					version: "1.0.0",
+					versions: ["1.0.0"],
+					distTags: { latest: "1.0.0" },
+					dist: { shasum: "abc123def456" },
+				},
+			});
+			vi.mocked(getLocalTarballIntegrity).mockResolvedValue("abc123def456");
+
+			const result = await publishPackages("pnpm", "main", false);
+
+			// All targets skipped = package succeeds (enables GitHub Release on rerun)
+			expect(result.success).toBe(true);
+			expect(result.successfulPackages).toBe(1);
+			expect(result.successfulTargets).toBe(2);
+			// No packing or publishing should occur
+			expect(packAndComputeDigest).not.toHaveBeenCalled();
+			expect(publishToTarget).not.toHaveBeenCalled();
 		});
 	});
 

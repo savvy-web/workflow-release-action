@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrePackedTarball, ResolvedTarget } from "../src/types/publish-config.js";
@@ -930,5 +931,18 @@ describe("packAndComputeDigest", () => {
 		const result = await packAndComputeDigest("/workspace/pkg", "pnpm");
 
 		expect(result).toBeUndefined();
+	});
+
+	it("should capture stderr and log at warning level when pack fails with non-zero exit code", async () => {
+		vi.mocked(exec.exec).mockImplementation(async (_cmd, _args, options) => {
+			options?.listeners?.stderr?.(Buffer.from("npm ERR! Cannot read properties of null"));
+			return 1;
+		});
+
+		const result = await packAndComputeDigest("/workspace/pkg", "pnpm");
+
+		expect(result).toBeUndefined();
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("exit code 1"));
+		expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Cannot read properties of null"));
 	});
 });
