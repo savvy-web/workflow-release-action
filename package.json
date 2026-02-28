@@ -36,7 +36,7 @@
 		"validate": "github-action-builder validate"
 	},
 	"dependencies": {
-		"@actions/attest": "^3.0.0",
+		"@actions/attest": "^3.2.0",
 		"@actions/cache": "^6.0.0",
 		"@actions/core": "^3.0.0",
 		"@actions/exec": "^3.0.0",
@@ -46,7 +46,7 @@
 		"@actions/io": "^3.0.2",
 		"@actions/tool-cache": "^4.0.0",
 		"@octokit/auth-app": "^8.2.0",
-		"@octokit/request": "^10.0.7",
+		"@octokit/request": "^10.0.8",
 		"@octokit/rest": "^22.0.1",
 		"jsonc-parser": "^3.3.1",
 		"semver": "^7.7.4",
@@ -54,10 +54,10 @@
 		"workspace-tools": "^0.41.0"
 	},
 	"devDependencies": {
-		"@savvy-web/changesets": "^0.1.1",
-		"@savvy-web/commitlint": "^0.3.3",
+		"@savvy-web/changesets": "^0.3.0",
+		"@savvy-web/commitlint": "^0.3.4",
 		"@savvy-web/github-action-builder": "^0.1.4",
-		"@savvy-web/lint-staged": "^0.4.5",
+		"@savvy-web/lint-staged": "^0.4.6",
 		"@savvy-web/vitest": "^0.1.0"
 	},
 	"packageManager": "pnpm@10.30.0+sha512.2b5753de015d480eeb88f5b5b61e0051f05b4301808a82ec8b840c9d2adf7748eb352c83f5c1593ca703ff1017295bc3fdd3119abb9686efc96b9fcb18200937",
