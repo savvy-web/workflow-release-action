@@ -1,5 +1,16 @@
 # @savvy-web/workflow-release-action
 
+## 0.2.1
+
+### Bug Fixes
+
+* [`6ee65c1`](https://github.com/savvy-web/workflow-release-action/commit/6ee65c159141a591bf70388043b03423cd24e4d9) Staged publish flow with diagnostic logging to prevent half-publishes and improve debuggability.
+
+- Add diagnostic `debug()` logging to built package.json name resolution in both pre-validation and publish loops, making it visible in CI debug logs when the source name is used as fallback
+- Implement staged pack-then-publish with abort gate: if any ready target fails to pack, the entire package is aborted before any publishing occurs, preventing partial registry state
+- Add stderr capture and warning-level logging to `packAndComputeDigest` for actionable diagnostics when `npm pack` fails
+- Elevate pack failure logging from `debug()` to `warning()` with stderr content, exit code, and specific failure reason
+
 ## 0.2.0
 
 ### Bug Fixes
