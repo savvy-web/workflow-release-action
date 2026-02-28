@@ -528,6 +528,10 @@ export async function publishPackages(
 
 		// Build a map of directory -> resolved (built) package name for this package.
 		// The built name is authoritative for each target and may differ from the source name.
+		// NOTE: preValidateAllTargets() also reads these built package.json files and stores
+		// the resolved names in TargetPreValidation.packageName. This is intentionally duplicated
+		// because the two loops serve different purposes and the pre-validation results aren't
+		// keyed in a way that's convenient to look up per-directory here.
 		const resolvedNameByDir = new Map<string, string>();
 		for (const target of packageInfo.targets) {
 			if (resolvedNameByDir.has(target.directory)) continue;
@@ -565,14 +569,15 @@ export async function publishPackages(
 					continue;
 				}
 
-				info(`Packing ${name}@${packageInfo.version} from ${directory}...`);
+				const packName = resolvedNameByDir.get(directory) ?? name;
+				info(`Packing ${packName}@${packageInfo.version} from ${directory}...`);
 				const packed = await packAndComputeDigest(directory, packageManager);
 				if (packed) {
 					prePackedTarballs.set(directory, packed);
 					info(`✓ Created tarball: ${packed.filename}`);
 					info(`  Digest: ${packed.digest}`);
 				} else {
-					error(`Failed to pack tarball for ${name} from ${directory}`);
+					error(`Failed to pack tarball for ${packName} from ${directory}`);
 					allTargetsSuccess = false;
 				}
 			}
