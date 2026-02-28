@@ -1,5 +1,13 @@
 # @savvy-web/workflow-release-action
 
+## 0.2.0
+
+### Bug Fixes
+
+* [`9be311c`](https://github.com/savvy-web/workflow-release-action/commit/9be311c1216b5bb4aa4c66562f80addc0bbafcc4) Use per-target built package name for registry version checks and SBOM validation.
+
+When a package publishes to multiple registries with different names (e.g., `my-pkg` for npm vs `@scope/my-pkg` for GitHub Packages), the release action now reads the built `package.json` in each target's directory to resolve the authoritative package name. This fixes incorrect version existence checks on registries where the published name differs from the source name, and removes the spurious "Package name mismatch" warning during Phase 2 pre-validation.
+
 ## 0.1.4
 
 ### Bug Fixes
