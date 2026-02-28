@@ -126,14 +126,55 @@ async function preValidateAllTargets(
 	for (const [packageName, packageInfo] of packageTargetsMap) {
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
-			info(`Checking ${packageName}@${packageInfo.version} on ${registryName}...`);
+
+			// Read the built package.json to get the resolved name for this target.
+			// The built name is authoritative — it may differ from the source name
+			// (e.g., "pkg" for npm vs "@scope/pkg" for GitHub Packages).
+			let resolvedName = packageName;
+			const builtPkgJsonPath = join(target.directory, "package.json");
+			if (existsSync(builtPkgJsonPath)) {
+				try {
+					const builtPkg = JSON.parse(readFileSync(builtPkgJsonPath, "utf-8")) as PackageJson;
+					if (builtPkg.name) {
+						resolvedName = builtPkg.name;
+					} else {
+						error(`  ✗ Built package.json in ${target.directory} has no 'name' field`);
+						const validation: TargetPreValidation = {
+							target,
+							packageName,
+							version: packageInfo.version,
+							status: "error",
+							error: `Built package.json in ${target.directory} missing 'name' field`,
+						};
+						validations.push(validation);
+						errorTargets.push(validation);
+						continue;
+					}
+				} catch (err) {
+					error(
+						`  ✗ Failed to read built package.json in ${target.directory}: ${err instanceof Error ? err.message : String(err)}`,
+					);
+					const validation: TargetPreValidation = {
+						target,
+						packageName,
+						version: packageInfo.version,
+						status: "error",
+						error: `Failed to read built package.json: ${err instanceof Error ? err.message : String(err)}`,
+					};
+					validations.push(validation);
+					errorTargets.push(validation);
+					continue;
+				}
+			}
+
+			info(`Checking ${resolvedName}@${packageInfo.version} on ${registryName}...`);
 
 			// Skip JSR targets for now - they have different validation
 			if (target.protocol === "jsr") {
 				info(`  ✓ JSR target - will validate during publish`);
 				const validation: TargetPreValidation = {
 					target,
-					packageName,
+					packageName: resolvedName,
 					version: packageInfo.version,
 					status: "ready",
 				};
@@ -143,7 +184,7 @@ async function preValidateAllTargets(
 			}
 
 			// Check if version exists on this registry
-			const versionCheck = await checkVersionExists(packageName, packageInfo.version, target.registry, packageManager);
+			const versionCheck = await checkVersionExists(resolvedName, packageInfo.version, target.registry, packageManager);
 
 			if (!versionCheck.success) {
 				// Registry check failed - auth error, network error, etc.
@@ -152,7 +193,7 @@ async function preValidateAllTargets(
 
 				const validation: TargetPreValidation = {
 					target,
-					packageName,
+					packageName: resolvedName,
 					version: packageInfo.version,
 					status: "error",
 					versionCheck,
@@ -174,7 +215,7 @@ async function preValidateAllTargets(
 						info(`  ✓ Version exists with identical content - will skip`);
 						const validation: TargetPreValidation = {
 							target,
-							packageName,
+							packageName: resolvedName,
 							version: packageInfo.version,
 							status: "skip",
 							versionCheck,
@@ -191,7 +232,7 @@ async function preValidateAllTargets(
 
 						const validation: TargetPreValidation = {
 							target,
-							packageName,
+							packageName: resolvedName,
 							version: packageInfo.version,
 							status: "error",
 							versionCheck,
@@ -207,7 +248,7 @@ async function preValidateAllTargets(
 					warning(`  ⚠ Version exists but could not verify integrity - will skip`);
 					const validation: TargetPreValidation = {
 						target,
-						packageName,
+						packageName: resolvedName,
 						version: packageInfo.version,
 						status: "skip",
 						versionCheck,
@@ -222,7 +263,7 @@ async function preValidateAllTargets(
 				info(`  ✓ Version not found - ready to publish`);
 				const validation: TargetPreValidation = {
 					target,
-					packageName,
+					packageName: resolvedName,
 					version: packageInfo.version,
 					status: "ready",
 					versionCheck,
@@ -462,9 +503,10 @@ export async function publishPackages(
 		};
 	}
 
-	// Build a set of targets that should be skipped (already published with identical content)
+	// Build a set of targets that should be skipped (already published with identical content).
+	// Key on directory + registry to avoid source-name vs built-name mismatches.
 	const skipTargetKeys = new Set(
-		preValidation.skipTargets.map((v) => `${v.packageName}:${v.target.registry || "jsr"}`),
+		preValidation.skipTargets.map((v) => `${v.target.directory}:${v.target.registry || "jsr"}`),
 	);
 
 	// Publish each package to each target
@@ -484,9 +526,31 @@ export async function publishPackages(
 		const targetResults: TargetPublishResult[] = [];
 		let allTargetsSuccess = true;
 
+		// Build a map of directory -> resolved (built) package name for this package.
+		// The built name is authoritative for each target and may differ from the source name.
+		// NOTE: preValidateAllTargets() also reads these built package.json files and stores
+		// the resolved names in TargetPreValidation.packageName. This is intentionally duplicated
+		// because the two loops serve different purposes and the pre-validation results aren't
+		// keyed in a way that's convenient to look up per-directory here.
+		const resolvedNameByDir = new Map<string, string>();
+		for (const target of packageInfo.targets) {
+			if (resolvedNameByDir.has(target.directory)) continue;
+			const builtPkgPath = join(target.directory, "package.json");
+			if (existsSync(builtPkgPath)) {
+				try {
+					const builtPkg = JSON.parse(readFileSync(builtPkgPath, "utf-8")) as PackageJson;
+					if (builtPkg.name) {
+						resolvedNameByDir.set(target.directory, builtPkg.name);
+					}
+				} catch {
+					// Fall through — name defaults to source name
+				}
+			}
+		}
+
 		// Check if we have npm targets that need packing
 		const npmTargets = packageInfo.targets.filter((t) => t.protocol === "npm");
-		const needsPacking = npmTargets.some((t) => !skipTargetKeys.has(`${name}:${t.registry || "jsr"}`));
+		const needsPacking = npmTargets.some((t) => !skipTargetKeys.has(`${t.directory}:${t.registry || "jsr"}`));
 
 		// Pack once PER UNIQUE DIRECTORY to handle multi-target scenarios where
 		// different targets publish from different directories (e.g., dist/npm vs dist/github)
@@ -500,19 +564,20 @@ export async function publishPackages(
 			for (const directory of uniqueDirectories) {
 				// Skip directories where all targets are already published
 				const targetsForDir = npmTargets.filter((t) => t.directory === directory);
-				const allSkipped = targetsForDir.every((t) => skipTargetKeys.has(`${name}:${t.registry || "jsr"}`));
+				const allSkipped = targetsForDir.every((t) => skipTargetKeys.has(`${t.directory}:${t.registry || "jsr"}`));
 				if (allSkipped) {
 					continue;
 				}
 
-				info(`Packing ${name}@${packageInfo.version} from ${directory}...`);
+				const packName = resolvedNameByDir.get(directory) ?? name;
+				info(`Packing ${packName}@${packageInfo.version} from ${directory}...`);
 				const packed = await packAndComputeDigest(directory, packageManager);
 				if (packed) {
 					prePackedTarballs.set(directory, packed);
 					info(`✓ Created tarball: ${packed.filename}`);
 					info(`  Digest: ${packed.digest}`);
 				} else {
-					error(`Failed to pack tarball for ${name} from ${directory}`);
+					error(`Failed to pack tarball for ${packName} from ${directory}`);
 					allTargetsSuccess = false;
 				}
 			}
@@ -520,7 +585,7 @@ export async function publishPackages(
 
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
-			const targetKey = `${name}:${target.registry || "jsr"}`;
+			const targetKey = `${target.directory}:${target.registry || "jsr"}`;
 
 			// Skip targets that were pre-validated as "skip" (already published with identical content)
 			if (skipTargetKeys.has(targetKey)) {
@@ -704,9 +769,10 @@ export async function publishPackages(
 				// Extract target name from directory (e.g., "dist/npm" -> "npm")
 				const targetName = dir.split("/").filter(Boolean).pop() || "dist";
 
-				info(`Creating SBOM attestation for ${name} (${targetName})...`);
+				const sbomPackageName = resolvedNameByDir.get(dir) ?? name;
+				info(`Creating SBOM attestation for ${sbomPackageName} (${targetName})...`);
 				const sbomResult = await createSBOMAttestation({
-					packageName: name,
+					packageName: sbomPackageName,
 					version: packageInfo.version,
 					directory: dir,
 					dryRun,

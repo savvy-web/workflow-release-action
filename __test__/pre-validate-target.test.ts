@@ -31,7 +31,7 @@ describe("pre-validate-target", () => {
 				tokenEnv: "NPM_TOKEN",
 			};
 
-			const result = await preValidateTarget(target, "@test/package", "1.0.0");
+			const result = await preValidateTarget(target);
 
 			expect(result.valid).toBe(false);
 			expect(result.directoryExists).toBe(false);
@@ -55,7 +55,7 @@ describe("pre-validate-target", () => {
 				tokenEnv: "NPM_TOKEN",
 			};
 
-			const result = await preValidateTarget(target, "@test/package", "1.0.0");
+			const result = await preValidateTarget(target);
 
 			expect(result.valid).toBe(false);
 			expect(result.directoryExists).toBe(true);
@@ -77,7 +77,7 @@ describe("pre-validate-target", () => {
 				tokenEnv: "NPM_TOKEN",
 			};
 
-			const result = await preValidateTarget(target, "@test/package", "1.0.0");
+			const result = await preValidateTarget(target);
 
 			expect(result.valid).toBe(false);
 			expect(result.packageJsonExists).toBe(true);
@@ -105,7 +105,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "NPM_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(true);
 				expect(result.errors).toHaveLength(0);
@@ -132,7 +132,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "NPM_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors[0]).toContain("private");
@@ -156,7 +156,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "NPM_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors).toContain("Built package.json missing 'name' field");
@@ -180,13 +180,13 @@ describe("pre-validate-target", () => {
 					tokenEnv: "NPM_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors).toContain("Built package.json missing 'version' field");
 			});
 
-			it("warns on name mismatch", async () => {
+			it("accepts different built name without warning (built name is authoritative)", async () => {
 				vi.mocked(fs.existsSync).mockReturnValue(true);
 				vi.mocked(fs.readFileSync).mockReturnValue(
 					JSON.stringify({
@@ -205,10 +205,11 @@ describe("pre-validate-target", () => {
 					tokenEnv: "NPM_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
-				expect(result.valid).toBe(true); // Warning, not error
-				expect(result.warnings[0]).toContain("Package name mismatch");
+				expect(result.valid).toBe(true);
+				expect(result.warnings).toHaveLength(0);
+				expect(result.builtPackageJson?.name).toBe("@different/package");
 			});
 
 			it("requires scoped name for GitHub Packages", async () => {
@@ -230,7 +231,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "GITHUB_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "unscoped-package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors[0]).toContain("GitHub Packages requires scoped package names");
@@ -260,7 +261,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "JSR_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(true);
 				expect(result.errors).toHaveLength(0);
@@ -288,7 +289,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "JSR_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "unscoped-package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors[0]).toContain("JSR requires scoped package names");
@@ -313,7 +314,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "JSR_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors).toContain("JSR requires 'exports' field in package.json");
@@ -346,7 +347,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "JSR_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/jsr-package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(true);
 			});
@@ -376,7 +377,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "JSR_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors[0]).toContain("JSR requires scoped names");
@@ -401,7 +402,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "JSR_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors[0]).toContain("Failed to parse jsr.json");
@@ -430,7 +431,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "JSR_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors).toContain("jsr.json missing 'name' field");
@@ -459,7 +460,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: null,
 				} as unknown as ResolvedTarget;
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(true);
 				expect(result.builtPackageJson).toBeDefined();
@@ -487,7 +488,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "CUSTOM_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				// Error message should contain custom registry display name
@@ -514,7 +515,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "CUSTOM_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				// Should fallback to showing registry string directly
@@ -541,7 +542,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "NPM_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				// null registry is displayed as "jsr.io" (the default for null registries)
@@ -569,7 +570,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "JSR_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors).toContain("Built package.json missing 'name' field");
@@ -594,7 +595,7 @@ describe("pre-validate-target", () => {
 					tokenEnv: "JSR_TOKEN",
 				};
 
-				const result = await preValidateTarget(target, "@test/package", "1.0.0");
+				const result = await preValidateTarget(target);
 
 				expect(result.valid).toBe(false);
 				expect(result.errors).toContain("Built package.json missing 'version' field");

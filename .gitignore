@@ -25,13 +25,11 @@ pnpm-release.json
 !.env.*.example
 
 .pnpm-release.json
-**/*.api.json
-**/yo-rc.json
-**/savvy.config.toml
-pkgs/generators/test.ts
 # Temporary api-extractor files created during build
-**/src/api-extractor-*.ts
-test.ts
 .claude/settings.local.json
+.claude/plans
+.claude/agents
+.claude/skills
+CLAUDE.local.md
 **/coverage-debug
 .claude/plugins-debug.log

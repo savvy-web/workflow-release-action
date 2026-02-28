@@ -181,6 +181,7 @@ export async function validatePublish(
 
 		info(`Validating ${release.name}@${release.newVersion}`);
 		const targetResults: TargetValidationResult[] = [];
+		const targetPreValidations = new Map<ResolvedTarget, Awaited<ReturnType<typeof preValidateTarget>>>();
 
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
@@ -207,7 +208,8 @@ export async function validatePublish(
 			}
 
 			// Pre-validate the target
-			const preValidation = await preValidateTarget(target, release.name, release.newVersion);
+			const preValidation = await preValidateTarget(target);
+			targetPreValidations.set(target, preValidation);
 
 			if (!preValidation.valid) {
 				error(`Pre-validation failed: ${preValidation.errors.join(", ")}`);
@@ -281,11 +283,14 @@ export async function validatePublish(
 		let sbomValidation: PackagePublishValidation["sbomValidation"];
 
 		if (npmTargetWithProvenance) {
-			debug(`Validating SBOM generation for ${release.name} in ${npmTargetWithProvenance.directory}`);
+			// Use the built package name from pre-validation — it's authoritative for the target
+			const provenancePreValidation = targetPreValidations.get(npmTargetWithProvenance);
+			const sbomPackageName = provenancePreValidation?.builtPackageJson?.name ?? release.name;
+			debug(`Validating SBOM generation for ${sbomPackageName} in ${npmTargetWithProvenance.directory}`);
 			const sbomResult = await validateSBOMGeneration({
 				directory: npmTargetWithProvenance.directory,
 				packageManager,
-				packageName: release.name,
+				packageName: sbomPackageName,
 				packageVersion: release.newVersion,
 				rootDirectory,
 				enhanceMetadata: true,

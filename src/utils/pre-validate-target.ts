@@ -7,12 +7,7 @@ import { getRegistryDisplayName, isGitHubPackagesRegistry } from "./registry-uti
 /**
  * Validate package.json for npm-compatible registries
  */
-function validateNpmPackageJson(
-	target: ResolvedTarget,
-	pkg: PackageJson,
-	expectedName: string,
-	_expectedVersion: string,
-): PreValidationResult {
+function validateNpmPackageJson(target: ResolvedTarget, pkg: PackageJson): PreValidationResult {
 	const errors: string[] = [];
 	const warnings: string[] = [];
 
@@ -26,8 +21,6 @@ function validateNpmPackageJson(
 	// Must have name
 	if (!pkg.name) {
 		errors.push("Built package.json missing 'name' field");
-	} else if (pkg.name !== expectedName) {
-		warnings.push(`Package name mismatch: expected "${expectedName}", got "${pkg.name}"`);
 	}
 
 	// Must have version
@@ -57,12 +50,7 @@ function validateNpmPackageJson(
 /**
  * Validate package.json for JSR
  */
-function validateJsrPackageJson(
-	_target: ResolvedTarget,
-	pkg: PackageJson,
-	_expectedName: string,
-	_expectedVersion: string,
-): PreValidationResult {
+function validateJsrPackageJson(pkg: PackageJson): PreValidationResult {
 	const errors: string[] = [];
 	const warnings: string[] = [];
 
@@ -99,12 +87,7 @@ function validateJsrPackageJson(
 /**
  * Validate jsr.json for JSR publishing
  */
-function preValidateJsrJson(
-	_target: ResolvedTarget,
-	jsrJsonPath: string,
-	_expectedName: string,
-	_expectedVersion: string,
-): PreValidationResult {
+function preValidateJsrJson(jsrJsonPath: string): PreValidationResult {
 	const errors: string[] = [];
 	const warnings: string[] = [];
 
@@ -155,15 +138,9 @@ function preValidateJsrJson(
  * - package.json is valid for the target protocol
  *
  * @param target - Resolved target to validate
- * @param expectedName - Expected package name
- * @param expectedVersion - Expected package version
  * @returns Pre-validation result
  */
-export async function preValidateTarget(
-	target: ResolvedTarget,
-	expectedName: string,
-	expectedVersion: string,
-): Promise<PreValidationResult> {
+export async function preValidateTarget(target: ResolvedTarget): Promise<PreValidationResult> {
 	const errors: string[] = [];
 	const warnings: string[] = [];
 
@@ -189,7 +166,7 @@ export async function preValidateTarget(
 		if (target.protocol === "jsr") {
 			const jsrJsonPath = join(target.directory, "jsr.json");
 			if (existsSync(jsrJsonPath)) {
-				return preValidateJsrJson(target, jsrJsonPath, expectedName, expectedVersion);
+				return preValidateJsrJson(jsrJsonPath);
 			}
 		}
 
@@ -221,9 +198,9 @@ export async function preValidateTarget(
 
 	// Validate based on protocol
 	if (target.protocol === "npm") {
-		return validateNpmPackageJson(target, builtPackageJson, expectedName, expectedVersion);
+		return validateNpmPackageJson(target, builtPackageJson);
 	} else if (target.protocol === "jsr") {
-		return validateJsrPackageJson(target, builtPackageJson, expectedName, expectedVersion);
+		return validateJsrPackageJson(builtPackageJson);
 	}
 
 	return {
