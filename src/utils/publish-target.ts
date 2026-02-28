@@ -161,23 +161,51 @@ export async function packAndComputeDigest(
 	packageManager: string,
 ): Promise<PrePackedTarball | undefined> {
 	let output = "";
+	let errorOutput = "";
 	const npmCmd = getNpmCommand(packageManager);
 
 	try {
-		await exec(npmCmd.cmd, [...npmCmd.baseArgs, "pack", "--json"], {
+		const exitCode = await exec(npmCmd.cmd, [...npmCmd.baseArgs, "pack", "--json"], {
 			cwd: directory,
 			silent: true,
+			ignoreReturnCode: true,
 			listeners: {
 				stdout: (data: Buffer) => {
 					output += data.toString();
 				},
+				stderr: (data: Buffer) => {
+					errorOutput += data.toString();
+				},
 			},
 		});
 
+		if (exitCode !== 0) {
+			warning(`npm pack failed with exit code ${exitCode} in ${directory}`);
+			if (errorOutput) {
+				warning(`npm pack stderr: ${errorOutput.trim()}`);
+			}
+			return undefined;
+		}
+
 		// Parse JSON output to get filename
-		const packInfo = JSON.parse(output) as Array<{ filename: string }>;
+		let packInfo: Array<{ filename: string }>;
+		try {
+			packInfo = JSON.parse(output) as Array<{ filename: string }>;
+		} catch (parseErr) {
+			warning(
+				`Failed to parse npm pack JSON output: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+			);
+			if (output) {
+				debug(`npm pack stdout: ${output.trim()}`);
+			}
+			return undefined;
+		}
+
 		if (packInfo.length === 0 || !packInfo[0].filename) {
-			debug("npm pack did not return filename");
+			warning(`npm pack did not return filename in ${directory}`);
+			if (output) {
+				debug(`npm pack stdout: ${output.trim()}`);
+			}
 			return undefined;
 		}
 
@@ -185,7 +213,7 @@ export async function packAndComputeDigest(
 		const tarballPath = join(directory, filename);
 
 		if (!existsSync(tarballPath)) {
-			debug(`Tarball not found at expected path: ${tarballPath}`);
+			warning(`Tarball not found at expected path: ${tarballPath}`);
 			return undefined;
 		}
 
@@ -198,7 +226,10 @@ export async function packAndComputeDigest(
 
 		return { path: tarballPath, digest, filename };
 	} catch (err) {
-		debug(`Failed to pack tarball: ${err instanceof Error ? err.message : String(err)}`);
+		warning(`Failed to pack tarball in ${directory}: ${err instanceof Error ? err.message : String(err)}`);
+		if (errorOutput) {
+			warning(`npm pack stderr: ${errorOutput.trim()}`);
+		}
 		return undefined;
 	}
 }

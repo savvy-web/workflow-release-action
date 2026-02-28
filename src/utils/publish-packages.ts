@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { endGroup, error, info, startGroup, warning } from "@actions/core";
+import { debug, endGroup, error, info, startGroup, warning } from "@actions/core";
 import { exec } from "@actions/exec";
 import type { PackageJson, ResolvedTarget, VersionCheckResult } from "../types/publish-config.js";
 import type { WorkspacePackageInfo } from "./create-attestation.js";
@@ -132,11 +132,14 @@ async function preValidateAllTargets(
 			// (e.g., "pkg" for npm vs "@scope/pkg" for GitHub Packages).
 			let resolvedName = packageName;
 			const builtPkgJsonPath = join(target.directory, "package.json");
+			debug(`Looking for built package.json at: ${builtPkgJsonPath}`);
+
 			if (existsSync(builtPkgJsonPath)) {
 				try {
 					const builtPkg = JSON.parse(readFileSync(builtPkgJsonPath, "utf-8")) as PackageJson;
 					if (builtPkg.name) {
 						resolvedName = builtPkg.name;
+						debug(`Resolved name: ${resolvedName} (from built package.json)`);
 					} else {
 						error(`  ✗ Built package.json in ${target.directory} has no 'name' field`);
 						const validation: TargetPreValidation = {
@@ -165,6 +168,25 @@ async function preValidateAllTargets(
 					errorTargets.push(validation);
 					continue;
 				}
+			} else if (target.directory !== packageInfo.path) {
+				// target.directory differs from source path → build output directory
+				// that MUST exist after ci:build. Missing = build didn't produce it.
+				error(`  ✗ Build output directory not found: ${target.directory}`);
+				error(`    The build did not produce this target directory.`);
+				error(`    Check that ci:build creates output for all publishConfig.targets.`);
+				const validation: TargetPreValidation = {
+					target,
+					packageName,
+					version: packageInfo.version,
+					status: "error",
+					error: `Build output directory not found: ${target.directory}`,
+				};
+				validations.push(validation);
+				errorTargets.push(validation);
+				continue;
+			} else {
+				// Source directory — no built package.json expected, source name is fine
+				debug(`No built package.json at ${builtPkgJsonPath} — using source name: ${packageName}`);
 			}
 
 			info(`Checking ${resolvedName}@${packageInfo.version} on ${registryName}...`);
@@ -536,15 +558,19 @@ export async function publishPackages(
 		for (const target of packageInfo.targets) {
 			if (resolvedNameByDir.has(target.directory)) continue;
 			const builtPkgPath = join(target.directory, "package.json");
+			debug(`[publish] Looking for built package.json at: ${builtPkgPath}`);
 			if (existsSync(builtPkgPath)) {
 				try {
 					const builtPkg = JSON.parse(readFileSync(builtPkgPath, "utf-8")) as PackageJson;
 					if (builtPkg.name) {
 						resolvedNameByDir.set(target.directory, builtPkg.name);
+						debug(`[publish] Resolved name for ${target.directory}: ${builtPkg.name}`);
 					}
 				} catch {
-					// Fall through — name defaults to source name
+					debug(`[publish] Failed to parse built package.json at ${builtPkgPath} — using source name`);
 				}
+			} else {
+				debug(`[publish] Built package.json not found at ${builtPkgPath} — using source name: ${name}`);
 			}
 		}
 
@@ -552,10 +578,11 @@ export async function publishPackages(
 		const npmTargets = packageInfo.targets.filter((t) => t.protocol === "npm");
 		const needsPacking = npmTargets.some((t) => !skipTargetKeys.has(`${t.directory}:${t.registry || "jsr"}`));
 
-		// Pack once PER UNIQUE DIRECTORY to handle multi-target scenarios where
+		// Stage 2: Pack once PER UNIQUE DIRECTORY to handle multi-target scenarios where
 		// different targets publish from different directories (e.g., dist/npm vs dist/github)
 		// This ensures consistent digest for attestation linking while supporting different content per target
 		const prePackedTarballs = new Map<string, Awaited<ReturnType<typeof packAndComputeDigest>>>();
+		const failedPackDirectories = new Set<string>();
 
 		if (needsPacking && npmTargets.length > 0) {
 			// Group targets by directory and pack each unique directory once
@@ -577,10 +604,38 @@ export async function publishPackages(
 					info(`✓ Created tarball: ${packed.filename}`);
 					info(`  Digest: ${packed.digest}`);
 				} else {
-					error(`Failed to pack tarball for ${packName} from ${directory}`);
-					allTargetsSuccess = false;
+					warning(`Failed to pack tarball for ${packName} from ${directory}`);
+					failedPackDirectories.add(directory);
 				}
 			}
+		}
+
+		// Abort gate: if ANY ready target failed to pack, abort the entire package
+		// to prevent half-publishes where some registries get the package but others don't
+		if (failedPackDirectories.size > 0) {
+			error(`Aborting publish for ${name}: ${failedPackDirectories.size} directory(s) failed to pack`);
+			for (const dir of failedPackDirectories) {
+				error(`  - ${dir}`);
+			}
+			for (const target of packageInfo.targets) {
+				const targetKey = `${target.directory}:${target.registry || "jsr"}`;
+				if (!skipTargetKeys.has(targetKey)) {
+					targetResults.push({
+						target,
+						success: false,
+						error: "Aborted — not all targets could be packed",
+						exitCode: 1,
+					});
+				}
+			}
+			allTargetsSuccess = false;
+			results.push({
+				name,
+				version: packageInfo.version,
+				targets: targetResults,
+			});
+			endGroup();
+			continue;
 		}
 
 		for (const target of packageInfo.targets) {
@@ -602,19 +657,8 @@ export async function publishPackages(
 			}
 
 			// Get pre-packed tarball for this target's directory
+			// After the abort gate above, all ready npm targets are guaranteed to have tarballs
 			const targetTarball = target.protocol === "npm" ? prePackedTarballs.get(target.directory) : undefined;
-
-			// Skip npm targets if packing failed for this directory
-			if (target.protocol === "npm" && needsPacking && !targetTarball) {
-				error(`✗ Skipping ${registryName} - tarball packing failed for ${target.directory}`);
-				targetResults.push({
-					target,
-					success: false,
-					error: `Tarball packing failed for ${target.directory}`,
-					exitCode: 1,
-				});
-				continue;
-			}
 
 			info(`Publishing to ${registryName}...`);
 
