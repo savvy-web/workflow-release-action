@@ -503,9 +503,10 @@ export async function publishPackages(
 		};
 	}
 
-	// Build a set of targets that should be skipped (already published with identical content)
+	// Build a set of targets that should be skipped (already published with identical content).
+	// Key on directory + registry to avoid source-name vs built-name mismatches.
 	const skipTargetKeys = new Set(
-		preValidation.skipTargets.map((v) => `${v.packageName}:${v.target.registry || "jsr"}`),
+		preValidation.skipTargets.map((v) => `${v.target.directory}:${v.target.registry || "jsr"}`),
 	);
 
 	// Publish each package to each target
@@ -525,9 +526,27 @@ export async function publishPackages(
 		const targetResults: TargetPublishResult[] = [];
 		let allTargetsSuccess = true;
 
+		// Build a map of directory -> resolved (built) package name for this package.
+		// The built name is authoritative for each target and may differ from the source name.
+		const resolvedNameByDir = new Map<string, string>();
+		for (const target of packageInfo.targets) {
+			if (resolvedNameByDir.has(target.directory)) continue;
+			const builtPkgPath = join(target.directory, "package.json");
+			if (existsSync(builtPkgPath)) {
+				try {
+					const builtPkg = JSON.parse(readFileSync(builtPkgPath, "utf-8")) as PackageJson;
+					if (builtPkg.name) {
+						resolvedNameByDir.set(target.directory, builtPkg.name);
+					}
+				} catch {
+					// Fall through — name defaults to source name
+				}
+			}
+		}
+
 		// Check if we have npm targets that need packing
 		const npmTargets = packageInfo.targets.filter((t) => t.protocol === "npm");
-		const needsPacking = npmTargets.some((t) => !skipTargetKeys.has(`${name}:${t.registry || "jsr"}`));
+		const needsPacking = npmTargets.some((t) => !skipTargetKeys.has(`${t.directory}:${t.registry || "jsr"}`));
 
 		// Pack once PER UNIQUE DIRECTORY to handle multi-target scenarios where
 		// different targets publish from different directories (e.g., dist/npm vs dist/github)
@@ -541,7 +560,7 @@ export async function publishPackages(
 			for (const directory of uniqueDirectories) {
 				// Skip directories where all targets are already published
 				const targetsForDir = npmTargets.filter((t) => t.directory === directory);
-				const allSkipped = targetsForDir.every((t) => skipTargetKeys.has(`${name}:${t.registry || "jsr"}`));
+				const allSkipped = targetsForDir.every((t) => skipTargetKeys.has(`${t.directory}:${t.registry || "jsr"}`));
 				if (allSkipped) {
 					continue;
 				}
@@ -561,7 +580,7 @@ export async function publishPackages(
 
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
-			const targetKey = `${name}:${target.registry || "jsr"}`;
+			const targetKey = `${target.directory}:${target.registry || "jsr"}`;
 
 			// Skip targets that were pre-validated as "skip" (already published with identical content)
 			if (skipTargetKeys.has(targetKey)) {
@@ -745,9 +764,10 @@ export async function publishPackages(
 				// Extract target name from directory (e.g., "dist/npm" -> "npm")
 				const targetName = dir.split("/").filter(Boolean).pop() || "dist";
 
-				info(`Creating SBOM attestation for ${name} (${targetName})...`);
+				const sbomPackageName = resolvedNameByDir.get(dir) ?? name;
+				info(`Creating SBOM attestation for ${sbomPackageName} (${targetName})...`);
 				const sbomResult = await createSBOMAttestation({
-					packageName: name,
+					packageName: sbomPackageName,
 					version: packageInfo.version,
 					directory: dir,
 					dryRun,
