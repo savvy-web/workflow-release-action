@@ -186,7 +186,7 @@ describe("pre-validate-target", () => {
 				expect(result.errors).toContain("Built package.json missing 'version' field");
 			});
 
-			it("warns on name mismatch", async () => {
+			it("accepts different built name without warning (built name is authoritative)", async () => {
 				vi.mocked(fs.existsSync).mockReturnValue(true);
 				vi.mocked(fs.readFileSync).mockReturnValue(
 					JSON.stringify({
@@ -207,8 +207,9 @@ describe("pre-validate-target", () => {
 
 				const result = await preValidateTarget(target, "@test/package", "1.0.0");
 
-				expect(result.valid).toBe(true); // Warning, not error
-				expect(result.warnings[0]).toContain("Package name mismatch");
+				expect(result.valid).toBe(true);
+				expect(result.warnings).toHaveLength(0);
+				expect(result.builtPackageJson?.name).toBe("@different/package");
 			});
 
 			it("requires scoped name for GitHub Packages", async () => {

@@ -480,7 +480,7 @@ describe("validate-publish", () => {
 			expect(typeof result.summary).toBe("string");
 		});
 
-		it("logs pre-validation warnings", async () => {
+		it("does not warn on name mismatch (built name is authoritative)", async () => {
 			const changesetStatus: ChangesetStatus = {
 				changesets: [{ id: "test-changeset", summary: "Test changes", releases: [] }],
 				releases: [{ name: "@test/package", type: "minor", oldVersion: "1.0.0", newVersion: "1.1.0" }],
@@ -495,7 +495,7 @@ describe("validate-publish", () => {
 				},
 			};
 
-			// Dist package.json has a DIFFERENT name to trigger warning
+			// Dist package.json has a DIFFERENT name — this is expected for multi-registry
 			const distPackageJson: PackageJson = {
 				name: "@test/different-name",
 				version: "1.1.0",
@@ -523,8 +523,8 @@ describe("validate-publish", () => {
 
 			const result = await validatePublish("pnpm", "main", false);
 
-			// Should log the warning about package name mismatch
-			expect(core.warning).toHaveBeenCalledWith(expect.stringContaining("Package name mismatch"));
+			// Should NOT warn about package name mismatch — the built name is authoritative
+			expect(core.warning).not.toHaveBeenCalledWith(expect.stringContaining("Package name mismatch"));
 			expect(result).toBeDefined();
 		});
 

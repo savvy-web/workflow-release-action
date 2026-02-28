@@ -126,14 +126,55 @@ async function preValidateAllTargets(
 	for (const [packageName, packageInfo] of packageTargetsMap) {
 		for (const target of packageInfo.targets) {
 			const registryName = getRegistryDisplayName(target.registry);
-			info(`Checking ${packageName}@${packageInfo.version} on ${registryName}...`);
+
+			// Read the built package.json to get the resolved name for this target.
+			// The built name is authoritative — it may differ from the source name
+			// (e.g., "pkg" for npm vs "@scope/pkg" for GitHub Packages).
+			let resolvedName = packageName;
+			const builtPkgJsonPath = join(target.directory, "package.json");
+			if (existsSync(builtPkgJsonPath)) {
+				try {
+					const builtPkg = JSON.parse(readFileSync(builtPkgJsonPath, "utf-8")) as PackageJson;
+					if (builtPkg.name) {
+						resolvedName = builtPkg.name;
+					} else {
+						error(`  ✗ Built package.json in ${target.directory} has no 'name' field`);
+						const validation: TargetPreValidation = {
+							target,
+							packageName,
+							version: packageInfo.version,
+							status: "error",
+							error: `Built package.json in ${target.directory} missing 'name' field`,
+						};
+						validations.push(validation);
+						errorTargets.push(validation);
+						continue;
+					}
+				} catch (err) {
+					error(
+						`  ✗ Failed to read built package.json in ${target.directory}: ${err instanceof Error ? err.message : String(err)}`,
+					);
+					const validation: TargetPreValidation = {
+						target,
+						packageName,
+						version: packageInfo.version,
+						status: "error",
+						error: `Failed to read built package.json: ${err instanceof Error ? err.message : String(err)}`,
+					};
+					validations.push(validation);
+					errorTargets.push(validation);
+					continue;
+				}
+			}
+
+			info(`Checking ${resolvedName}@${packageInfo.version} on ${registryName}...`);
 
 			// Skip JSR targets for now - they have different validation
 			if (target.protocol === "jsr") {
 				info(`  ✓ JSR target - will validate during publish`);
 				const validation: TargetPreValidation = {
 					target,
-					packageName,
+					packageName: resolvedName,
 					version: packageInfo.version,
 					status: "ready",
 				};
@@ -143,7 +184,7 @@ async function preValidateAllTargets(
 			}
 
 			// Check if version exists on this registry
-			const versionCheck = await checkVersionExists(packageName, packageInfo.version, target.registry, packageManager);
+			const versionCheck = await checkVersionExists(resolvedName, packageInfo.version, target.registry, packageManager);
 
 			if (!versionCheck.success) {
 				// Registry check failed - auth error, network error, etc.
@@ -152,7 +193,7 @@ async function preValidateAllTargets(
 
 				const validation: TargetPreValidation = {
 					target,
-					packageName,
+					packageName: resolvedName,
 					version: packageInfo.version,
 					status: "error",
 					versionCheck,
@@ -174,7 +215,7 @@ async function preValidateAllTargets(
 						info(`  ✓ Version exists with identical content - will skip`);
 						const validation: TargetPreValidation = {
 							target,
-							packageName,
+							packageName: resolvedName,
 							version: packageInfo.version,
 							status: "skip",
 							versionCheck,
@@ -191,7 +232,7 @@ async function preValidateAllTargets(
 
 						const validation: TargetPreValidation = {
 							target,
-							packageName,
+							packageName: resolvedName,
 							version: packageInfo.version,
 							status: "error",
 							versionCheck,
@@ -207,7 +248,7 @@ async function preValidateAllTargets(
 					warning(`  ⚠ Version exists but could not verify integrity - will skip`);
 					const validation: TargetPreValidation = {
 						target,
-						packageName,
+						packageName: resolvedName,
 						version: packageInfo.version,
 						status: "skip",
 						versionCheck,
@@ -222,7 +263,7 @@ async function preValidateAllTargets(
 				info(`  ✓ Version not found - ready to publish`);
 				const validation: TargetPreValidation = {
 					target,
-					packageName,
+					packageName: resolvedName,
 					version: packageInfo.version,
 					status: "ready",
 					versionCheck,

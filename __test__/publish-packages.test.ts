@@ -734,6 +734,68 @@ describe("publish-packages", () => {
 		});
 	});
 
+	describe("resolved package name from built package.json", () => {
+		it("uses built package.json name for version checks instead of source name", async () => {
+			vi.mocked(getChangesetStatus).mockResolvedValue({
+				releases: [{ name: "my-package", newVersion: "1.0.0", type: "patch" }],
+				changesets: [],
+			});
+			vi.mocked(findPackagePath).mockReturnValue("/path/to/my-package");
+			vi.mocked(fs.existsSync).mockReturnValue(true);
+			// Source package.json has name "my-package", but built dist has "@scope/my-package"
+			vi.mocked(fs.readFileSync).mockImplementation((filePath) => {
+				const p = String(filePath);
+				if (p === "/path/to/my-package/package.json") {
+					return JSON.stringify({
+						name: "my-package",
+						version: "1.0.0",
+						publishConfig: {
+							access: "public",
+							targets: [
+								{
+									protocol: "npm",
+									registry: "https://npm.pkg.github.com/",
+									directory: "dist/github",
+								},
+							],
+						},
+					});
+				}
+				// Built package.json in dist/github has a scoped name
+				if (p.includes("dist/github") && p.endsWith("package.json")) {
+					return JSON.stringify({
+						name: "@scope/my-package",
+						version: "1.0.0",
+					});
+				}
+				return JSON.stringify({});
+			});
+			vi.mocked(exec.exec).mockResolvedValue(0);
+			vi.mocked(publishToTarget).mockResolvedValue({
+				success: true,
+				output: "Published successfully",
+				error: "",
+			});
+
+			await publishPackages("pnpm", "main", false);
+
+			// checkVersionExists should be called with the BUILT name, not the source name
+			expect(checkVersionExists).toHaveBeenCalledWith(
+				"@scope/my-package",
+				"1.0.0",
+				"https://npm.pkg.github.com/",
+				"pnpm",
+			);
+			// Should NOT have been called with the source name
+			expect(checkVersionExists).not.toHaveBeenCalledWith(
+				"my-package",
+				expect.any(String),
+				expect.any(String),
+				expect.any(String),
+			);
+		});
+	});
+
 	describe("multi-directory target handling", () => {
 		it("packs once per unique directory when targets have different directories", async () => {
 			vi.mocked(getChangesetStatus).mockResolvedValue({

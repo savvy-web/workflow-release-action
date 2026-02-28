@@ -10,7 +10,7 @@ import { getRegistryDisplayName, isGitHubPackagesRegistry } from "./registry-uti
 function validateNpmPackageJson(
 	target: ResolvedTarget,
 	pkg: PackageJson,
-	expectedName: string,
+	_expectedName: string,
 	_expectedVersion: string,
 ): PreValidationResult {
 	const errors: string[] = [];
@@ -26,8 +26,6 @@ function validateNpmPackageJson(
 	// Must have name
 	if (!pkg.name) {
 		errors.push("Built package.json missing 'name' field");
-	} else if (pkg.name !== expectedName) {
-		warnings.push(`Package name mismatch: expected "${expectedName}", got "${pkg.name}"`);
 	}
 
 	// Must have version
