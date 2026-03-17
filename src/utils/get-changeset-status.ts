@@ -161,9 +161,12 @@ async function getChangesetStatusFromMergeBase(
 	}
 
 	// Checkout merge base
+	// Use --force because the working tree may have modifications from pnpm install
+	// or other CI setup steps that would block a normal checkout. This is safe because
+	// we always restore to the original HEAD afterward.
 	try {
 		info(`Checking out merge base ${mergeBase.substring(0, 8)} to get changeset status...`);
-		await exec("git", ["checkout", mergeBase], { silent: true });
+		await exec("git", ["checkout", "--force", mergeBase]);
 	} catch (err) {
 		warning(`Failed to checkout merge base: ${err instanceof Error ? err.message : String(err)}`);
 		return null;
@@ -219,14 +222,15 @@ async function getChangesetStatusFromMergeBase(
 	}
 
 	// Always restore to original HEAD
+	// Use --force to match the checkout above — ensures clean restoration
 	try {
 		info(`Restoring to HEAD ${currentHead.substring(0, 8)}...`);
-		await exec("git", ["checkout", currentHead], { silent: true });
+		await exec("git", ["checkout", "--force", currentHead]);
 	} catch (err) {
 		warning(`Failed to restore HEAD: ${err instanceof Error ? err.message : String(err)}`);
 		// This is critical - try harder to restore
 		try {
-			await exec("git", ["checkout", "-"], { silent: true });
+			await exec("git", ["checkout", "--force", "-"]);
 		} catch {
 			warning("Could not restore git state - manual intervention may be required");
 		}
