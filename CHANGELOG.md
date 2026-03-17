@@ -1,5 +1,11 @@
 # @savvy-web/workflow-release-action
 
+## 0.2.3
+
+### Bug Fixes
+
+* [`87d48fd`](https://github.com/savvy-web/workflow-release-action/commit/87d48fdaad7e02a9585ee0f86f9150955201a4e9) Fix merge base checkout failure in Phase 2 validation by using `git checkout --force` and removing `silent: true` to surface git errors in logs
+
 ## 0.2.2
 
 ### Dependencies
