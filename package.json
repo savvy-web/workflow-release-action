@@ -54,17 +54,17 @@
 		"workspace-tools": "^0.41.0"
 	},
 	"devDependencies": {
-		"@savvy-web/changesets": "^0.4.1",
-		"@savvy-web/commitlint": "^0.4.0",
-		"@savvy-web/github-action-builder": "^0.2.0",
-		"@savvy-web/lint-staged": "^0.5.0",
-		"@savvy-web/vitest": "^0.2.0"
+		"@savvy-web/changesets": "^0.7.0",
+		"@savvy-web/commitlint": "^0.4.3",
+		"@savvy-web/github-action-builder": "^0.6.0",
+		"@savvy-web/lint-staged": "^0.6.3",
+		"@savvy-web/vitest": "^1.0.1"
 	},
-	"packageManager": "pnpm@10.30.3+sha512.c961d1e0a2d8e354ecaa5166b822516668b7f44cb5bd95122d590dd81922f606f5473b6d23ec4a5be05e7fcd18e8488d47d978bbe981872f1145d06e9a740017",
+	"packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319",
 	"devEngines": {
 		"packageManager": {
 			"name": "pnpm",
-			"version": "10.30.3",
+			"version": "10.33.0",
 			"onFail": "ignore"
 		},
 		"runtime": [
