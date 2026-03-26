@@ -1,5 +1,21 @@
 # @savvy-web/workflow-release-action
 
+## 0.2.4
+
+### Dependencies
+
+* | [`69ba7c2`](https://github.com/savvy-web/workflow-release-action/commit/69ba7c25454fd42dfa0ddce2883d07e75f1742ba) | Dependency    | Type    | Action | From   | To |
+  | :---------------------------------------------------------------------------------------------------------------- | :------------ | :------ | :----- | :----- | -- |
+  | @savvy-web/lint-staged                                                                                            | devDependency | updated | ^0.6.3 | ^0.6.4 |    |
+
+- | [`e776eef`](https://github.com/savvy-web/workflow-release-action/commit/e776eef8faca2724773d43cfa1d4c69bf054739c) | Dependency    | Type    | Action | From   | To |
+  | :---------------------------------------------------------------------------------------------------------------- | :------------ | :------ | :----- | :----- | -- |
+  | @savvy-web/changesets                                                                                             | devDependency | updated | ^0.4.1 | ^0.7.0 |    |
+  | @savvy-web/commitlint                                                                                             | devDependency | updated | ^0.4.0 | ^0.4.3 |    |
+  | @savvy-web/github-action-builder                                                                                  | devDependency | updated | ^0.2.0 | ^0.6.0 |    |
+  | @savvy-web/lint-staged                                                                                            | devDependency | updated | ^0.5.0 | ^0.6.3 |    |
+  | @savvy-web/vitest                                                                                                 | devDependency | updated | ^0.2.0 | ^1.0.1 |    |
+
 ## 0.2.3
 
 ### Bug Fixes
