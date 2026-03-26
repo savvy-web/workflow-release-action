@@ -1,0 +1,2 @@
+--container-architecture linux/amd64
+-W .github/workflows/act-test.yml
