@@ -54,11 +54,11 @@
 		"workspace-tools": "^0.41.0"
 	},
 	"devDependencies": {
-		"@savvy-web/changesets": "^0.7.2",
-		"@savvy-web/commitlint": "^0.5.0",
+		"@savvy-web/changesets": "^0.7.3",
+		"@savvy-web/commitlint": "^0.5.1",
 		"@savvy-web/github-action-builder": "^0.6.2",
-		"@savvy-web/lint-staged": "^0.7.0",
-		"@savvy-web/vitest": "^1.2.0"
+		"@savvy-web/lint-staged": "^0.7.1",
+		"@savvy-web/vitest": "^1.2.1"
 	},
 	"packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319",
 	"devEngines": {
