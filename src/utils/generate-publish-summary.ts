@@ -679,7 +679,7 @@ export function generatePublishResultsSummary(results: PackagePublishResult[], d
 		sections.push("```\n");
 		sections.push("**GitHub App token (create-github-app-token):**\n");
 		sections.push("```yaml");
-		sections.push("- uses: actions/create-github-app-token@v2");
+		sections.push("- uses: actions/create-github-app-token@v3");
 		sections.push("  with:");
 		// Use string concatenation to avoid template literal detection
 		sections.push("    app-id: $" + "{{ secrets.APP_ID }}");
@@ -1035,7 +1035,7 @@ export function generatePreValidationFailureSummary(details: PreValidationDetail
 	if (hasGitHubPackagesErrors) {
 		sections.push("**For GitHub Packages**, ensure GitHub App permissions:\n");
 		sections.push("```yaml");
-		sections.push("- uses: actions/create-github-app-token@v2");
+		sections.push("- uses: actions/create-github-app-token@v3");
 		sections.push("  with:");
 		sections.push("    permission-packages: write");
 		sections.push("    permission-organization_packages: write  # For org packages");
