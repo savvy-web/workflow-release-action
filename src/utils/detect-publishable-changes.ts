@@ -4,6 +4,7 @@ import { debug, error, getState, info, warning } from "@actions/core";
 import { exec } from "@actions/exec";
 import { context, getOctokit } from "@actions/github";
 import { findWorkspaceRootSync, getWorkspacePackagesSync } from "workspaces-effect";
+import type { RawPackageJson } from "./silk-publishability.js";
 import { silkDetect } from "./silk-publishability.js";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -36,41 +37,6 @@ interface ChangesetStatus {
 		/** Packages affected by this changeset */
 		releases: Array<{ name: string; type: string }>;
 	}>;
-}
-
-/**
- * Raw publishConfig entry (full silk-rule shape).
- */
-interface PackagePublishConfig {
-	/** Access level for publishing (public or restricted) */
-	access?: "public" | "restricted";
-	/** Custom registry URL */
-	registry?: string;
-	/** Directory containing the publishable artifact */
-	directory?: string;
-	/** Multi-target publish specification */
-	targets?: ReadonlyArray<
-		| string
-		| {
-				readonly access?: "public" | "restricted";
-				readonly protocol?: string;
-				readonly registry?: string;
-		  }
-	>;
-}
-
-/**
- * Package.json structure
- */
-interface PackageJson {
-	/** Package name */
-	name?: string;
-	/** Package version */
-	version?: string;
-	/** Whether package is private */
-	private?: boolean;
-	/** Publish configuration */
-	publishConfig?: PackagePublishConfig;
 }
 
 /**
@@ -256,7 +222,7 @@ export async function detectPublishableChanges(
 	const cwd = process.cwd();
 
 	// Create lookup map: package name -> { path, packageJson }
-	const packageMap = new Map<string, { path: string; packageJson: PackageJson }>();
+	const packageMap = new Map<string, { path: string; packageJson: RawPackageJson }>();
 
 	// Discover workspaces via `workspaces-effect`'s sync API.
 	try {
@@ -270,9 +236,9 @@ export async function detectPublishableChanges(
 			for (const workspace of workspaces) {
 				// `WorkspacePackage.publishConfig` is a typed subset (no `targets`),
 				// so re-read raw package.json for silk rules.
-				let raw: PackageJson;
+				let raw: RawPackageJson;
 				try {
-					raw = JSON.parse(await readFile(join(workspace.path, "package.json"), "utf-8")) as PackageJson;
+					raw = JSON.parse(await readFile(join(workspace.path, "package.json"), "utf-8")) as RawPackageJson;
 				} catch (err) {
 					debug(
 						`Failed to re-read ${workspace.path}/package.json: ${err instanceof Error ? err.message : String(err)}`,
@@ -304,7 +270,7 @@ export async function detectPublishableChanges(
 		const contentPreview = rootContent.slice(0, 200).replace(/\n/g, " ");
 		debug(`Root package.json preview: ${contentPreview}...`);
 
-		const rootPkg = JSON.parse(rootContent) as PackageJson;
+		const rootPkg = JSON.parse(rootContent) as RawPackageJson;
 
 		// Info-level logging for key fields (always visible)
 		info(`Root package.json parsed: name="${rootPkg.name || "(none)"}", private=${rootPkg.private ?? false}`);
