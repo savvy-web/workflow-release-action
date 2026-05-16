@@ -1,5 +1,4 @@
-import { context } from "@actions/github";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PackagePublishValidation, ResolvedTarget, TargetValidationResult } from "../src/types/publish-config.js";
 import type {
 	PackagePublishResult,
@@ -14,27 +13,7 @@ import {
 } from "../src/utils/generate-publish-summary.js";
 import type { PublishPackagesResult } from "../src/utils/publish-packages.js";
 
-// Mock @actions/github for context.ref
-vi.mock("@actions/github", () => ({
-	context: {
-		ref: "refs/heads/main",
-		repo: {
-			owner: "test-owner",
-			repo: "test-repo",
-		},
-	},
-}));
-
 describe("generate-publish-summary", () => {
-	beforeEach(() => {
-		// Reset context values
-		Object.defineProperty(vi.mocked(context), "ref", { value: "refs/heads/main", writable: true });
-		Object.defineProperty(vi.mocked(context), "repo", {
-			value: { owner: "test-owner", repo: "test-repo" },
-			writable: true,
-		});
-	});
-
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});

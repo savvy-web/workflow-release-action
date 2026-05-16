@@ -5,7 +5,6 @@ import { preValidateTarget } from "../src/utils/pre-validate-target.js";
 import { cleanupTestEnvironment, setupTestEnvironment } from "./utils/github-mocks.js";
 
 // Mock modules
-vi.mock("@actions/core");
 vi.mock("node:fs");
 
 describe("pre-validate-target", () => {

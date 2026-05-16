@@ -63,11 +63,6 @@ export const setSecret = (value: string): void => {
 	process.stdout.write(`::add-mask::${escapeCmd(value)}\n`);
 };
 
-export const setFailed = (msg: string): void => {
-	error(msg);
-	process.exitCode = 1;
-};
-
 // ---------------------------------------------------------------------------
 // @actions/core — inputs and state
 // ---------------------------------------------------------------------------
@@ -86,30 +81,6 @@ export const getBooleanInput = (name: string, options?: { required?: boolean }):
 };
 
 export const getState = (name: string): string => process.env[`STATE_${name}`] ?? "";
-
-// ---------------------------------------------------------------------------
-// @actions/core — outputs / env / state file writes
-// ---------------------------------------------------------------------------
-
-const writeFileCmd = (envVar: "GITHUB_OUTPUT" | "GITHUB_STATE" | "GITHUB_ENV", name: string, value: string): void => {
-	const path = process.env[envVar];
-	if (path === undefined || path === "") return;
-	const delimiter = `ghadelimiter_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-	appendFileSync(path, `${name}<<${delimiter}\n${value}\n${delimiter}\n`);
-};
-
-export const setOutput = (name: string, value: unknown): void => {
-	writeFileCmd("GITHUB_OUTPUT", name, typeof value === "string" ? value : JSON.stringify(value));
-};
-
-export const saveState = (name: string, value: unknown): void => {
-	writeFileCmd("GITHUB_STATE", name, typeof value === "string" ? value : JSON.stringify(value));
-};
-
-export const exportVariable = (name: string, value: string): void => {
-	process.env[name] = value;
-	writeFileCmd("GITHUB_ENV", name, value);
-};
 
 // ---------------------------------------------------------------------------
 // @actions/exec — child-process wrapper compatible with the original API

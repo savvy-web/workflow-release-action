@@ -30,30 +30,6 @@ importers:
 
   .:
     dependencies:
-      '@actions/cache':
-        specifier: ^6.0.0
-        version: 6.0.0
-      '@actions/core':
-        specifier: ^3.0.0
-        version: 3.0.1
-      '@actions/exec':
-        specifier: ^3.0.0
-        version: 3.0.0
-      '@actions/github':
-        specifier: ^9.0.0
-        version: 9.1.1
-      '@actions/glob':
-        specifier: ^0.6.1
-        version: 0.6.1
-      '@actions/http-client':
-        specifier: ^4.0.0
-        version: 4.0.1
-      '@actions/io':
-        specifier: ^3.0.2
-        version: 3.0.2
-      '@actions/tool-cache':
-        specifier: ^4.0.0
-        version: 4.0.0
       '@cyclonedx/cyclonedx-library':
         specifier: ^10.0.0
         version: 10.0.0(ajv-formats@3.0.1(ajv@8.20.0))(ajv@8.20.0)
@@ -66,9 +42,6 @@ importers:
       '@octokit/auth-app':
         specifier: ^8.2.0
         version: 8.2.0
-      '@octokit/request':
-        specifier: ^10.0.8
-        version: 10.0.9
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
@@ -87,9 +60,6 @@ importers:
       jsonc-parser:
         specifier: ^3.3.1
         version: 3.3.1
-      semver:
-        specifier: ^7.7.4
-        version: 7.8.0
       ts-markdown:
         specifier: ^1.3.0
         version: 1.3.0
@@ -123,33 +93,6 @@ importers:
         version: 4.22.0
 
 packages:
-
-  '@actions/cache@6.0.0':
-    resolution: {integrity: sha512-+tCs634SyGBQJ3KU1rtAVabmN/gYiT9WgzTSJzWwdPCLmM3zWrdbysaErKv8HyI6OozClrxNvDgPjJimbHZZvw==}
-
-  '@actions/core@3.0.1':
-    resolution: {integrity: sha512-a6d/Nwahm9fliVGRhdhofo40HjHQasUPusmc7vBfyky+7Z+P2A1J68zyFVaNcEclc/Se+eO595oAr5nwEIoIUA==}
-
-  '@actions/exec@3.0.0':
-    resolution: {integrity: sha512-6xH/puSoNBXb72VPlZVm7vQ+svQpFyA96qdDBvhB8eNZOE8LtPf9L4oAsfzK/crCL8YZ+19fKYVnM63Sl+Xzlw==}
-
-  '@actions/github@9.1.1':
-    resolution: {integrity: sha512-tL5JbYOBZHc0ngEnCsaDcryUizIUIlQyIMwy1Wkx93H5HzbBJ7TbiPx2PnFjBwZW0Vh05JmfFZhecE6gglYegA==}
-
-  '@actions/glob@0.6.1':
-    resolution: {integrity: sha512-K4+2Ac5ILcf2ySdJCha+Pop9NcKjxqCL4xL4zI50dgB2PbXgC0+AcP011xfH4Of6b4QEJJg8dyZYv7zl4byTsw==}
-
-  '@actions/http-client@3.0.2':
-    resolution: {integrity: sha512-JP38FYYpyqvUsz+Igqlc/JG6YO9PaKuvqjM3iGvaLqFnJ7TFmcLyy2IDrY0bI0qCQug8E9K+elv5ZNfw62ZJzA==}
-
-  '@actions/http-client@4.0.1':
-    resolution: {integrity: sha512-+Nvd1ImaOZBSoPbsUtEhv+1z99H12xzncCkz0a3RuehINE81FZSe2QTj3uvAPTcJX/SCzUQHQ0D1GrPMbrPitg==}
-
-  '@actions/io@3.0.2':
-    resolution: {integrity: sha512-nRBchcMM+QK1pdjO7/idu86rbJI5YHUKCvKs0KxnSYbVe3F51UfGxuZX4Qy/fWlp6l7gWFwIkrOzN+oUK03kfw==}
-
-  '@actions/tool-cache@4.0.0':
-    resolution: {integrity: sha512-L8P9HbXvpvqjZDveb/fdsa55IVC0trfPgQ4ZwGo6r5af6YDVdM9vMGPZ7rgY2fAT9gGj4PSYd6bYlg3p3jD78A==}
 
   '@azure/abort-controller@2.1.2':
     resolution: {integrity: sha512-nBrLsEWm4J2u5LpAPjxADTlq3trDgVZZXHNKabeXZtpq3d3AbN/KGO82R87rdDz5/lYB024rtEf10/q0urNgsA==}
@@ -959,12 +902,6 @@ packages:
   '@parcel/watcher@2.5.6':
     resolution: {integrity: sha512-tmmZ3lQxAe/k/+rNnXQRawJ4NjxO2hqiOLTHvWchtGZULp4RyFeh6aU4XdOYBFe2KE1oShQTv4AblOs2iOrNnQ==}
     engines: {node: '>= 10.0.0'}
-
-  '@protobuf-ts/runtime-rpc@2.11.1':
-    resolution: {integrity: sha512-4CqqUmNA+/uMz00+d3CYKgElXO9VrEbucjnBFEjqI4GuDrEQ32MaI3q+9qPBvIGOlL4PmHXrzM32vBPWRhQKWQ==}
-
-  '@protobuf-ts/runtime@2.11.1':
-    resolution: {integrity: sha512-KuDaT1IfHkugM2pyz+FwiY80ejWrkH1pAtOBOZFuR6SXEFTsnb/jiQWQ1rCIrcKx2BtyxnxW6BWwsVSA/Ie+WQ==}
 
   '@rolldown/binding-android-arm64@1.0.0':
     resolution: {integrity: sha512-TWMZnRLMe63C2Lhyicviu7ZHaU4kxa6PS3rofvc9GmcvptzNN11BcfQ4Sl7MwTOsisQoa2keB/EBdNCAnUo8vA==}
@@ -3370,10 +3307,6 @@ packages:
   tunnel-agent@0.6.0:
     resolution: {integrity: sha512-McnNiV1l8RYeY8tBgEpuodCC1mLUdbSN+CYBL7kJsJNInOP8UjDDEwdk6Mw60vdLLrr5NHKZhMAOSrR2NZuQ+w==}
 
-  tunnel@0.0.6:
-    resolution: {integrity: sha512-1h/Lnq9yajKY2PEbBadPXj3VxsDDu844OnaAo52UVmIzIvwwtBPIuNvkjuzBlTWpfJyUbG3ez0KSBibQkj4ojg==}
-    engines: {node: '>=0.6.11 <=0.7.0 || >=0.7.3'}
-
   turbo@2.9.12:
     resolution: {integrity: sha512-lCPgus1NuTiBdaITWqzSH/Ff6HVL8HHGBtOXHg1dHRfcshN79XkygSdh0M6g8b0td91ILLG5MTkLOkp5UvyPJw==}
     hasBin: true
@@ -3396,10 +3329,6 @@ packages:
 
   undici-types@7.21.0:
     resolution: {integrity: sha512-w9IMgQrz4O0YN1LtB7K5P63vhlIOvC7opSmouCJ+ZywlPAlO9gIkJ+otk6LvGpAs2wg4econaCz3TvQ9xPoyuQ==}
-
-  undici@6.25.0:
-    resolution: {integrity: sha512-ZgpWDC5gmNiuY9CnLVXEH8rl50xhRCuLNA97fAUnKi8RRuV4E6KG31pDTsLVUKnohJE0I3XDrTeEydAXRw47xg==}
-    engines: {node: '>=18.17'}
 
   undici@7.25.0:
     resolution: {integrity: sha512-xXnp4kTyor2Zq+J1FfPI6Eq3ew5h6Vl0F/8d9XU5zZQf1tX9s2Su1/3PiMmUANFULpmksxkClamIZcaUqryHsQ==}
@@ -3693,64 +3622,6 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
-
-  '@actions/cache@6.0.0':
-    dependencies:
-      '@actions/core': 3.0.1
-      '@actions/exec': 3.0.0
-      '@actions/glob': 0.6.1
-      '@actions/http-client': 4.0.1
-      '@actions/io': 3.0.2
-      '@azure/core-rest-pipeline': 1.23.0
-      '@azure/storage-blob': 12.31.0
-      '@protobuf-ts/runtime-rpc': 2.11.1
-      semver: 7.8.0
-    transitivePeerDependencies:
-      - supports-color
-
-  '@actions/core@3.0.1':
-    dependencies:
-      '@actions/exec': 3.0.0
-      '@actions/http-client': 4.0.1
-
-  '@actions/exec@3.0.0':
-    dependencies:
-      '@actions/io': 3.0.2
-
-  '@actions/github@9.1.1':
-    dependencies:
-      '@actions/http-client': 3.0.2
-      '@octokit/core': 7.0.6
-      '@octokit/plugin-paginate-rest': 14.0.0(@octokit/core@7.0.6)
-      '@octokit/plugin-rest-endpoint-methods': 17.0.0(@octokit/core@7.0.6)
-      '@octokit/request': 10.0.9
-      '@octokit/request-error': 7.1.0
-      undici: 6.25.0
-
-  '@actions/glob@0.6.1':
-    dependencies:
-      '@actions/core': 3.0.1
-      minimatch: 10.2.5
-
-  '@actions/http-client@3.0.2':
-    dependencies:
-      tunnel: 0.0.6
-      undici: 6.25.0
-
-  '@actions/http-client@4.0.1':
-    dependencies:
-      tunnel: 0.0.6
-      undici: 6.25.0
-
-  '@actions/io@3.0.2': {}
-
-  '@actions/tool-cache@4.0.0':
-    dependencies:
-      '@actions/core': 3.0.1
-      '@actions/exec': 3.0.0
-      '@actions/http-client': 4.0.1
-      '@actions/io': 3.0.2
-      semver: 7.8.0
 
   '@azure/abort-controller@2.1.2':
     dependencies:
@@ -4682,12 +4553,6 @@ snapshots:
       '@parcel/watcher-win32-arm64': 2.5.6
       '@parcel/watcher-win32-ia32': 2.5.6
       '@parcel/watcher-win32-x64': 2.5.6
-
-  '@protobuf-ts/runtime-rpc@2.11.1':
-    dependencies:
-      '@protobuf-ts/runtime': 2.11.1
-
-  '@protobuf-ts/runtime@2.11.1': {}
 
   '@rolldown/binding-android-arm64@1.0.0':
     optional: true
@@ -7324,8 +7189,6 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
-  tunnel@0.0.6: {}
-
   turbo@2.9.12:
     optionalDependencies:
       '@turbo/darwin-64': 2.9.12
@@ -7348,8 +7211,6 @@ snapshots:
   uc.micro@2.1.0: {}
 
   undici-types@7.21.0: {}
-
-  undici@6.25.0: {}
 
   undici@7.25.0: {}
 

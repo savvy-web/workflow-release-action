@@ -4,7 +4,7 @@ Unit testing patterns and infrastructure for workflow-release-action.
 
 __See also:__ [Root CLAUDE.md](../CLAUDE.md) | [src/CLAUDE.md](../src/CLAUDE.md)
 
-__For comprehensive testing documentation:__ `@../.claude/design/release-action/testing.md` -- covers mock factory internals, all specialized patterns (exec listeners, fake timers, filesystem, workspaces-effect sync APIs, GitHub context, core.summary), attest test layers (`AttestTest`/`SbomTest`), complete coverage map, and coverage gap analysis.
+__For comprehensive testing documentation:__ `@../.claude/design/release-action/testing.md` -- covers test-layer patterns, all specialized patterns (exec listeners, fake timers, filesystem, workspaces-effect sync APIs, GitHub context, core.summary), attest test layers (`AttestTest`/`SbomTest`), complete coverage map, and coverage gap analysis.
 
 ## Running Tests
 
@@ -19,69 +19,45 @@ pnpm ci:test                                     # CI mode
 
 85% threshold for branches, functions, lines, and statements (configured in `vitest.config.ts`).
 
-## Mock Factory Functions
+## Test Utilities
 
-Use factories from `utils/github-mocks.ts` for type-safe mock creation. Never use `any` types.
+`utils/github-mocks.ts` provides three environment helpers — there are no hand-rolled Octokit or `@actions/*` mock factories (the migration removed them):
 
 | Function | Purpose |
 | -------- | ------- |
-| `createMockOctokit()` | GitHub Octokit client with REST API methods |
-| `createMockCore()` | @actions/core module (inputs, outputs, logging) |
-| `createMockExec()` | @actions/exec module |
-| `createMockCache()` | @actions/cache module |
-| `createMockToolCache()` | @actions/tool-cache module |
-| `createMockGlob()` | @actions/glob module |
-| `createMockHttpClient()` | @actions/http-client module |
-| `setupTestEnvironment()` | Initialize test environment |
-| `cleanupTestEnvironment()` | Clean up after tests |
+| `setupTestEnvironment({ suppressOutput })` | Clear all mocks; optionally silence stdout/stderr. Call in `beforeEach()` |
+| `cleanupTestEnvironment()` | Restore all mocks. Call in `afterEach()` |
+| `suppressConsoleOutput()` | Silence stdout/stderr directly |
 
-## Standard Test Setup
+## Mocking Strategy
 
-Use this pattern for all test files:
+__Effect code__ (entry points, migrated utilities) -- use the in-memory test layers from `@savvy-web/github-action-effects/testing` (`ActionOutputsTest`, `ActionStateTest`, `GitHubClientTest`, `GitHubAppTest`, `CheckRunTest`, `GitBranchTest`, `PullRequestTest`, the `CommandRunner` test layer, ...). Provide the layer to the effect under test and inspect the recorded state.
+
+__Attest service__ -- use `AttestTest` / `SbomTest` from `src/services/attest/testing.ts`. These record calls without performing cryptographic work.
+
+__Imperative publish-chain code__ (modules still calling `src/utils/_actions-compat.ts`) -- mock Node builtins (`vi.mock("node:fs")`, ...) and use `setupTestEnvironment` / `cleanupTestEnvironment`.
 
 ```typescript
-import { cleanupTestEnvironment, createMockOctokit, setupTestEnvironment } from "./utils/github-mocks.js";
-import type { MockOctokit } from "./utils/test-types.js";
-
-vi.mock("@actions/core");
-vi.mock("@actions/github");
+import { afterEach, beforeEach, describe, it } from "vitest";
+import { cleanupTestEnvironment, setupTestEnvironment } from "./utils/github-mocks.js";
 
 describe("module-name", () => {
-  let mockOctokit: MockOctokit;
-
-  beforeEach(() => {
-    setupTestEnvironment({ suppressOutput: true });
-    mockOctokit = createMockOctokit();
-    vi.mocked(getOctokit).mockReturnValue(mockOctokit as unknown as ReturnType<typeof getOctokit>);
-  });
-
-  afterEach(() => {
-    cleanupTestEnvironment();
-  });
+  beforeEach(() => setupTestEnvironment({ suppressOutput: true }));
+  afterEach(() => cleanupTestEnvironment());
 });
 ```
 
 ## Key Testing Rules
 
-- Never use `any` types -- use `createMockOctokit()` and typed factories
+- Never use `any` types
 - Use Arrange-Act-Assert pattern
 - Use descriptive test names: `"should X when Y"`
 - Cover all code paths (branches, switch cases, error handling)
-- Use `as unknown as Type` pattern for Octokit mock casting
-- All MockOctokit properties are required (not optional) to prevent chaining issues
 - For retry logic, use `vi.useFakeTimers()` per-test (not globally) with `vi.advanceTimersByTimeAsync(60000)`
 - Always call `vi.useRealTimers()` in `afterEach` when using fake timers
 
-## Attest Service Tests
-
-The `src/services/attest/` service has its own test layers. Use `AttestTest` or `SbomTest` (from `src/services/attest/testing.ts`) instead of the standard mock factories. These layers record calls without performing cryptographic work. See `@../.claude/design/release-action/testing.md` for attest test layer details.
-
 ## Common Issues
 
-__Mock not called:__ Ensure mock setup happens before function call and `vi.mocked(getOctokit)` is configured in `beforeEach`.
-
-__Optional chaining breaks mocks:__ Use `mockOctokit.rest.repos.getBranch` not `mockOctokit.rest.repos?.getBranch`. Factory ensures all properties exist.
-
-__Type error with mock return:__ Use `as unknown as ReturnType<typeof getOctokit>` pattern.
+__Mock not called:__ Ensure the `vi.mock(...)` call is hoisted above imports and the subject imports the exact mocked path.
 
 __Coverage below threshold:__ Run `pnpm test`, check uncovered line numbers, add tests for those paths.

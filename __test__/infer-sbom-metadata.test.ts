@@ -15,12 +15,6 @@ vi.mock("node:fs", () => ({
 	readFileSync: vi.fn(),
 }));
 
-vi.mock("@actions/core", () => ({
-	debug: vi.fn(),
-	info: vi.fn(),
-	warning: vi.fn(),
-}));
-
 describe("infer-sbom-metadata", () => {
 	beforeEach(() => {
 		vi.resetAllMocks();

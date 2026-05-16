@@ -3,8 +3,6 @@ import type { PackagePublishValidation } from "../src/types/publish-config.js";
 import { generateSBOMPreview } from "../src/utils/generate-sbom-preview.js";
 import { cleanupTestEnvironment, setupTestEnvironment } from "./utils/github-mocks.js";
 
-vi.mock("@actions/core");
-
 vi.mock("../src/utils/create-attestation.js", () => ({
 	validateSBOMGeneration: vi.fn(),
 }));
