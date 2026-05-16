@@ -1,7 +1,40 @@
 # Publish-chain Effect services — design
 
 **Date:** 2026-05-16
-**Status:** Approved — ready for implementation planning
+**Status:** Scoping approved — decomposed into two sub-projects (see below). This
+document is the shared design substrate; each sub-project needs its own spec.
+
+## Scope: two sub-projects
+
+After the design below was approved, one delivery decision reshaped *where the
+code lives*: the Attest service, the three new orchestration services
+(`Validation`/`Publish`/`Releases`), and the `PackagePublish` idempotency policy
+are all built **upstream in `@savvy-web/github-action-effects`**, not in this
+repo. `workflow-release-action` becomes a thin consumer. That splits the work:
+
+- **Project A — `github-action-effects` (library).** Build `Attest` (moved out
+  of this repo's `src/services/attest/`), `Publish`, `Validation`, `Releases`
+  as library services; add the idempotency policy to `PackagePublish`. This is
+  the bulk of the work and must be designed first — the consumer can't be
+  written against an API that does not exist. Needs its own spec, brainstormed
+  with `github-action-effects` as the working context.
+- **Project B — `workflow-release-action` (consumer, this repo).** Delete
+  `src/services/attest/` and the 21 imperative publish modules + `_actions-compat.ts`;
+  copy `publishability.ts` + `changeset-config.ts` from `pnpm-config-dependency-action`
+  (silk overrides — they *override* a library tag, so they stay consumer-side);
+  rewire the three `main.ts` phase handlers to compose the new library services.
+  Smaller; depends on Project A's API. Needs its own (short) spec.
+
+**Dev workflow:** Project A is developed on a `github-action-effects` feature
+branch, `pnpm link`ed into this repo so `dev` can build against the live
+upstream for integration runs; a real library release is cut once satisfied.
+
+**Reading this document:** the design content below — the reuse map, the
+service interfaces, the idempotency policy, the testing approach — is correct
+and shared by both sub-projects. The only correction is placement: wherever the
+text says the services live in `src/services/publish/` of this repo, they
+instead live in `github-action-effects`. Project A's spec inherits the service
+designs; Project B's spec inherits the reuse map's delete/copy/rewire columns.
 
 ## Problem
 
