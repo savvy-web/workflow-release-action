@@ -10,10 +10,7 @@
  * normalising per-target status) happens here.
  */
 
-import type { ReleaseInfo } from "../utils/create-github-releases.js";
-import type { TagInfo } from "../utils/determine-tag-strategy.js";
-import type { PackagePublishResult } from "../utils/generate-publish-summary.js";
-import type { PublishPackagesResult } from "../utils/publish-packages.js";
+import type { PackagePublishResult, PublishPackagesResult, ReleaseInfo, TagInfo } from "../release/types.js";
 import type { BranchManagementOutput, PublishingOutput, ReleaseFlags, ValidationOutput } from "./release-output.js";
 import { SCHEMA_URL, SCHEMA_VERSION, deriveStatus } from "./release-output.js";
 
