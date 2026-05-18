@@ -490,8 +490,9 @@ describe("runValidation", () => {
 			expect(sbomTestState.generateCalls[0]?.rootVersion).toBe("1.0.1");
 		});
 
-		it("reports sbomOk: true when no packages have provenance targets", async () => {
-			// Arrange — target with provenance: false (default)
+		it("generates SBOM for every published target regardless of provenance flag", async () => {
+			// Arrange — target with provenance: false (default). SBOM is now generated
+			// for every published target, not just provenance-enabled ones.
 			const pkg = makeWsPkg("@test/no-provenance", "1.0.1", "packages/no-provenance");
 			const target = makeNpmTarget("@test/no-provenance"); // provenance: false
 
@@ -521,9 +522,9 @@ describe("runValidation", () => {
 				runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
 			);
 
-			// Assert
+			// Assert — SBOM is generated for the published target even without provenance
 			expect(report.sbomOk).toBe(true);
-			expect(report.sbomSummary).toBe("No packages require SBOM");
+			expect(report.sbomSummary).toBe("1 SBOM(s) generated successfully");
 		});
 	});
 });
