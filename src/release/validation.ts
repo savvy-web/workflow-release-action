@@ -9,7 +9,7 @@
  * @module release/validation
  */
 
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 
 import type { PackagePublishError, ResolvedDependency, SbomError } from "@savvy-web/github-action-effects";
 import { ActionLogger, ActionState, CommandRunner, PackagePublish, Sbom } from "@savvy-web/github-action-effects";
@@ -216,7 +216,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 
 		// ── Step 1: Discover workspace packages ──────────────────────────────
 
-		yield* Effect.logInfo("runValidation: discovering workspace packages");
+		yield* Effect.logDebug("runValidation: discovering workspace packages");
 		const workspacePackages = yield* discovery.listPackages().pipe(
 			Effect.mapError(
 				(e) =>
@@ -234,7 +234,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 		// returns empty. Instead, diff each package's current version against
 		// the target branch to discover what is being released.
 
-		yield* Effect.logInfo("runValidation: detecting released packages via version diff");
+		yield* Effect.logDebug("runValidation: detecting released packages via version diff");
 		const releasedPackages = yield* detectReleasedPackages(workspacePackages, runner, args.targetBranch).pipe(
 			Effect.mapError(
 				(e) =>
@@ -246,10 +246,10 @@ export const runValidation = (args: ValidationInputArgs) =>
 			),
 		);
 
-		yield* Effect.logInfo(`runValidation: ${releasedPackages.length} package(s) to validate`);
+		yield* Effect.logDebug(`runValidation: ${releasedPackages.length} package(s) to validate`);
 
 		if (releasedPackages.length === 0) {
-			yield* Effect.logInfo("runValidation: no packages to validate");
+			yield* Effect.logDebug("runValidation: no packages to validate");
 			const emptyResult: PublishPackagesResult = {
 				success: true,
 				packages: [],
@@ -274,25 +274,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 
 		// ── Step 3: Resolve publish targets + dry-run per package ─────────────
 
-		yield* Effect.logInfo("runValidation: resolving publish targets and running dry-runs");
-
-		// ── Diagnostic: surface the runtime environment for the npm dry-run ──
-		// `spawn npm ENOENT` was observed here even though git/pnpm resolve fine;
-		// log PATH and probe the toolchain so the cause is visible in the run log.
-		yield* Effect.logInfo(`runValidation[diag]: PATH=${process.env.PATH ?? "<unset>"}`);
-		for (const probe of [
-			["node", ["--version"]],
-			["npm", ["--version"]],
-			["pnpm", ["--version"]],
-			["which", ["npm"]],
-			["which", ["node"]],
-		] as const) {
-			const outcome = yield* runner.execCapture(probe[0], probe[1]).pipe(
-				Effect.map((o) => `ok: ${o.stdout.trim() || o.stderr.trim()}`),
-				Effect.catchAll((e) => Effect.succeed(`FAILED: ${e.reason}`)),
-			);
-			yield* Effect.logInfo(`runValidation[diag]: ${probe[0]} ${probe[1].join(" ")} → ${outcome}`);
-		}
+		yield* Effect.logDebug("runValidation: resolving publish targets and running dry-runs");
 
 		const workspaceRoot = process.cwd();
 		const pkgResults: PackagePublishResult[] = [];
@@ -302,167 +284,204 @@ export const runValidation = (args: ValidationInputArgs) =>
 		let totalTargets = 0;
 		let readyTargets = 0;
 
-		for (const { pkg } of releasedPackages) {
-			// Single detect call — result reused for both dry-run and SBOM steps.
-			const targets = yield* detector.detect(pkg, workspaceRoot);
+		yield* logger.withBuffer(
+			"publish-validation",
+			Effect.gen(function* () {
+				for (const { pkg } of releasedPackages) {
+					// Single detect call — result reused for both dry-run and SBOM steps.
+					const targets = yield* detector.detect(pkg, workspaceRoot);
 
-			if (targets.length === 0) {
-				yield* Effect.logInfo(`${pkg.name}: no publish targets (version-only)`);
-				pkgResults.push({ name: pkg.name, version: pkg.version, targets: [] });
-				continue;
-			}
+					if (targets.length === 0) {
+						yield* Effect.logDebug(`${pkg.name}: no publish targets (version-only)`);
+						pkgResults.push({ name: pkg.name, version: pkg.version, targets: [] });
+						continue;
+					}
 
-			const targetResults: TargetPublishResult[] = [];
+					const targetResults: TargetPublishResult[] = [];
 
-			for (const target of targets) {
-				totalTargets++;
+					for (const target of targets) {
+						totalTargets++;
 
-				// Classify the target by registry URL.
-				// NOTE: workspaces-effect's PublishTarget has no `protocol` field;
-				// all targets resolved through PublishabilityDetector are npm-compatible.
-				// JSR targets are only reachable via the imperative publish chain and
-				// are not currently modelled in this Effect-based path.
-				const registryUrl = target.registry;
-				const targetIsNpm = isNpmRegistry(registryUrl);
-				const targetIsGhPkgs = isGitHubPackagesRegistry(registryUrl);
+						// Classify the target by registry URL.
+						// NOTE: workspaces-effect's PublishTarget has no `protocol` field;
+						// all targets resolved through PublishabilityDetector are npm-compatible.
+						// JSR targets are only reachable via the imperative publish chain and
+						// are not currently modelled in this Effect-based path.
+						const registryUrl = target.registry;
+						const targetIsNpm = isNpmRegistry(registryUrl);
+						const targetIsGhPkgs = isGitHubPackagesRegistry(registryUrl);
 
-				// `target.directory` (e.g. "dist/dev") is package-relative; resolve it
-				// against the package's absolute path so the dry-run child process'
-				// `cwd` exists. A non-existent `cwd` makes `spawn` fail with a
-				// misleading "spawn npm ENOENT".
-				const targetDir = isAbsolute(target.directory) ? target.directory : join(pkg.path, target.directory);
+						// `target.directory` (e.g. "dist/dev") is package-relative; resolve it
+						// against the package's absolute path so the dry-run child process'
+						// `cwd` exists. A non-existent `cwd` makes `spawn` fail with a
+						// misleading "spawn npm ENOENT".
+						const targetDir = isAbsolute(target.directory) ? target.directory : join(pkg.path, target.directory);
+						const distDir = basename(targetDir);
 
-				yield* Effect.logInfo(`${pkg.name}: setting up auth and dry-run for ${registryUrl} in ${targetDir}`);
+						yield* Effect.logDebug(`${pkg.name}: setting up auth and dry-run for ${registryUrl} in ${targetDir}`);
 
-				const dryRunOutcome = yield* logger.group(
-					`Dry-run ${pkg.name} → ${registryUrl}`,
-					Effect.gen(function* () {
-						// Set up registry auth before dry-run.
-						const token = pickToken(registryUrl, npmToken, ghPkgsToken);
-						if (token !== null) {
-							yield* publish.setupAuth(registryUrl, token).pipe(
-								Effect.catchAll((e: PackagePublishError) => {
-									return Effect.logWarning(`setupAuth failed for ${registryUrl}: ${e.message}`);
-								}),
-							);
-						}
+						const dryRunOutcome = yield* logger.group(
+							`Dry-run · ${pkg.name} · ${distDir} · ${registryUrl}`,
+							Effect.gen(function* () {
+								yield* Effect.logDebug(`cwd: ${targetDir}`);
 
-						// Run the real dry-run via PackagePublish.dryRun.
-						const result = yield* publish
-							.dryRun(targetDir, {
+								// Set up registry auth before dry-run.
+								const token = pickToken(registryUrl, npmToken, ghPkgsToken);
+								if (token !== null) {
+									yield* publish.setupAuth(registryUrl, token).pipe(
+										Effect.catchAll((e: PackagePublishError) => {
+											return Effect.logWarning(`setupAuth failed for ${registryUrl}: ${e.message}`);
+										}),
+									);
+								}
+
+								yield* Effect.logDebug(`npm publish --dry-run in ${targetDir} → ${registryUrl}`);
+
+								// Run the real dry-run via PackagePublish.dryRun.
+								const result = yield* publish
+									.dryRun(targetDir, {
+										registry: registryUrl,
+										access: target.access,
+										provenance: target.provenance,
+									})
+									.pipe(
+										Effect.map((dryRunResult) => ({
+											success: dryRunResult.ok as boolean,
+											output: dryRunResult.output,
+											packedSize: dryRunResult.packedSize,
+											unpackedSize: dryRunResult.unpackedSize,
+											fileCount: dryRunResult.fileCount,
+										})),
+										Effect.catchAll((e: PackagePublishError) => {
+											// Structural dryRun failure (npm could not be spawned, etc.)
+											return Effect.succeed({
+												success: false as const,
+												output: e.message,
+												packedSize: undefined,
+												unpackedSize: undefined,
+												fileCount: undefined,
+											});
+										}),
+									);
+
+								if (!result.success) {
+									yield* Effect.logWarning(`dry-run failed for ${pkg.name} → ${registryUrl}: ${result.output}`);
+								} else {
+									yield* Effect.logDebug(`dry-run succeeded: ${result.output}`);
+								}
+								return result;
+							}),
+						);
+
+						// Build the legacy ResolvedTarget shape for TargetPublishResult.
+						// Since PublishTarget has no protocol field, we use "npm" for all targets.
+						const targetResult: TargetPublishResult = {
+							target: {
+								protocol: "npm",
 								registry: registryUrl,
+								directory: targetDir,
 								access: target.access,
 								provenance: target.provenance,
-							})
-							.pipe(
-								Effect.map((dryRunResult) => ({
-									success: dryRunResult.ok as boolean,
-									output: dryRunResult.output,
-									packedSize: dryRunResult.packedSize,
-									unpackedSize: dryRunResult.unpackedSize,
-									fileCount: dryRunResult.fileCount,
-								})),
-								Effect.catchAll((e: PackagePublishError) => {
-									// Structural dryRun failure (npm could not be spawned, etc.)
-									return Effect.succeed({
-										success: false as const,
-										output: e.message,
-										packedSize: undefined,
-										unpackedSize: undefined,
-										fileCount: undefined,
-									});
-								}),
-							);
+								tag: "latest",
+								tokenEnv: null,
+							},
+							success: dryRunOutcome.success,
+							error: dryRunOutcome.success ? undefined : dryRunOutcome.output,
+							stdout: dryRunOutcome.success ? dryRunOutcome.output : undefined,
+						};
 
-						if (!result.success) {
-							yield* Effect.logWarning(`dry-run failed for ${pkg.name} → ${registryUrl}: ${result.output}`);
+						targetResults.push(targetResult);
+
+						if (dryRunOutcome.success) {
+							readyTargets++;
+						} else {
+							allPublishOk = false;
+							if (targetIsNpm) npmReadyAll = false;
+							if (targetIsGhPkgs) githubPackagesReadyAll = false;
 						}
-						return result;
-					}),
-				);
+					}
 
-				// Build the legacy ResolvedTarget shape for TargetPublishResult.
-				// Since PublishTarget has no protocol field, we use "npm" for all targets.
-				const targetResult: TargetPublishResult = {
-					target: {
-						protocol: "npm",
-						registry: registryUrl,
-						directory: targetDir,
-						access: target.access,
-						provenance: target.provenance,
-						tag: "latest",
-						tokenEnv: null,
-					},
-					success: dryRunOutcome.success,
-					error: dryRunOutcome.success ? undefined : dryRunOutcome.output,
-					stdout: dryRunOutcome.success ? dryRunOutcome.output : undefined,
-				};
-
-				targetResults.push(targetResult);
-
-				if (dryRunOutcome.success) {
-					readyTargets++;
-				} else {
-					allPublishOk = false;
-					if (targetIsNpm) npmReadyAll = false;
-					if (targetIsGhPkgs) githubPackagesReadyAll = false;
+					pkgResults.push({ name: pkg.name, version: pkg.version, targets: targetResults });
 				}
-			}
-
-			pkgResults.push({ name: pkg.name, version: pkg.version, targets: targetResults });
-		}
+			}),
+		);
 
 		// ── Step 4: SBOM preview ─────────────────────────────────────────────
 
-		yield* Effect.logInfo("runValidation: generating SBOM preview");
+		yield* Effect.logDebug("runValidation: generating SBOM preview");
 
 		let sbomOk = true;
 		let sbomCount = 0;
 		let sbomSuccess = 0;
 
-		for (const { pkg } of releasedPackages) {
-			// Re-use previously resolved targets (avoid second detector.detect call).
-			// We need targets here to check for provenance — re-run detect since we
-			// don't cache them above. In practice the number of packages is small
-			// enough that the extra call is not a concern.
-			const targets = yield* detector.detect(pkg, workspaceRoot);
-			const hasProvenance = targets.some((t) => t.provenance);
-			if (!hasProvenance) continue;
+		yield* logger.withBuffer(
+			"sbom-preview",
+			Effect.gen(function* () {
+				for (const { pkg } of releasedPackages) {
+					// Re-use previously resolved targets (avoid second detector.detect call).
+					// We need targets here to check for provenance — re-run detect since we
+					// don't cache them above. In practice the number of packages is small
+					// enough that the extra call is not a concern.
+					const targets = yield* detector.detect(pkg, workspaceRoot);
+					const hasProvenance = targets.some((t) => t.provenance);
+					if (!hasProvenance) continue;
 
-			sbomCount++;
+					// Build a real SbomInput from the package's resolved dependencies.
+					// The WorkspacePackage.dependencies map contains direct dependencies
+					// as { [name]: version } — map these to ResolvedDependency records.
+					const dependencies: ResolvedDependency[] = Object.entries(pkg.dependencies).map(([name, version]) => ({
+						name,
+						version,
+					}));
 
-			// Build a real SbomInput from the package's resolved dependencies.
-			// The WorkspacePackage.dependencies map contains direct dependencies
-			// as { [name]: version } — map these to ResolvedDependency records.
-			const dependencies: ResolvedDependency[] = Object.entries(pkg.dependencies).map(([name, version]) => ({
-				name,
-				version,
-			}));
+					for (const target of targets) {
+						if (!target.provenance) continue;
+						const targetDir = isAbsolute(target.directory) ? target.directory : join(pkg.path, target.directory);
+						const distDir = basename(targetDir);
+						const registryUrl = target.registry;
 
-			const sbomEffect = sbomSvc
-				.generate({
-					rootName: pkg.name,
-					rootVersion: pkg.version,
-					dependencies,
-				})
-				.pipe(
-					Effect.flatMap((bom) => sbomSvc.serializeJson(bom)),
-					Effect.map(() => true as const),
-					Effect.catchAll((e: SbomError) =>
-						Effect.gen(function* () {
-							yield* Effect.logWarning(`SBOM generation failed for ${pkg.name}: ${e.message}`);
-							return false as const;
-						}),
-					),
-				);
+						sbomCount++;
 
-			const ok = yield* sbomEffect;
-			if (ok) {
-				sbomSuccess++;
-			} else {
-				sbomOk = false;
-			}
-		}
+						const ok = yield* logger.group(
+							`SBOM · ${pkg.name} · ${distDir} · ${registryUrl}`,
+							Effect.gen(function* () {
+								yield* Effect.logDebug(
+									`workspace package: ${pkg.name}@${pkg.version} · dist-dir: ${distDir} · registry: ${registryUrl}`,
+								);
+
+								return yield* sbomSvc
+									.generate({
+										rootName: pkg.name,
+										rootVersion: pkg.version,
+										dependencies,
+									})
+									.pipe(
+										Effect.flatMap((bom) =>
+											Effect.gen(function* () {
+												const bomJson = yield* sbomSvc.serializeJson(bom);
+												yield* Effect.logDebug(`generated CycloneDX BOM:\n${bomJson}`);
+												return true as const;
+											}),
+										),
+										Effect.catchAll((e: SbomError) =>
+											Effect.gen(function* () {
+												yield* Effect.logWarning(`SBOM generation failed for ${pkg.name}: ${e.message}`);
+												return false as const;
+											}),
+										),
+									);
+							}),
+						);
+
+						if (ok) {
+							sbomSuccess++;
+						} else {
+							sbomOk = false;
+						}
+					}
+				}
+			}),
+		);
 
 		const sbomSummary =
 			sbomCount === 0
