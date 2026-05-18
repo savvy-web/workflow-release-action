@@ -26,6 +26,7 @@ import {
 } from "@savvy-web/github-action-effects/testing";
 import { Effect, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { PackageNotFoundError, WorkspaceDiscovery } from "workspaces-effect";
 import type { ReleasesInputArgs, ReleasesReport } from "./releases.js";
 import { runReleases } from "./releases.js";
 import type { PackagePublishResult, TagInfo } from "./types.js";
@@ -83,6 +84,20 @@ const loggerLayer = ActionLoggerTest.layer(ActionLoggerTest.empty());
 const oidcLayer = OidcTokenIssuerTest;
 const sigstoreLayer = SigstoreSignerTest;
 
+/**
+ * Minimal WorkspaceDiscovery stub for releases tests.
+ *
+ * Returns PackageNotFoundError for every package lookup so buildReleaseNotes
+ * falls back to process.cwd() for the CHANGELOG path — the test cases don't
+ * need real workspace paths.
+ */
+const workspaceDiscoveryLayer = Layer.succeed(WorkspaceDiscovery, {
+	listPackages: () => Effect.succeed([]),
+	getPackage: (name: string, _cwd?: string) =>
+		Effect.fail(new PackageNotFoundError({ name, available: [] })) as Effect.Effect<never, PackageNotFoundError>,
+	importerMap: (_cwd?: string) => Effect.succeed(new Map()),
+});
+
 /** Build a GitHubClientTest layer answering the REST calls runReleases makes. */
 const makeGhClientLayer = () => {
 	const state: import("@savvy-web/github-action-effects").GitHubClientTestState = {
@@ -132,6 +147,7 @@ describe("runReleases", () => {
 				oidcLayer,
 				sigstoreLayer,
 				makeGhClientLayer(),
+				workspaceDiscoveryLayer,
 			);
 
 			// Act
@@ -244,6 +260,7 @@ describe("runReleases", () => {
 				oidcLayer,
 				sigstoreLayer,
 				makeGhClientLayer(),
+				workspaceDiscoveryLayer,
 			);
 
 			// Act
@@ -293,6 +310,7 @@ describe("runReleases", () => {
 				oidcLayer,
 				sigstoreLayer,
 				makeGhClientLayer(),
+				workspaceDiscoveryLayer,
 			);
 
 			// Act
@@ -367,6 +385,7 @@ describe("runReleases", () => {
 				oidcLayer,
 				sigstoreLayer,
 				makeGhClientLayer(),
+				workspaceDiscoveryLayer,
 			);
 
 			// Act

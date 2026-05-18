@@ -4,9 +4,9 @@
  */
 
 import { describe, expect, it } from "vitest";
+import type { PackagePublishResult } from "../src/release/types.js";
 import { toBranchManagementOutput, toPublishingOutput, toValidationOutput } from "../src/schema/projections.js";
 import { SCHEMA_URL, SCHEMA_VERSION } from "../src/schema/release-output.js";
-import type { PackagePublishResult } from "../src/utils/generate-publish-summary.js";
 
 describe("toBranchManagementOutput", () => {
 	it("projects a clean update with a release PR", () => {

@@ -35,10 +35,10 @@ import {
 } from "@savvy-web/github-action-effects";
 import { Effect, Redacted } from "effect";
 
-import { findPackagePath } from "../utils/find-package-path.js";
-import { getPackagePageUrl } from "../utils/generate-publish-summary.js";
+import { WorkspaceDiscovery } from "workspaces-effect";
 import { getRegistryDisplayName, isGitHubPackagesRegistry } from "../utils/registry-utils.js";
 import { ReleasesError } from "./errors.js";
+import { getPackagePageUrl } from "./report.js";
 import type { AssetInfo, PackagePublishResult, PublishPackagesResult, ReleaseInfo, TagInfo } from "./types.js";
 
 // ─── Public interfaces ────────────────────────────────────────────────────────
@@ -159,74 +159,85 @@ function findApiDocFile(directory: string | undefined, packageName: string): str
  *
  * Ports the changelog-extraction + publish-summary-table logic from
  * `createGitHubReleases` in `create-github-releases.ts`.
+ *
+ * Uses `WorkspaceDiscovery.getPackage` to resolve each package's filesystem
+ * path so CHANGELOG.md can be located.  Falls back to `process.cwd()` if
+ * discovery fails (e.g. a deleted monorepo member).
  */
-function buildReleaseNotes(packages: PackagePublishResult[], owner: string, repo: string): string {
-	let notes = "";
+const buildReleaseNotes = (
+	packages: PackagePublishResult[],
+	owner: string,
+	repo: string,
+): Effect.Effect<string, never, WorkspaceDiscovery> =>
+	Effect.gen(function* () {
+		const discovery = yield* WorkspaceDiscovery;
+		let notes = "";
 
-	// Changelog sections
-	for (const pkg of packages) {
-		const pkgPath = findPackagePath(pkg.name);
-		const changelogPaths: string[] = [];
-		if (pkgPath) changelogPaths.push(join(pkgPath, "CHANGELOG.md"));
-		changelogPaths.push(join(process.cwd(), "CHANGELOG.md"));
+		// Changelog sections
+		for (const pkg of packages) {
+			const wsPkg = yield* discovery.getPackage(pkg.name).pipe(Effect.option);
+			const pkgPath = wsPkg._tag === "Some" ? wsPkg.value.path : undefined;
+			const changelogPaths: string[] = [];
+			if (pkgPath) changelogPaths.push(join(pkgPath, "CHANGELOG.md"));
+			changelogPaths.push(join(process.cwd(), "CHANGELOG.md"));
 
-		let changelog: string | undefined;
-		for (const cp of changelogPaths) {
-			changelog = extractReleaseNotes(cp, pkg.version);
-			if (changelog) break;
+			let changelog: string | undefined;
+			for (const cp of changelogPaths) {
+				changelog = extractReleaseNotes(cp, pkg.version);
+				if (changelog) break;
+			}
+
+			if (packages.length > 1) notes += `## ${pkg.name}\n\n`;
+			notes += changelog ?? `Released version ${pkg.version}`;
+			notes += "\n\n";
 		}
 
-		if (packages.length > 1) notes += `## ${pkg.name}\n\n`;
-		notes += changelog ?? `Released version ${pkg.version}`;
-		notes += "\n\n";
-	}
+		// Publish summary table
+		const publishedTargets: Array<{
+			pkg: PackagePublishResult;
+			target: PackagePublishResult["targets"][number];
+			registryName: string;
+			packageUrl: string | undefined;
+		}> = [];
 
-	// Publish summary table
-	const publishedTargets: Array<{
-		pkg: PackagePublishResult;
-		target: PackagePublishResult["targets"][number];
-		registryName: string;
-		packageUrl: string | undefined;
-	}> = [];
-
-	for (const pkg of packages) {
-		for (const target of pkg.targets.filter((t) => t.success)) {
-			const registryName = getRegistryDisplayName(target.target.registry ?? undefined);
-			const packageUrl = getPackagePageUrl(target.target.registry ?? null, pkg.name, pkg.version);
-			publishedTargets.push({ pkg, target, registryName, packageUrl });
+		for (const pkg of packages) {
+			for (const target of pkg.targets.filter((t) => t.success)) {
+				const registryName = getRegistryDisplayName(target.target.registry ?? undefined);
+				const packageUrl = getPackagePageUrl(target.target.registry ?? null, pkg.name, pkg.version);
+				publishedTargets.push({ pkg, target, registryName, packageUrl });
+			}
 		}
-	}
 
-	if (publishedTargets.length === 0) {
-		notes += "> This is a version-only release. No packages were published to a registry.\n\n";
+		if (publishedTargets.length === 0) {
+			notes += "> This is a version-only release. No packages were published to a registry.\n\n";
+			return notes;
+		}
+
+		notes += "---\n\n";
+		notes += "### Publish Summary\n\n";
+		notes += "| Registry | Package | SBOM | API | Provenance |\n";
+		notes += "|----------|---------|------|-----|------------|\n";
+
+		for (const { pkg, target, registryName, packageUrl } of publishedTargets) {
+			const packageCell = packageUrl ? `[${pkg.name}@${pkg.version}](${packageUrl})` : `${pkg.name}@${pkg.version}`;
+			const sbomCell = target.sbomPath ? "📦" : "—";
+			const apiDocExists = findApiDocFile(target.target.directory, pkg.name) !== undefined;
+			const apiCell = apiDocExists ? "📄" : "—";
+			const provenanceParts: string[] = [];
+			if (target.attestationUrl) provenanceParts.push(`[Sigstore](${target.attestationUrl})`);
+			if (pkg.githubAttestationUrl) provenanceParts.push(`[GitHub](${pkg.githubAttestationUrl})`);
+			if (target.sbomAttestationUrl) provenanceParts.push(`[SBOM](${target.sbomAttestationUrl})`);
+			const provenanceCell = provenanceParts.length > 0 ? provenanceParts.join(", ") : "—";
+			notes += `| ${registryName} | ${packageCell} | ${sbomCell} | ${apiCell} | ${provenanceCell} |\n`;
+		}
+
+		// Suppress unused-parameter lint warning for owner/repo — kept for future
+		// release-URL construction if the table format evolves.
+		void owner;
+		void repo;
+
 		return notes;
-	}
-
-	notes += "---\n\n";
-	notes += "### Publish Summary\n\n";
-	notes += "| Registry | Package | SBOM | API | Provenance |\n";
-	notes += "|----------|---------|------|-----|------------|\n";
-
-	for (const { pkg, target, registryName, packageUrl } of publishedTargets) {
-		const packageCell = packageUrl ? `[${pkg.name}@${pkg.version}](${packageUrl})` : `${pkg.name}@${pkg.version}`;
-		const sbomCell = target.sbomPath ? "📦" : "—";
-		const apiDocExists = findApiDocFile(target.target.directory, pkg.name) !== undefined;
-		const apiCell = apiDocExists ? "📄" : "—";
-		const provenanceParts: string[] = [];
-		if (target.attestationUrl) provenanceParts.push(`[Sigstore](${target.attestationUrl})`);
-		if (pkg.githubAttestationUrl) provenanceParts.push(`[GitHub](${pkg.githubAttestationUrl})`);
-		if (target.sbomAttestationUrl) provenanceParts.push(`[SBOM](${target.sbomAttestationUrl})`);
-		const provenanceCell = provenanceParts.length > 0 ? provenanceParts.join(", ") : "—";
-		notes += `| ${registryName} | ${packageCell} | ${sbomCell} | ${apiCell} | ${provenanceCell} |\n`;
-	}
-
-	// Suppress unused-parameter lint warning for owner/repo — kept for future
-	// release-URL construction if the table format evolves.
-	void owner;
-	void repo;
-
-	return notes;
-}
+	});
 
 /**
  * Build a SLSA Provenance v1 predicate from the runner's OIDC token.
@@ -372,7 +383,7 @@ const processOneTag = (
 ): Effect.Effect<
 	readonly [ReleaseInfo | null, string | null],
 	never,
-	GitTag | GitHubRelease | Attest | OidcTokenIssuer | GitHubClient | SigstoreSigner
+	GitTag | GitHubRelease | Attest | OidcTokenIssuer | GitHubClient | SigstoreSigner | WorkspaceDiscovery
 > =>
 	Effect.gen(function* () {
 		yield* Effect.logInfo(`runReleases: processing ${tag.name}`);
@@ -409,7 +420,7 @@ const processOneTag = (
 		);
 
 		// ── Step 2: Build release notes ───────────────────────────────────────────
-		const notes = buildReleaseNotes(associatedPackages, owner, repo);
+		const notes = yield* buildReleaseNotes(associatedPackages, owner, repo);
 
 		// ── Step 3: Create GitHub release ─────────────────────────────────────────
 		const releaseSvc = yield* GitHubRelease;
@@ -735,7 +746,7 @@ export const runReleases = (
 ): Effect.Effect<
 	ReleasesReport,
 	ReleasesError,
-	GitTag | GitHubRelease | Attest | OidcTokenIssuer | GitHubClient | SigstoreSigner | ActionLogger
+	GitTag | GitHubRelease | Attest | OidcTokenIssuer | GitHubClient | SigstoreSigner | ActionLogger | WorkspaceDiscovery
 > =>
 	Effect.gen(function* () {
 		if (args.tags.length === 0) {

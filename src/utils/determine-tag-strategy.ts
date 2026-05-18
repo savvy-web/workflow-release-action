@@ -1,5 +1,5 @@
+import type { PackagePublishResult } from "../release/types.js";
 import { debug, info, warning } from "./_actions-compat.js";
-import type { PackagePublishResult } from "./generate-publish-summary.js";
 import { getAllWorkspacePackages, readChangesetConfig } from "./release-summary-helpers.js";
 
 /**

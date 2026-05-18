@@ -8,7 +8,13 @@ interface RawPackageJson {
 	name?: string;
 	version?: string;
 	private?: boolean;
-	publishConfig?: { access?: "public" | "restricted"; registry?: string; directory?: string };
+	publishConfig?: {
+		access?: "public" | "restricted";
+		registry?: string;
+		directory?: string;
+		/** Silk-specific: explicit list of publish targets (e.g. `["npm", "github"]`). */
+		targets?: unknown[];
+	};
 }
 
 /**
@@ -142,13 +148,16 @@ export function getAllWorkspacePackages(): WorkspacePackageInfo[] {
 		}
 
 		const hasPublishConfig = rawPkg.publishConfig?.access !== undefined;
-		// targetCount: 1 when the package has a publishConfig (i.e. it is
-		// configured for at least one registry), 0 otherwise.  The previous
-		// implementation called silkDetect to enumerate targets; that module
-		// has been removed and the count is approximated here — the only
-		// consumer (`determineTagStrategy`) uses `targetCount > 0` as one of
-		// three OR conditions, so a 0/1 value is sufficient.
-		const targetCount = hasPublishConfig ? 1 : 0;
+		// targetCount: mirrors the silk publishability rules without needing
+		// the Effect-based publishability.ts service.
+		//   - `publishConfig.targets` is a non-empty array → count its length
+		//     (e.g. ["npm", "github"] → 2)
+		//   - `publishConfig.access` is set but no explicit targets array →
+		//     one implicit target (the default npm/GitHub Packages registry)
+		//   - neither → 0 (not publishable)
+		const rawTargets = rawPkg.publishConfig?.targets;
+		const targetCount =
+			Array.isArray(rawTargets) && rawTargets.length > 0 ? rawTargets.length : hasPublishConfig ? 1 : 0;
 
 		packages.push({
 			name: workspace.name,

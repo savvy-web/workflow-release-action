@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PackagePublishResult } from "../src/release/types.js";
 import {
 	determineReleaseType,
 	determineTagStrategy,
 	isMonorepoForTagging,
 } from "../src/utils/determine-tag-strategy.js";
-import type { PackagePublishResult } from "../src/utils/generate-publish-summary.js";
 import * as releaseSummaryHelpers from "../src/utils/release-summary-helpers.js";
 
 // Mock release-summary-helpers
