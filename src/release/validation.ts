@@ -9,6 +9,8 @@
  * @module release/validation
  */
 
+import { isAbsolute, join } from "node:path";
+
 import type { PackagePublishError, ResolvedDependency, SbomError } from "@savvy-web/github-action-effects";
 import { ActionLogger, ActionState, CommandRunner, PackagePublish, Sbom } from "@savvy-web/github-action-effects";
 import { Config, Effect, Option } from "effect";
@@ -324,7 +326,13 @@ export const runValidation = (args: ValidationInputArgs) =>
 				const targetIsNpm = isNpmRegistry(registryUrl);
 				const targetIsGhPkgs = isGitHubPackagesRegistry(registryUrl);
 
-				yield* Effect.logInfo(`${pkg.name}: setting up auth and dry-run for ${registryUrl} in ${target.directory}`);
+				// `target.directory` (e.g. "dist/dev") is package-relative; resolve it
+				// against the package's absolute path so the dry-run child process'
+				// `cwd` exists. A non-existent `cwd` makes `spawn` fail with a
+				// misleading "spawn npm ENOENT".
+				const targetDir = isAbsolute(target.directory) ? target.directory : join(pkg.path, target.directory);
+
+				yield* Effect.logInfo(`${pkg.name}: setting up auth and dry-run for ${registryUrl} in ${targetDir}`);
 
 				const dryRunOutcome = yield* logger.group(
 					`Dry-run ${pkg.name} → ${registryUrl}`,
@@ -341,7 +349,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 
 						// Run the real dry-run via PackagePublish.dryRun.
 						const result = yield* publish
-							.dryRun(target.directory, {
+							.dryRun(targetDir, {
 								registry: registryUrl,
 								access: target.access,
 								provenance: target.provenance,
@@ -379,7 +387,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 					target: {
 						protocol: "npm",
 						registry: registryUrl,
-						directory: target.directory,
+						directory: targetDir,
 						access: target.access,
 						provenance: target.provenance,
 						tag: "latest",
