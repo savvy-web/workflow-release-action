@@ -228,235 +228,260 @@ const runValidation = Effect.gen(function* () {
 	const { repository } = yield* env.github;
 	const [owner, repo] = repository.split("/");
 
-	yield* logger.group(
-		"Phase 2: Release Validation",
-		Effect.gen(function* () {
-			yield* Effect.logInfo(`Detected package manager: ${packageManager}`);
+	yield* Effect.gen(function* () {
+		yield* Effect.logDebug(`Detected package manager: ${packageManager}`);
 
-			// Changesets needs full history + a LOCAL ref for the target branch
-			// to compute the diff between the release branch and main. The
-			// checkout step in the wrapping workflow may only have shallow
-			// history of changesets-release/main and an origin/main remote
-			// ref; fetch+set up a local ref before any changeset-aware step
-			// runs.
-			yield* Effect.logInfo("Fetching git history for changeset comparison");
-			const runner = yield* CommandRunner;
-			const shallow = yield* runner
-				.execCapture("git", ["rev-parse", "--is-shallow-repository"])
-				.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "false\n", stderr: "", exitCode: 0 })));
-			if (shallow.stdout.trim() === "true") {
-				yield* Effect.logInfo("Repository is shallow, fetching full history");
-				yield* Effect.either(runner.exec("git", ["fetch", "--unshallow", "origin"]));
-			}
-			yield* Effect.either(runner.exec("git", ["fetch", "origin", `${targetBranch}:${targetBranch}`]));
-			yield* Effect.logInfo(`Fetched ${targetBranch} as a local ref`);
+		// Changesets needs full history + a LOCAL ref for the target branch
+		// to compute the diff between the release branch and main. The
+		// checkout step in the wrapping workflow may only have shallow
+		// history of changesets-release/main and an origin/main remote
+		// ref; fetch+set up a local ref before any changeset-aware step
+		// runs.
+		yield* Effect.logDebug("Fetching git history for changeset comparison");
+		const runner = yield* CommandRunner;
+		const shallow = yield* runner
+			.execCapture("git", ["rev-parse", "--is-shallow-repository"])
+			.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "false\n", stderr: "", exitCode: 0 })));
+		if (shallow.stdout.trim() === "true") {
+			yield* Effect.logDebug("Repository is shallow, fetching full history");
+			yield* Effect.either(runner.exec("git", ["fetch", "--unshallow", "origin"]));
+		}
+		yield* Effect.either(runner.exec("git", ["fetch", "origin", `${targetBranch}:${targetBranch}`]));
+		yield* Effect.logDebug(`Fetched ${targetBranch} as a local ref`);
 
-			// Step 1 — link issues from commits (migrated).
-			yield* Effect.logInfo("Step 1: Link Issues from Commits");
-			const issuesResult = yield* linkIssuesFromCommits.pipe(
+		// Step 1 — link issues from commits (migrated).
+		const issuesResult = yield* logger.group(
+			"Link issues from commits",
+			linkIssuesFromCommits.pipe(
 				Effect.catchAll((e) =>
 					Effect.gen(function* () {
 						yield* Effect.logWarning(`linkIssuesFromCommits failed: ${String(e)}`);
 						return { linkedIssues: [] as Array<{ number: number; title: string }>, commits: [] };
 					}),
 				),
-			);
-			// Step 2 — validate builds (migrated).
-			yield* Effect.logInfo("Step 2: Validate Builds");
-			const buildResult = yield* validateBuilds(packageManager).pipe(
+			),
+		);
+		yield* Effect.logInfo(`✅ Link issues — ${issuesResult.linkedIssues.length} issue(s) linked`);
+
+		// Step 2 — validate builds (migrated).
+		const buildResult = yield* logger.group(
+			"Validate builds",
+			validateBuilds(packageManager).pipe(
 				Effect.catchAll((e) =>
 					Effect.gen(function* () {
 						yield* Effect.logError(`validateBuilds failed: ${String(e)}`);
 						return { success: false, errors: String(e), checkId: 0 };
 					}),
 				),
-			);
-			// Steps 3-5 — publish / release-notes / SBOM validation via Effect.
-			const publishCheckId = 0;
-			let publishSummary = "";
-			let publishReadyTargets = 0;
-			let publishTotalTargets = 0;
-			let publishOk = true;
-			let npmReady = false;
-			let githubPackagesReady = false;
-			let hasVersionOnlyPackages = false;
-			let reportPackages: ReadonlyArray<{ name: string; version: string; ready: boolean }> = [];
-			let sbomOk = true;
-			let sbomSummary = "SBOM Preview skipped";
+			),
+		);
+		yield* Effect.logInfo(buildResult.success ? "✅ Build validation — passed" : "❌ Build validation — failed");
 
-			if (buildResult.success) {
-				yield* Effect.logInfo("Steps 3-5: Validate Publishing, Release Notes, and SBOM");
-				const report = yield* runValidationEffect({ packageManager, targetBranch, dryRun }).pipe(
-					Effect.catchAll((e) =>
-						Effect.gen(function* () {
-							const message =
-								e instanceof Error
-									? `${e.message}\n${String((e as Error & { stack?: string }).stack ?? "")}`
-									: String(e);
-							yield* Effect.logWarning(`runValidation failed: ${message}`);
-							return null;
-						}),
-					),
-				);
-				if (report !== null) {
-					publishSummary = report.publishSummary;
-					publishReadyTargets = report.readyTargets;
-					publishTotalTargets = report.totalTargets;
-					publishOk = report.publishOk;
-					npmReady = report.npmReady;
-					githubPackagesReady = report.githubPackagesReady;
-					hasVersionOnlyPackages = report.hasVersionOnlyPackages;
-					reportPackages = report.packages;
-					sbomOk = report.sbomOk;
-					sbomSummary = report.sbomSummary;
-				}
-			} else {
-				yield* Effect.logWarning("Builds failed, skipping publish validation");
-			}
+		// Steps 3-5 — publish / release-notes / SBOM validation via Effect.
+		const publishCheckId = 0;
+		let publishSummary = "";
+		let publishReadyTargets = 0;
+		let publishTotalTargets = 0;
+		let publishOk = true;
+		let npmReady = false;
+		let githubPackagesReady = false;
+		let hasVersionOnlyPackages = false;
+		let reportPackages: ReadonlyArray<{ name: string; version: string; ready: boolean }> = [];
+		let sbomOk = true;
+		let sbomSummary = "SBOM Preview skipped";
 
-			// Step 6 — unified validation check (migrated).
-			yield* Effect.logInfo("Step 6: Create Unified Validation Check");
-			const checkResults = [
-				{
-					name: "Link Issues from Commits",
-					success: true,
-					checkId: 0,
-					message: `${issuesResult.linkedIssues.length} issue(s) linked`,
-				},
-				{
-					name: "Build Validation",
-					success: buildResult.success,
-					checkId: buildResult.checkId,
-					message: buildResult.success ? "Build passed" : "Build failed",
-				},
-				{
-					name: "Publish Validation",
-					success: buildResult.success && publishOk,
-					checkId: publishCheckId,
-					message:
-						publishTotalTargets === 0 ? "No targets" : `${publishReadyTargets}/${publishTotalTargets} target(s) ready`,
-				},
-				{
-					name: "Release Notes Preview",
-					success: true,
-					checkId: 0,
-					message: `${reportPackages.length} package(s) ready`,
-				},
-				{
-					name: "SBOM Preview",
-					success: sbomOk,
-					checkId: 0,
-					message: sbomSummary,
-				},
-			];
-			const unified = yield* createValidationCheck(checkResults, dryRun);
-			const checkRunUrl = unified.checkId > 0 ? `https://github.com/${repository}/runs/${unified.checkId}` : null;
-			const checkRunResult: { url: string; conclusion: string } | null =
-				checkRunUrl !== null ? { url: checkRunUrl, conclusion: unified.success ? "success" : "failure" } : null;
-
-			// Step 7 — sticky comment on the release PR (migrated).
-			yield* Effect.logInfo("Step 7: Update Sticky Comment");
-			const prsResult = yield* Effect.either(
-				client.rest<ReadonlyArray<{ number: number }>>("pulls.list.validation", (octokit) =>
-					(
-						octokit as {
-							rest: {
-								pulls: {
-									list: (params: {
-										owner: string;
-										repo: string;
-										state: "open";
-										head: string;
-										base: string;
-									}) => Promise<{ data: ReadonlyArray<{ number: number }> }>;
-								};
-							};
-						}
-					).rest.pulls.list({
-						owner,
-						repo,
-						state: "open",
-						head: `${owner}:${releaseBranch}`,
-						base: targetBranch,
+		if (buildResult.success) {
+			yield* Effect.logInfo("Validate publishing");
+			const report = yield* runValidationEffect({ packageManager, targetBranch, dryRun }).pipe(
+				Effect.catchAll((e) =>
+					Effect.gen(function* () {
+						const message =
+							e instanceof Error ? `${e.message}\n${String((e as Error & { stack?: string }).stack ?? "")}` : String(e);
+						yield* Effect.logWarning(`runValidation failed: ${message}`);
+						return null;
 					}),
 				),
 			);
-			if (prsResult._tag === "Right" && prsResult.right.length > 0) {
-				const pr = prsResult.right[0];
-				const failedChecks = checkResults.filter((r) => !r.success);
-				const allSuccess = failedChecks.length === 0;
-				const validationTable = summaryWriter.table(
-					[" ", "Check", "Outcome"],
-					checkResults.map((r) => [r.success ? "✅" : "❌", r.name, r.message ?? ""]),
-				);
-				const commentSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
-					{
-						heading: `📦 Release Validation ${allSuccess ? "✅" : "❌"}`,
-						level: 2,
-						content: dryRun ? "> 🧪 **DRY RUN MODE** - No actual publishing will occur" : "",
-					},
-					{ content: validationTable },
-				];
-				if (failedChecks.length > 0) {
-					commentSections.push({
-						heading: "❌ Failed Checks",
-						level: 3,
-						content: `${summaryWriter.list(failedChecks.map((c) => `**${c.name}**`))}\n\nPlease resolve the issues above before merging.`,
-					});
-				}
-				if (publishSummary !== "") {
-					commentSections.push({ content: publishSummary });
-				}
-				if (hasVersionOnlyPackages) {
-					commentSections.push({
-						heading: "🏷️ Version-Only Packages",
-						level: 3,
-						content: "These packages will receive GitHub releases only. No registry publishing will occur.",
-					});
-				}
-				commentSections.push({ content: `---\n\n<sub>Updated at ${new Date().toISOString()}</sub>` });
-				const commentBody = summaryWriter.build(commentSections);
-				yield* updateStickyComment(pr.number, commentBody, "release-validation").pipe(
+			if (report !== null) {
+				publishSummary = report.publishSummary;
+				publishReadyTargets = report.readyTargets;
+				publishTotalTargets = report.totalTargets;
+				publishOk = report.publishOk;
+				npmReady = report.npmReady;
+				githubPackagesReady = report.githubPackagesReady;
+				hasVersionOnlyPackages = report.hasVersionOnlyPackages;
+				reportPackages = report.packages;
+				sbomOk = report.sbomOk;
+				sbomSummary = report.sbomSummary;
+			}
+			yield* Effect.logInfo(
+				publishOk
+					? `✅ Publish validation — ${publishReadyTargets}/${publishTotalTargets} target(s) ready`
+					: `❌ Publish validation — ${publishReadyTargets}/${publishTotalTargets} target(s) ready`,
+			);
+			yield* Effect.logInfo(`✅ Release notes — ${reportPackages.length} package(s) ready`);
+			yield* Effect.logInfo(sbomOk ? `✅ SBOM preview — ${sbomSummary}` : `❌ SBOM preview — ${sbomSummary}`);
+		} else {
+			yield* Effect.logWarning("Builds failed, skipping publish validation");
+		}
+
+		// Step 6 — unified validation check (migrated).
+		const checkResults = [
+			{
+				name: "Link Issues from Commits",
+				success: true,
+				checkId: 0,
+				message: `${issuesResult.linkedIssues.length} issue(s) linked`,
+			},
+			{
+				name: "Build Validation",
+				success: buildResult.success,
+				checkId: buildResult.checkId,
+				message: buildResult.success ? "Build passed" : "Build failed",
+			},
+			{
+				name: "Publish Validation",
+				success: buildResult.success && publishOk,
+				checkId: publishCheckId,
+				message:
+					publishTotalTargets === 0 ? "No targets" : `${publishReadyTargets}/${publishTotalTargets} target(s) ready`,
+			},
+			{
+				name: "Release Notes Preview",
+				success: true,
+				checkId: 0,
+				message: `${reportPackages.length} package(s) ready`,
+			},
+			{
+				name: "SBOM Preview",
+				success: sbomOk,
+				checkId: 0,
+				message: sbomSummary,
+			},
+		];
+
+		const unified = yield* logger.group("Validation check", createValidationCheck(checkResults, dryRun));
+		yield* Effect.logInfo(`✅ Validation check — conclusion: ${unified.success ? "success" : "failure"}`);
+		const checkRunUrl = unified.checkId > 0 ? `https://github.com/${repository}/runs/${unified.checkId}` : null;
+		const checkRunResult: { url: string; conclusion: string } | null =
+			checkRunUrl !== null ? { url: checkRunUrl, conclusion: unified.success ? "success" : "failure" } : null;
+
+		// Final summary line.
+		const passedCount = checkResults.filter((r) => r.success).length;
+		yield* Effect.logInfo(
+			passedCount === checkResults.length
+				? `Release validation: ✅ ${passedCount}/${checkResults.length} checks passed`
+				: `Release validation: ❌ ${passedCount}/${checkResults.length} checks passed — failed: ${checkResults
+						.filter((r) => !r.success)
+						.map((r) => r.name)
+						.join(", ")}`,
+		);
+
+		// Step 7 — sticky comment on the release PR (migrated).
+		const prsResult = yield* Effect.either(
+			client.rest<ReadonlyArray<{ number: number }>>("pulls.list.validation", (octokit) =>
+				(
+					octokit as {
+						rest: {
+							pulls: {
+								list: (params: {
+									owner: string;
+									repo: string;
+									state: "open";
+									head: string;
+									base: string;
+								}) => Promise<{ data: ReadonlyArray<{ number: number }> }>;
+							};
+						};
+					}
+				).rest.pulls.list({
+					owner,
+					repo,
+					state: "open",
+					head: `${owner}:${releaseBranch}`,
+					base: targetBranch,
+				}),
+			),
+		);
+		if (prsResult._tag === "Right" && prsResult.right.length > 0) {
+			const pr = prsResult.right[0];
+			const failedChecks = checkResults.filter((r) => !r.success);
+			const allSuccess = failedChecks.length === 0;
+			const validationTable = summaryWriter.table(
+				[" ", "Check", "Outcome"],
+				checkResults.map((r) => [r.success ? "✅" : "❌", r.name, r.message ?? ""]),
+			);
+			const commentSections: Array<{ heading?: string; level?: 2 | 3 | 4; content: string }> = [
+				{
+					heading: `📦 Release Validation ${allSuccess ? "✅" : "❌"}`,
+					level: 2,
+					content: dryRun ? "> 🧪 **DRY RUN MODE** - No actual publishing will occur" : "",
+				},
+				{ content: validationTable },
+			];
+			if (failedChecks.length > 0) {
+				commentSections.push({
+					heading: "❌ Failed Checks",
+					level: 3,
+					content: `${summaryWriter.list(failedChecks.map((c) => `**${c.name}**`))}\n\nPlease resolve the issues above before merging.`,
+				});
+			}
+			if (publishSummary !== "") {
+				commentSections.push({ content: publishSummary });
+			}
+			if (hasVersionOnlyPackages) {
+				commentSections.push({
+					heading: "🏷️ Version-Only Packages",
+					level: 3,
+					content: "These packages will receive GitHub releases only. No registry publishing will occur.",
+				});
+			}
+			commentSections.push({ content: `---\n\n<sub>Updated at ${new Date().toISOString()}</sub>` });
+			const commentBody = summaryWriter.build(commentSections);
+			yield* logger.group(
+				"Update PR comment",
+				updateStickyComment(pr.number, commentBody, "release-validation").pipe(
 					Effect.catchAll((e) =>
 						Effect.gen(function* () {
 							yield* Effect.logWarning(`Failed to update sticky comment: ${String(e)}`);
 							return { commentId: 0 };
 						}),
 					),
-				);
-			} else {
-				yield* Effect.logWarning("No open PR found for release branch - skipping sticky comment update");
-			}
+				),
+			);
+			yield* Effect.logInfo(`✅ Sticky comment updated on PR #${pr.number}`);
+		} else {
+			yield* Effect.logInfo("Sticky comment update skipped — no open PR found for release branch");
+		}
 
-			// Emit structured result output for Phase 2.
-			const validationOutput = toValidationOutput({
-				buildsPassed: buildResult.success,
-				packageCount: reportPackages.length,
-				npmReady,
-				githubPackagesReady,
-				publishOk,
-				// Per-package ready comes directly from the ValidationReport.
-				packages: reportPackages.map((p) => ({ name: p.name, version: p.version, ready: p.ready })),
-				checkRun: checkRunResult,
-				dryRun,
-			});
-			yield* emitReleaseOutput(outputs, validationOutput, {
-				packageCount: reportPackages.length,
-				// Phase 2 runs on a push to the release branch; the release PR number is not
-				// in the event payload and resolving it would need an extra API lookup, so
-				// the release-pr-number scalar is left empty for the validation phase.
-				releasePrNumber: null,
-			});
-		}).pipe(
-			Effect.catchAll((e) =>
-				Effect.gen(function* () {
-					yield* Effect.logError(`Phase 2 failed: ${String(e)}`);
-					yield* cleanupValidationChecks([], `Phase 2 failed: ${String(e)}`, dryRun).pipe(
-						Effect.catchAll(() => Effect.succeed({ cleanedUp: 0, failed: 0, errors: [] })),
-					);
-					return yield* Effect.fail(e);
-				}),
-			),
+		// Emit structured result output for Phase 2.
+		const validationOutput = toValidationOutput({
+			buildsPassed: buildResult.success,
+			packageCount: reportPackages.length,
+			npmReady,
+			githubPackagesReady,
+			publishOk,
+			// Per-package ready comes directly from the ValidationReport.
+			packages: reportPackages.map((p) => ({ name: p.name, version: p.version, ready: p.ready })),
+			checkRun: checkRunResult,
+			dryRun,
+		});
+		yield* emitReleaseOutput(outputs, validationOutput, {
+			packageCount: reportPackages.length,
+			// Phase 2 runs on a push to the release branch; the release PR number is not
+			// in the event payload and resolving it would need an extra API lookup, so
+			// the release-pr-number scalar is left empty for the validation phase.
+			releasePrNumber: null,
+		});
+	}).pipe(
+		Effect.catchAll((e) =>
+			Effect.gen(function* () {
+				yield* Effect.logError(`Phase 2 failed: ${String(e)}`);
+				yield* cleanupValidationChecks([], `Phase 2 failed: ${String(e)}`, dryRun).pipe(
+					Effect.catchAll(() => Effect.succeed({ cleanedUp: 0, failed: 0, errors: [] })),
+				);
+				return yield* Effect.fail(e);
+			}),
 		),
 	);
 });
