@@ -45,7 +45,7 @@ import {
 } from "@savvy-web/github-action-effects";
 import { Config, Effect, Layer, Option } from "effect";
 import { ReleaseLive } from "./release/layers.js";
-import { runPublish } from "./release/publish.js";
+import { detectReleases, runBuildAndSbom, runPublishTargets } from "./release/publish.js";
 import { runReleases } from "./release/releases.js";
 import type { PublishPackagesResult, ReleaseInfo } from "./release/types.js";
 import { runValidation as runValidationEffect } from "./release/validation.js";
@@ -488,8 +488,9 @@ const runValidation = Effect.gen(function* () {
 
 /**
  * Phase 3 publishing orchestrator. Delegates to the Effect-based
- * {@link runPublish} and {@link runReleases} programs from
- * `src/release/publish.ts` and `src/release/releases.ts`.
+ * {@link detectReleases}, {@link runBuildAndSbom}, and {@link runPublishTargets}
+ * programs from `src/release/publish.ts` and the {@link runReleases} program
+ * from `src/release/releases.ts`.
  */
 const runPublishing = (mergedReleasePRNumber: number | undefined) =>
 	Effect.gen(function* () {
@@ -501,97 +502,150 @@ const runPublishing = (mergedReleasePRNumber: number | undefined) =>
 		const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
 		const packageManager = yield* detectPackageManager;
 
-		yield* logger.group(
-			"Phase 3: Release Publishing",
+		const emitPublishing = (
+			publishResult: PublishPackagesResult,
+			tags: ReadonlyArray<TagInfo>,
+			releases: ReadonlyArray<ReleaseInfo>,
+			tagShas: Record<string, string>,
+		) =>
+			emitReleaseOutput(outputs, toPublishingOutput({ publishResult, tags, releases, tagShas, dryRun }), {
+				packageCount: publishResult.totalPackages,
+				releasePrNumber: mergedReleasePRNumber !== undefined ? mergedReleasePRNumber : null,
+			});
+
+		// ── Prelude (detail) ───────────────────────────────────────────────────
+		yield* Effect.logDebug(`Detected package manager: ${packageManager}`);
+		const shallow = yield* runner
+			.execCapture("git", ["rev-parse", "--is-shallow-repository"])
+			.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "false\n", stderr: "", exitCode: 0 })));
+		if (shallow.stdout.trim() === "true") {
+			yield* Effect.either(runner.exec("git", ["fetch", "--unshallow", "origin"]));
+		}
+		yield* Effect.either(runner.exec("git", ["fetch", "origin", `${targetBranch}:${targetBranch}`]));
+
+		const args = { packageManager, targetBranch, dryRun, mergedReleasePRNumber };
+
+		// ── Step 1: Detect released packages ───────────────────────────────────
+		const detected = yield* logger.group("Detect released packages", detectReleases(args));
+		yield* Effect.logInfo(`✅ ${detected.length} package(s) in scope`);
+
+		if (detected.length === 0) {
+			const empty: PublishPackagesResult = {
+				success: true,
+				packages: [],
+				totalPackages: 0,
+				successfulPackages: 0,
+				totalTargets: 0,
+				successfulTargets: 0,
+			};
+			yield* emitPublishing(empty, [], [], {});
+			yield* Effect.logInfo("Release publishing: ✅ nothing to publish");
+			return;
+		}
+
+		// ── Step 2: Determine tag strategy ─────────────────────────────────────
+		const tagStrategy = yield* logger.group(
+			"Tag strategy",
 			Effect.gen(function* () {
-				const emitPublishing = (
-					publishResult: PublishPackagesResult,
-					tags: ReadonlyArray<TagInfo>,
-					releases: ReadonlyArray<ReleaseInfo>,
-					tagShas: Record<string, string>,
-				) =>
-					emitReleaseOutput(outputs, toPublishingOutput({ publishResult, tags, releases, tagShas, dryRun }), {
-						packageCount: publishResult.totalPackages,
-						releasePrNumber: mergedReleasePRNumber !== undefined ? mergedReleasePRNumber : null,
-					});
+				// `DetectedRelease` carries no `targets`, and `determineTagStrategy`
+				// only reads `name`/`version` — so the empty `targets` array is safe.
+				// Tag strategy (Step 2) runs on the full detected set before any
+				// publishing, making every detected package a tag candidate; that is
+				// correct because a publish failure (Step 4) aborts releases (Step 5)
+				// before a single tag is ever created.
+				const strategy = determineTagStrategy(detected.map((d) => ({ name: d.name, version: d.version, targets: [] })));
+				yield* Effect.logDebug(`tag strategy: ${strategy.strategy}, ${strategy.tags.length} tag(s)`);
+				return strategy;
+			}),
+		);
+		yield* Effect.logInfo(`✅ ${tagStrategy.tags.length} tag(s) (${tagStrategy.strategy})`);
 
-				yield* Effect.logInfo(`Detected package manager: ${packageManager}`);
+		// ── Step 3: Build & SBOM (fail-fast gate) ──────────────────────────────
+		yield* Effect.logInfo("Build & SBOM");
+		const buildSbom = yield* runBuildAndSbom(detected, args);
+		if (!buildSbom.ok) {
+			const detail =
+				buildSbom.buildError !== undefined
+					? `build failed — ${buildSbom.buildError}`
+					: `SBOM generation failed for ${buildSbom.sbomFailures.join(", ")}`;
+			yield* Effect.logError(`❌ Build & SBOM — ${detail}; aborting before publish`);
+			const failed: PublishPackagesResult = {
+				success: false,
+				packages: [],
+				totalPackages: detected.length,
+				successfulPackages: 0,
+				totalTargets: 0,
+				successfulTargets: 0,
+				...(buildSbom.buildError !== undefined ? { buildError: buildSbom.buildError } : {}),
+			};
+			yield* emitPublishing(failed, [], [], {});
+			yield* Effect.logInfo("Release publishing: ❌ aborted at Build & SBOM — nothing published");
+			yield* outputs.setFailed("Phase 3 aborted at Build & SBOM");
+			return;
+		}
+		yield* Effect.logInfo(`✅ Build & SBOM — ${buildSbom.packageCount} package(s) ready`);
 
-				const shallow = yield* runner
-					.execCapture("git", ["rev-parse", "--is-shallow-repository"])
-					.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "false\n", stderr: "", exitCode: 0 })));
-				if (shallow.stdout.trim() === "true") {
-					yield* Effect.either(runner.exec("git", ["fetch", "--unshallow", "origin"]));
-				}
-				yield* Effect.either(runner.exec("git", ["fetch", "origin", `${targetBranch}:${targetBranch}`]));
+		// ── Step 4: Publish to registries ──────────────────────────────────────
+		yield* Effect.logInfo("Publish");
+		const publishResult = yield* runPublishTargets(detected, args);
+		if (!publishResult.success) {
+			yield* Effect.logError(
+				`❌ Published ${publishResult.successfulTargets}/${publishResult.totalTargets} target(s) — aborting before releases`,
+			);
+			yield* emitPublishing(publishResult, [], [], {});
+			yield* Effect.logInfo("Release publishing: ❌ failed at Publish");
+			yield* outputs.setFailed("Publishing failed");
+			return;
+		}
+		yield* Effect.logInfo(`✅ Published ${publishResult.successfulTargets}/${publishResult.totalTargets} target(s)`);
 
-				// Steps 1+2: detect released packages and publish via runPublish.
-				yield* Effect.logInfo("Steps 1-2: Detect released packages and publish");
-				const publishResult = yield* runPublish({
-					packageManager,
-					targetBranch,
-					dryRun,
-					mergedReleasePRNumber,
-				});
+		// ── Step 5: Create releases ────────────────────────────────────────────
+		yield* Effect.logInfo("Create releases");
+		const releasesResult = yield* runReleases({
+			tags: tagStrategy.tags,
+			publishResult,
+			packageManager,
+			dryRun,
+		}).pipe(
+			Effect.catchAll((e) =>
+				Effect.gen(function* () {
+					yield* Effect.logWarning(`runReleases failed: ${String(e)}`);
+					return { success: false, releases: [] as ReleaseInfo[], errors: [String(e)] };
+				}),
+			),
+		);
+		yield* Effect.logInfo(`✅ Created ${releasesResult.releases.length} release(s)`);
 
-				if (publishResult === null) {
-					yield* outputs.setFailed("Phase 3 failed during publish");
-					return;
-				}
-
-				if (!publishResult.success) {
-					yield* Effect.logError("Publishing failed, skipping tags and releases");
-					yield* emitPublishing(publishResult, [], [], {});
-					yield* outputs.setFailed("Publishing failed");
-					return;
-				}
-
-				// Step 3: determine tag strategy (kept module, static import).
-				yield* Effect.logInfo("Step 3: Determine tag strategy");
-				const tagStrategy = determineTagStrategy(publishResult.packages);
-
-				// Step 4: create GitHub releases via runReleases.
-				yield* Effect.logInfo("Step 4: Create GitHub releases");
-				const releasesResult = yield* runReleases({
-					tags: tagStrategy.tags,
-					publishResult,
-					packageManager,
-					dryRun,
-				}).pipe(
+		// ── Follow-on: close linked issues ─────────────────────────────────────
+		if (mergedReleasePRNumber !== undefined) {
+			const closeResult = yield* logger.group(
+				"Close linked issues",
+				closeLinkedIssues(mergedReleasePRNumber, dryRun).pipe(
 					Effect.catchAll((e) =>
 						Effect.gen(function* () {
-							yield* Effect.logWarning(`runReleases failed: ${String(e)}`);
-							return { success: false, releases: [] as ReleaseInfo[], errors: [String(e)] };
+							yield* Effect.logWarning(`closeLinkedIssues failed: ${String(e)}`);
+							return null;
 						}),
 					),
-				);
+				),
+			);
+			yield* Effect.logInfo(
+				closeResult === null ? "❌ Close linked issues — failed" : `✅ ${closeResult.closedCount} issue(s) closed`,
+			);
+		}
 
-				// Step 5: close linked issues.
-				if (mergedReleasePRNumber !== undefined) {
-					yield* Effect.logInfo("Step 5: Close linked issues");
-					yield* closeLinkedIssues(mergedReleasePRNumber, dryRun).pipe(
-						Effect.catchAll((e) =>
-							Effect.gen(function* () {
-								yield* Effect.logWarning(`closeLinkedIssues failed: ${String(e)}`);
-								return undefined;
-							}),
-						),
-					);
-				}
+		// ── Emit outputs + final summary ───────────────────────────────────────
+		const tagShas: Record<string, string> = {};
+		for (const tag of tagStrategy.tags) {
+			const rev = yield* runner
+				.execCapture("git", ["rev-parse", tag.name])
+				.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "", stderr: "", exitCode: 1 })));
+			tagShas[tag.name] = rev.stdout.trim();
+		}
+		yield* emitPublishing(publishResult, tagStrategy.tags, releasesResult.releases, tagShas);
 
-				const tagShas: Record<string, string> = {};
-				for (const tag of tagStrategy.tags) {
-					const rev = yield* runner
-						.execCapture("git", ["rev-parse", tag.name])
-						.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "", stderr: "", exitCode: 1 })));
-					tagShas[tag.name] = rev.stdout.trim();
-				}
-				yield* emitPublishing(publishResult, tagStrategy.tags, releasesResult.releases, tagShas);
-
-				yield* Effect.logInfo(
-					`Phase 3 complete: ${publishResult.successfulPackages}/${publishResult.totalPackages} package(s) published, ${releasesResult.releases.length} release(s) created`,
-				);
-			}),
+		yield* Effect.logInfo(
+			`Release publishing: ✅ ${publishResult.successfulPackages} package(s), ${releasesResult.releases.length} release(s)`,
 		);
 	});
 
