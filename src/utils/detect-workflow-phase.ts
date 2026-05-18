@@ -16,8 +16,8 @@
  */
 
 import { FileSystem } from "@effect/platform";
-import type { ActionEnvironmentError, GitHubClientError } from "@savvy-web/github-action-effects";
-import { ActionEnvironment, GitHubClient } from "@savvy-web/github-action-effects";
+import type { ActionEnvironmentError, GitHubClientError, PullRequestError } from "@savvy-web/github-action-effects";
+import { ActionEnvironment, GitHubClient, PullRequest } from "@savvy-web/github-action-effects";
 import { Duration, Effect, Option } from "effect";
 
 /**
@@ -94,14 +94,6 @@ interface AssociatedPR {
 	base: { ref: string };
 }
 
-interface MergedPR {
-	number: number;
-	merged_at: string | null;
-	merge_commit_sha: string | null;
-	head: { ref: string };
-	base: { ref: string };
-}
-
 /**
  * One attempt at detecting a release commit. Tries two strategies:
  *
@@ -117,12 +109,13 @@ const attemptReleaseCommitDetection = (
 	targetBranch: string,
 ): Effect.Effect<
 	{ isReleaseCommit: boolean; mergedPR?: { number: number } },
-	ActionEnvironmentError,
-	ActionEnvironment | GitHubClient
+	ActionEnvironmentError | PullRequestError,
+	ActionEnvironment | GitHubClient | PullRequest
 > =>
 	Effect.gen(function* () {
 		const env = yield* ActionEnvironment;
 		const client = yield* GitHubClient;
+		const pr = yield* PullRequest;
 		const { sha, repository } = yield* env.github;
 		const [owner, repo] = repository.split("/");
 
@@ -162,39 +155,11 @@ const attemptReleaseCommitDetection = (
 		// Strategy 2: list closed PRs from the release branch.
 		yield* Effect.logInfo(`Checking for merged release PRs with merge_commit_sha matching ${sha}`);
 		const closed = yield* Effect.either(
-			client.rest<ReadonlyArray<MergedPR>>("pulls.list", (octokit) =>
-				(
-					octokit as {
-						rest: {
-							pulls: {
-								list: (params: {
-									owner: string;
-									repo: string;
-									state: "closed";
-									head: string;
-									base: string;
-									sort: "updated";
-									direction: "desc";
-									per_page: number;
-								}) => Promise<{ data: ReadonlyArray<MergedPR> }>;
-							};
-						};
-					}
-				).rest.pulls.list({
-					owner,
-					repo,
-					state: "closed",
-					head: `${owner}:${releaseBranch}`,
-					base: targetBranch,
-					sort: "updated",
-					direction: "desc",
-					per_page: 10,
-				}),
-			),
+			pr.list({ state: "closed", head: `${owner}:${releaseBranch}`, base: targetBranch }),
 		);
 
 		if (closed._tag === "Right") {
-			const match = closed.right.find((pr) => pr.merged_at !== null && pr.merge_commit_sha === sha);
+			const match = closed.right.find((p) => (p.mergedAt ?? null) !== null && p.mergeCommitSha === sha);
 			if (match) {
 				yield* Effect.logInfo(
 					`Detected merged release PR #${match.number} from ${releaseBranch} (via merge_commit_sha match)`,
@@ -220,8 +185,8 @@ const detectReleaseCommit = (
 	targetBranch: string,
 ): Effect.Effect<
 	{ isReleaseCommit: boolean; mergedPR?: { number: number } },
-	ActionEnvironmentError,
-	ActionEnvironment | GitHubClient
+	ActionEnvironmentError | PullRequestError,
+	ActionEnvironment | GitHubClient | PullRequest
 > =>
 	Effect.gen(function* () {
 		const maxRetries = 3;
@@ -251,8 +216,8 @@ export const detectWorkflowPhase = (
 	options: PhaseDetectionOptions,
 ): Effect.Effect<
 	PhaseDetectionResult,
-	ActionEnvironmentError | GitHubClientError,
-	ActionEnvironment | FileSystem.FileSystem | GitHubClient
+	ActionEnvironmentError | GitHubClientError | PullRequestError,
+	ActionEnvironment | FileSystem.FileSystem | GitHubClient | PullRequest
 > =>
 	Effect.gen(function* () {
 		const env = yield* ActionEnvironment;
