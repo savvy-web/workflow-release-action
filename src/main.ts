@@ -558,7 +558,8 @@ const runPublishing = (mergedReleasePRNumber: number | undefined) =>
 				return strategy;
 			}),
 		);
-		yield* Effect.logInfo(`✅ ${tagStrategy.tags.length} tag(s) (${tagStrategy.strategy})`);
+		const tagStrategyLabel = tagStrategy.strategy === "multiple" ? "per-package tags" : "single shared tag";
+		yield* Effect.logInfo(`✅ ${tagStrategy.tags.length} tag(s) to create — ${tagStrategyLabel}`);
 
 		// ── Step 3: Build & SBOM (fail-fast gate) ──────────────────────────────
 		yield* Effect.logInfo("Build & SBOM");
