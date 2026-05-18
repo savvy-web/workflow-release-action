@@ -790,7 +790,7 @@ export const runReleases = (
 			}
 		}
 
-		yield* Effect.logInfo(`runReleases: complete — ${releases.length} release(s) created, ${errors.length} error(s)`);
+		yield* Effect.logDebug(`runReleases: complete — ${releases.length} release(s) created, ${errors.length} error(s)`);
 
 		return {
 			success: errors.length === 0,

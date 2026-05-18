@@ -614,7 +614,11 @@ const runPublishing = (mergedReleasePRNumber: number | undefined) =>
 				}),
 			),
 		);
-		yield* Effect.logInfo(`✅ Created ${releasesResult.releases.length} release(s)`);
+		yield* Effect.logInfo(
+			releasesResult.success
+				? `✅ Created ${releasesResult.releases.length} release(s)`
+				: `❌ Created ${releasesResult.releases.length} release(s) — ${releasesResult.errors.length} error(s)`,
+		);
 
 		// ── Follow-on: close linked issues ─────────────────────────────────────
 		if (mergedReleasePRNumber !== undefined) {
