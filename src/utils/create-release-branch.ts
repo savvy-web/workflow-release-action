@@ -19,6 +19,7 @@ import type {
 	CommandRunnerError,
 	GitCommitError,
 	GitHubClientError,
+	PullRequestError,
 } from "@savvy-web/github-action-effects";
 import {
 	ActionEnvironment,
@@ -27,6 +28,7 @@ import {
 	CommandRunner,
 	GitCommit,
 	GitHubClient,
+	PullRequest,
 } from "@savvy-web/github-action-effects";
 import type { ConfigError } from "effect";
 import { Config, Duration, Effect } from "effect";
@@ -123,7 +125,7 @@ const CREATE_LINKED_BRANCH_MUTATION = `
 	}
 `;
 
-const CREATE_PULL_REQUEST_MUTATION = `
+export const CREATE_PULL_REQUEST_MUTATION = `
 	mutation ($repositoryId: ID!, $baseRefName: String!, $headRefName: String!, $title: String!, $body: String!) {
 		createPullRequest(input: {
 			repositoryId: $repositoryId
@@ -152,7 +154,8 @@ export const createReleaseBranch = (
 	| CommandRunnerError
 	| ConfigError.ConfigError
 	| GitCommitError
-	| GitHubClientError,
+	| GitHubClientError
+	| PullRequestError,
 	| ActionEnvironment
 	| ActionOutputs
 	| ActionState
@@ -161,6 +164,7 @@ export const createReleaseBranch = (
 	| FileSystem.FileSystem
 	| GitCommit
 	| GitHubClient
+	| PullRequest
 > =>
 	Effect.gen(function* () {
 		const env = yield* ActionEnvironment;
@@ -169,6 +173,7 @@ export const createReleaseBranch = (
 		const runner = yield* CommandRunner;
 		const gitCommit = yield* GitCommit;
 		const client = yield* GitHubClient;
+		const pr = yield* PullRequest;
 		const fs = yield* FileSystem.FileSystem;
 		const signoff = yield* resolveSignoff();
 
@@ -426,22 +431,7 @@ export const createReleaseBranch = (
 			yield* Effect.logInfo(`✓ PR created: #${prNumber} (${prResult.createPullRequest.pullRequest.id})`);
 
 			yield* Effect.logInfo(`Adding labels to PR #${prNumber}...`);
-			yield* client.rest<undefined>("issues.addLabels", (octokit) =>
-				(
-					octokit as {
-						rest: {
-							issues: {
-								addLabels: (params: {
-									owner: string;
-									repo: string;
-									issue_number: number;
-									labels: string[];
-								}) => Promise<{ data: undefined }>;
-							};
-						};
-					}
-				).rest.issues.addLabels({ owner, repo, issue_number: prNumber as number, labels: ["automated", "release"] }),
-			);
+			yield* pr.addLabels(prNumber as number, ["automated", "release"]);
 			yield* Effect.logInfo(`✓ Created PR #${prNumber}: ${prUrl}`);
 		} else {
 			yield* Effect.logInfo(`[DRY RUN] Would create PR with title: ${prTitle}`);
