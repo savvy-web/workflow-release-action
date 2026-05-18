@@ -274,6 +274,24 @@ export const runValidation = (args: ValidationInputArgs) =>
 
 		yield* Effect.logInfo("runValidation: resolving publish targets and running dry-runs");
 
+		// ── Diagnostic: surface the runtime environment for the npm dry-run ──
+		// `spawn npm ENOENT` was observed here even though git/pnpm resolve fine;
+		// log PATH and probe the toolchain so the cause is visible in the run log.
+		yield* Effect.logInfo(`runValidation[diag]: PATH=${process.env.PATH ?? "<unset>"}`);
+		for (const probe of [
+			["node", ["--version"]],
+			["npm", ["--version"]],
+			["pnpm", ["--version"]],
+			["which", ["npm"]],
+			["which", ["node"]],
+		] as const) {
+			const outcome = yield* runner.execCapture(probe[0], probe[1]).pipe(
+				Effect.map((o) => `ok: ${o.stdout.trim() || o.stderr.trim()}`),
+				Effect.catchAll((e) => Effect.succeed(`FAILED: ${e.reason}`)),
+			);
+			yield* Effect.logInfo(`runValidation[diag]: ${probe[0]} ${probe[1].join(" ")} → ${outcome}`);
+		}
+
 		const workspaceRoot = process.cwd();
 		const pkgResults: PackagePublishResult[] = [];
 		let allPublishOk = true;
