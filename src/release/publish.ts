@@ -439,7 +439,7 @@ const publishOneTarget = (
 	if (isJsr) {
 		return Effect.gen(function* () {
 			yield* Effect.logWarning(
-				`runPublish: skipping JSR target for ${packageName}@${version} — JSR publishing is not yet supported in this orchestrator`,
+				`runPublishTargets: skipping JSR target for ${packageName}@${version} — JSR publishing is not yet supported in this orchestrator`,
 			);
 			return {
 				target: { ...legacyTarget, protocol: "jsr" as const },
