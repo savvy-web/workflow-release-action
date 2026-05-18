@@ -186,7 +186,9 @@ export function buildPublishSummary(result: PublishPackagesResult, options?: Pub
 		.map((pkg) => {
 			const pkgStatus = getPackageStatus(pkg);
 			const statusIcon2 = getPackageStatusIcon(pkgStatus);
-			const summary = GithubMarkdown.bold(`${statusIcon2} ${pkg.name}@${pkg.version}`);
+			// `<summary>` does not render markdown — use a raw HTML <strong> tag
+			// so the heading is bold inside the collapsed <details> block.
+			const summary = `<strong>${statusIcon2} ${pkg.name}@${pkg.version}</strong>`;
 
 			// Target table rows
 			const targetRows: ReadonlyArray<ReadonlyArray<string>> = pkg.targets.map((result2) => {
