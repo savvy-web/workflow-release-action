@@ -36,3 +36,5 @@ pnpm-release.json
 CLAUDE.local.md
 **/coverage-debug
 .claude/plugins-debug.log
+# Superpowers working docs (specs, plans) — kept local, not tracked
+docs/superpowers/
