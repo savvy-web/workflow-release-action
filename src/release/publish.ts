@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import type { AttestError, CommandRunnerError, PackagePublishError } from "@savvy-web/github-action-effects";
 import {
+	ActionState,
 	Attest,
 	CommandRunner,
 	ErrorAccumulator,
@@ -23,9 +24,11 @@ import {
 	buildSLSAProvenancePredicate,
 	decodeJwtClaims,
 } from "@savvy-web/github-action-effects";
-import { Effect, Redacted } from "effect";
+import { Config, Effect, Option, Redacted } from "effect";
 import { PublishabilityDetector, TopologicalSorter, WorkspaceDiscovery, WorkspacePackage } from "workspaces-effect";
 
+import { GithubPackagesTokenState, STATE_KEYS } from "../state.js";
+import { isGitHubPackagesRegistry, isNpmRegistry } from "../utils/registry-utils.js";
 import type { PackagePublishResult, PublishPackagesResult, TargetPublishResult } from "./types.js";
 
 // ─── Public interfaces ────────────────────────────────────────────────────────
@@ -62,22 +65,24 @@ interface TargetSpec {
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /**
- * Resolve the token to use for registry authentication.
+ * Classify a registry URL and return the resolved token for it.
  *
- * Mirrors the resolution order in `registry-auth.ts`:
- *  - npm public registry  → `NPM_TOKEN` / `INPUT_NPM_TOKEN`
- *  - GitHub Packages      → `SILK_GITHUB_PACKAGES_TOKEN`
- *  - Custom registries    → env var derived from registry URL
+ * Resolution:
+ *  - npm public registry  → resolved npm token (from `Config` via caller)
+ *  - GitHub Packages      → resolved GitHub Packages token (from `ActionState` via caller)
+ *  - Custom registries    → env var derived from the registry URL (unchanged)
  *
- * Returns `null` when no token is found (OIDC path).
+ * Returns `null` when no token is found (OIDC / first-time publish).
  */
-function resolveToken(registry: string): string | null {
-	if (registry.includes("registry.npmjs.org")) {
-		return process.env.NPM_TOKEN ?? process.env.INPUT_NPM_TOKEN ?? null;
+function pickToken(registry: string, npmToken: string | null, ghPkgsToken: string | null): string | null {
+	if (isNpmRegistry(registry)) {
+		return npmToken;
 	}
-	if (registry.includes("npm.pkg.github.com")) {
-		return process.env.SILK_GITHUB_PACKAGES_TOKEN ?? null;
+	if (isGitHubPackagesRegistry(registry)) {
+		return ghPkgsToken;
 	}
+	// Custom registry: derive env var name from URL
+	// e.g. https://registry.example.com/ → REGISTRY_EXAMPLE_COM_TOKEN
 	const envName = registry
 		.replace(/^https?:\/\//, "")
 		.replace(/[^a-zA-Z0-9]/g, "_")
@@ -369,7 +374,13 @@ const buildProvenancePredicate = (): Effect.Effect<Record<string, unknown> | nul
  * All errors are caught at the target level and turned into a failed
  * `TargetPublishResult` so the caller can accumulate without aborting.
  */
-const publishOneTarget = (packageName: string, version: string, target: TargetSpec) => {
+const publishOneTarget = (
+	packageName: string,
+	version: string,
+	target: TargetSpec,
+	npmToken: string | null,
+	ghPkgsToken: string | null,
+) => {
 	const legacyTarget = {
 		protocol: "npm" as const,
 		registry: target.registry,
@@ -418,7 +429,7 @@ const publishOneTarget = (packageName: string, version: string, target: TargetSp
 
 		if (!versionsCheck.exists) {
 			// First publish: set up auth and publish.
-			const token = resolveToken(target.registry);
+			const token = pickToken(target.registry, npmToken, ghPkgsToken);
 			if (token !== null) {
 				yield* publishSvc
 					.setupAuth(target.registry, token)
@@ -551,6 +562,22 @@ export const runPublish = (args: PublishInputArgs) =>
 		const discovery = yield* WorkspaceDiscovery;
 		const detector = yield* PublishabilityDetector;
 		const sorter = yield* TopologicalSorter;
+		const state = yield* ActionState;
+
+		// ── Resolve registry tokens once (Effect-native) ─────────────────────
+		// npm token: read via Config from the `npm-token` action input.
+		// An absent or empty input yields null (OIDC / no token).
+		const npmTokenOpt = yield* Config.string("npm-token").pipe(Config.option);
+		const npmToken: string | null = Option.isSome(npmTokenOpt) && npmTokenOpt.value !== "" ? npmTokenOpt.value : null;
+
+		// GitHub Packages token: read from ActionState (persisted by pre.ts).
+		// getOptional returns Option.none when the key is absent; any error is
+		// caught and treated as "no token".
+		const ghPkgsTokenOpt = yield* state
+			.getOptional(STATE_KEYS.githubPackagesToken, GithubPackagesTokenState)
+			.pipe(Effect.catchAll(() => Effect.succeed(Option.none<GithubPackagesTokenState>())));
+		const ghPkgsToken: string | null =
+			Option.isSome(ghPkgsTokenOpt) && ghPkgsTokenOpt.value.token !== "" ? ghPkgsTokenOpt.value.token : null;
 
 		// ── Step 1: Build ──────────────────────────────────────────────────────
 
@@ -736,7 +763,7 @@ export const runPublish = (args: PublishInputArgs) =>
 				const targetResults: TargetPublishResult[] = [];
 
 				for (const target of targets) {
-					const result = yield* publishOneTarget(name, version, target);
+					const result = yield* publishOneTarget(name, version, target, npmToken, ghPkgsToken);
 					targetResults.push(result);
 				}
 
@@ -767,6 +794,9 @@ export const runPublish = (args: PublishInputArgs) =>
 		// Packages that errored inside forEachAccumulate appear in failures.
 		for (const { item: name, error: rawError } of accumulateResult.failures) {
 			const error: unknown = rawError;
+			yield* Effect.logError(
+				`runPublish: publishing ${name} failed — ${error instanceof Error ? error.message : String(error)}`,
+			);
 			const version = targetsByPackage.get(name)?.version ?? "unknown";
 			packages.push({
 				name,

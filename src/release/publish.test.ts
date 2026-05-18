@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	ActionLoggerTest,
+	ActionStateTest,
 	AttestTest,
 	CommandRunnerTest,
 	GitHubClientTest,
@@ -20,7 +21,7 @@ import {
 	SbomTest,
 	SigstoreSignerTest,
 } from "@savvy-web/github-action-effects/testing";
-import { Effect, Layer } from "effect";
+import { ConfigProvider, Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import {
 	PublishTarget,
@@ -168,6 +169,10 @@ const loggerLayer = ActionLoggerTest.layer(loggerState);
 const sbomLayer = SbomTest.empty();
 const oidcTokenIssuerLayer = OidcTokenIssuerTest;
 const sigstoreSignerLayer = SigstoreSignerTest;
+// Empty ActionState (no tokens persisted) — tests exercise the "no token" / OIDC path.
+const actionStateLayer = ActionStateTest.layer(ActionStateTest.empty());
+// Empty ConfigProvider — `npm-token` is absent, Config.option returns None (OIDC path).
+const configProviderLayer = Layer.setConfigProvider(ConfigProvider.fromMap(new Map<string, string>()));
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -198,6 +203,8 @@ describe("runPublish", () => {
 
 			const layers = Layer.mergeAll(
 				loggerLayer,
+				actionStateLayer,
+				configProviderLayer,
 				CommandRunnerTest.empty(), // build succeeds (default exitCode: 0)
 				pubLayer,
 				npmLayer,
@@ -220,7 +227,7 @@ describe("runPublish", () => {
 
 			// Act — change cwd so detectFromPR's readFileSync resolves paths correctly
 			const result: PublishPackagesResult = await runInCwd(tmpCwd, () =>
-				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>),
+				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers))),
 			);
 
 			// Assert: detection found @test/detected-pkg and it was published
@@ -297,6 +304,8 @@ describe("runPublish", () => {
 
 			const layers = Layer.mergeAll(
 				loggerLayer,
+				actionStateLayer,
+				configProviderLayer,
 				failingBuildLayer,
 				pubLayer,
 				npmLayer,
@@ -318,9 +327,7 @@ describe("runPublish", () => {
 			};
 
 			// Act
-			const result: PublishPackagesResult = await Effect.runPromise(
-				runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>,
-			);
+			const result: PublishPackagesResult = await Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)));
 
 			// Assert: build failed → no packages published
 			expect(result.success).toBe(false);
@@ -384,6 +391,8 @@ describe("runPublish", () => {
 
 			const layers = Layer.mergeAll(
 				loggerLayer,
+				actionStateLayer,
+				configProviderLayer,
 				CommandRunnerTest.empty(),
 				pubLayer,
 				npmLayer,
@@ -406,7 +415,7 @@ describe("runPublish", () => {
 
 			// Act
 			const result: PublishPackagesResult = await runInCwd(tmpCwd, () =>
-				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>),
+				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers))),
 			);
 
 			// Assert
@@ -487,6 +496,8 @@ describe("runPublish", () => {
 
 			const layers = Layer.mergeAll(
 				loggerLayer,
+				actionStateLayer,
+				configProviderLayer,
 				CommandRunnerTest.empty(),
 				pubLayer,
 				npmLayer,
@@ -509,7 +520,7 @@ describe("runPublish", () => {
 
 			// Act
 			const result: PublishPackagesResult = await runInCwd(tmpCwd, () =>
-				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>),
+				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers))),
 			);
 
 			// Assert
@@ -575,6 +586,8 @@ describe("runPublish", () => {
 
 			const layers = Layer.mergeAll(
 				loggerLayer,
+				actionStateLayer,
+				configProviderLayer,
 				CommandRunnerTest.empty(),
 				pubLayer,
 				npmLayer,
@@ -597,7 +610,7 @@ describe("runPublish", () => {
 
 			// Act
 			const result: PublishPackagesResult = await runInCwd(tmpCwd, () =>
-				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>),
+				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers))),
 			);
 
 			// Assert: package was detected but JSR target was skipped → 0 npm targets
@@ -699,6 +712,8 @@ describe("runPublish", () => {
 
 			const layers = Layer.mergeAll(
 				loggerLayer,
+				actionStateLayer,
+				configProviderLayer,
 				CommandRunnerTest.empty(),
 				failingPubLayer,
 				npmLayer,
@@ -726,7 +741,7 @@ describe("runPublish", () => {
 
 			// Act
 			const result: PublishPackagesResult = await runInCwd(tmpCwd, () =>
-				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>),
+				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers))),
 			);
 
 			// Assert: batch completed (no early abort), result has both packages
