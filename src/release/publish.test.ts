@@ -1,11 +1,14 @@
 /**
  * Unit tests for runPublish (Phase-3 orchestrator).
  *
- * All dependencies are provided via in-memory test layers; no real filesystem,
- * registry, git, GitHub API, or attestation tooling is exercised.
+ * All dependencies are provided via in-memory test layers; no real filesystem
+ * (except temp files for detection tests), registry, git, GitHub API, or
+ * attestation tooling is exercised.
  */
 
-import type { RestResponse } from "@savvy-web/github-action-effects/testing";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	ActionLoggerTest,
 	AttestTest,
@@ -29,8 +32,24 @@ import {
 
 import type { PublishInputArgs } from "./publish.js";
 import { runPublish } from "./publish.js";
+import type { PublishPackagesResult } from "./types.js";
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Run an async effect-based operation with the process cwd temporarily changed.
+ *
+ * Restores the cwd even if the promise rejects.
+ */
+async function runInCwd<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
+	const savedCwd = process.cwd();
+	process.chdir(cwd);
+	try {
+		return await fn();
+	} finally {
+		process.chdir(savedCwd);
+	}
+}
 
 /** Build a minimal WorkspacePackage for tests. */
 const makeWsPkg = (name: string, version = "1.0.0", path = `/tmp/test/${name}`): WorkspacePackage =>
@@ -87,42 +106,65 @@ const makeTopologicalSorterLayer = (orderedNames: string[]): Layer.Layer<Topolog
 	});
 
 /**
- * Build a GitHubClient test layer that responds with the given PR files
- * for a specific PR number. Used to test the `detectReleasedPackagesFromPR`
- * path.
+ * Build a `GitHubClientTest` layer that simulates `detectFromPR` responses.
+ *
+ * `GitHubClientTest` looks up `restResponses` by **operation name only**
+ * (e.g. `"pulls.listFiles"`), so we register one response per operation.
+ *
+ * The test also writes real `package.json` files to a temp directory under
+ * `cwd` so `detectFromPR`'s `readFileSync` calls find current content.
+ *
+ * Returns both the layer and the temp `cwd` path so callers can change
+ * directory before running the effect.
  */
-const _makeGitHubClientLayer = (
+const makeGitHubClientLayerForPR = (
 	prNumber: number,
-	files: Array<{ filename: string; status: string }>,
-	baseContent?: Record<string, string>,
-): Layer.Layer<import("@savvy-web/github-action-effects/testing").GitHubClient> => {
+	packages: Array<{ name: string; newVersion: string; oldVersion: string; filename: string }>,
+): {
+	layer: Layer.Layer<import("@savvy-web/github-action-effects/testing").GitHubClient>;
+	tmpCwd: string;
+} => {
+	// Create a temp directory structure that mirrors the repo on disk
+	const tmpCwd = join(tmpdir(), `silk-publish-test-${prNumber}-${Date.now()}`);
+	mkdirSync(tmpCwd, { recursive: true });
+
+	// Write the "current" package.json files to disk so readFileSync can find them
+	const files = packages.map((pkg) => {
+		const dir = join(tmpCwd, ...pkg.filename.split("/").slice(0, -1));
+		mkdirSync(dir, { recursive: true });
+		const fullPath = join(tmpCwd, pkg.filename);
+		writeFileSync(fullPath, JSON.stringify({ name: pkg.name, version: pkg.newVersion }));
+		return { filename: pkg.filename, status: "modified" };
+	});
+
+	// Build base-content map: base64-encoded old package.json content
+	// For simplicity, return the first package's old content for "repos.getContent"
+	const firstPkg = packages[0];
+	const oldContent = firstPkg
+		? Buffer.from(JSON.stringify({ name: firstPkg.name, version: firstPkg.oldVersion })).toString("base64")
+		: "";
+
 	const state = {
-		restResponses: new Map<string, RestResponse>([
-			[`pulls.listFiles:${prNumber}`, { data: files }],
-			[`pulls.get:${prNumber}`, { data: { base: { sha: "base-sha-123" } } }],
+		restResponses: new Map([
+			["pulls.listFiles", { data: files }],
+			["pulls.get", { data: { base: { sha: "base-sha-abc" } } }],
+			["repos.getContent", { data: { content: oldContent } }],
 		]),
 		graphqlResponses: new Map<string, unknown>(),
 		paginateResponses: new Map<string, Array<unknown[]>>(),
 		repo: { owner: "test-owner", repo: "test-repo" },
 	};
 
-	// Add getContent responses for base commit content
-	if (baseContent) {
-		for (const [path, content] of Object.entries(baseContent)) {
-			state.restResponses.set(`repos.getContent:base-sha-123:${path}`, {
-				data: { content: Buffer.from(content).toString("base64") },
-			});
-		}
-	}
-
-	return GitHubClientTest.layer(state) as never;
+	return {
+		layer: GitHubClientTest.layer(state) as never,
+		tmpCwd,
+	};
 };
 
 // ─── Shared "always-on" base layers ──────────────────────────────────────────
 
 const loggerState = ActionLoggerTest.empty();
 const loggerLayer = ActionLoggerTest.layer(loggerState);
-const commandRunnerLayer = CommandRunnerTest.empty();
 const sbomLayer = SbomTest.empty();
 const oidcTokenIssuerLayer = OidcTokenIssuerTest;
 const sigstoreSignerLayer = SigstoreSignerTest;
@@ -130,12 +172,167 @@ const sigstoreSignerLayer = SigstoreSignerTest;
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("runPublish", () => {
+	describe("detection via GitHubClientTest (detectFromPR)", () => {
+		it("detects packages from a merged PR and publishes them", async () => {
+			// Arrange: write a real package.json on disk so detectFromPR can read it
+			const { layer: ghLayer, tmpCwd } = makeGitHubClientLayerForPR(42, [
+				{
+					name: "@test/detected-pkg",
+					newVersion: "2.0.0",
+					oldVersion: "1.0.0",
+					filename: "packages/detected-pkg/package.json",
+				},
+			]);
+
+			const pkg = makeWsPkg("@test/detected-pkg", "2.0.0", join(tmpCwd, "packages/detected-pkg"));
+			const target = makeNpmTarget("@test/detected-pkg", join(tmpCwd, "packages/detected-pkg"));
+
+			const npmLayer = NpmRegistryTest.empty(); // no versions → first-publish path
+
+			const { state: pubState, layer: pubLayer } = PackagePublishTest.layer({
+				publishedVersions: [],
+				integrityMatch: false,
+			});
+
+			const attestState = AttestTest.empty();
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				CommandRunnerTest.empty(), // build succeeds (default exitCode: 0)
+				pubLayer,
+				npmLayer,
+				sbomLayer,
+				attestState,
+				oidcTokenIssuerLayer,
+				sigstoreSignerLayer,
+				ghLayer,
+				makeWorkspaceDiscoveryLayer([pkg]),
+				makePublishabilityLayer(new Map([["@test/detected-pkg", [target]]])),
+				makeTopologicalSorterLayer(["@test/detected-pkg"]),
+			);
+
+			const args: PublishInputArgs = {
+				packageManager: "pnpm",
+				targetBranch: "main",
+				dryRun: false,
+				mergedReleasePRNumber: 42,
+			};
+
+			// Act — change cwd so detectFromPR's readFileSync resolves paths correctly
+			const result: PublishPackagesResult = await runInCwd(tmpCwd, () =>
+				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>),
+			);
+
+			// Assert: detection found @test/detected-pkg and it was published
+			expect(result.totalPackages).toBe(1);
+			expect(result.packages).toHaveLength(1);
+			expect(result.packages[0]?.name).toBe("@test/detected-pkg");
+			expect(result.packages[0]?.version).toBe("2.0.0");
+			// First-publish path: pack + publish called, not publishIdempotent
+			expect(pubState.packCalls).toHaveLength(1);
+			expect(pubState.publishCalls).toHaveLength(1);
+			expect(pubState.publishIdempotentCalls).toHaveLength(0);
+		});
+	});
+
+	describe("build step", () => {
+		it("returns buildError and does not publish when ci:build fails", async () => {
+			// Arrange: CommandRunner returns non-zero for ci:build
+			const { CommandRunnerError: CmdError, CommandRunner: CmdRunnerSvc } = await import(
+				"@savvy-web/github-action-effects"
+			);
+			const failingBuildLayer = Layer.succeed(CmdRunnerSvc, {
+				exec: () =>
+					Effect.fail(
+						new CmdError({
+							command: "pnpm",
+							args: ["ci:build"],
+							exitCode: 1,
+							stderr: "Build failed: compile error",
+							reason: "Command exited with code 1",
+						}),
+					),
+				execCapture: () =>
+					Effect.fail(
+						new CmdError({
+							command: "pnpm",
+							args: ["ci:build"],
+							exitCode: 1,
+							stderr: "Build failed: compile error",
+							reason: "Command exited with code 1",
+						}),
+					),
+				execJson: () =>
+					Effect.fail(
+						new CmdError({
+							command: "pnpm",
+							args: [],
+							exitCode: 1,
+							stderr: "Build failed",
+							reason: "Command exited with code 1",
+						}),
+					),
+				execLines: () =>
+					Effect.fail(
+						new CmdError({
+							command: "pnpm",
+							args: [],
+							exitCode: 1,
+							stderr: "Build failed",
+							reason: "Command exited with code 1",
+						}),
+					),
+			});
+
+			const ghLayer = GitHubClientTest.empty();
+			const npmLayer = NpmRegistryTest.empty();
+			const { layer: pubLayer } = PackagePublishTest.layer({
+				publishedVersions: [],
+				integrityMatch: false,
+			});
+			const attestState = AttestTest.empty();
+
+			const pkg = makeWsPkg("@test/build-fail", "1.0.0");
+			const target = makeNpmTarget("@test/build-fail", "/tmp/dist/build-fail");
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				failingBuildLayer,
+				pubLayer,
+				npmLayer,
+				sbomLayer,
+				attestState,
+				oidcTokenIssuerLayer,
+				sigstoreSignerLayer,
+				ghLayer,
+				makeWorkspaceDiscoveryLayer([pkg]),
+				makePublishabilityLayer(new Map([["@test/build-fail", [target]]])),
+				makeTopologicalSorterLayer(["@test/build-fail"]),
+			);
+
+			const args: PublishInputArgs = {
+				packageManager: "pnpm",
+				targetBranch: "main",
+				dryRun: false,
+				mergedReleasePRNumber: undefined,
+			};
+
+			// Act
+			const result: PublishPackagesResult = await Effect.runPromise(
+				runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>,
+			);
+
+			// Assert: build failed → no packages published
+			expect(result.success).toBe(false);
+			expect(result.packages).toHaveLength(0);
+			expect(result.buildError).toMatch(/Build failed/);
+		});
+	});
+
 	describe("first-publish path (version absent from registry)", () => {
 		it("publishes and returns status: 'published' when version is not on the registry", async () => {
 			// Arrange: NpmRegistry returns empty versions (package never published)
-			const pkg = makeWsPkg("@test/first", "1.0.0");
-			const target = makeNpmTarget("@test/first", "/tmp/dist/first");
-
+			// Note: the workspace package and target are built below against the temp cwd.
 			const npmState = { packages: new Map() }; // No versions → getVersions fails with E404
 			const npmLayer = NpmRegistryTest.layer(npmState);
 
@@ -146,13 +343,48 @@ describe("runPublish", () => {
 			});
 
 			const attestState = AttestTest.empty();
-			const ghLayer = GitHubClientTest.empty();
 
-			const preDetectedReleases = [{ name: "@test/first", version: "1.0.0", path: "/tmp/test/@test/first" }];
+			// GitHubClientTest with no responses → detectFromPR will fail and return []
+			// We inject detection indirectly: since mergedReleasePRNumber is undefined,
+			// detectFromCommit() runs, but GITHUB_SHA is not set → returns [] immediately.
+			// However we still need packages — use a GitHubClientTest that returns a
+			// PR file list, and set mergedReleasePRNumber so detectFromPR is called.
+			//
+			// For this test we want to exercise the publish path without caring about
+			// detection details — use a PR number and a GitHubClientTest that simulates
+			// a single file diff so detection resolves the package.
+			const tmpCwd = join(tmpdir(), `silk-publish-first-${Date.now()}`);
+			mkdirSync(join(tmpCwd, "packages", "first"), { recursive: true });
+			writeFileSync(
+				join(tmpCwd, "packages", "first", "package.json"),
+				JSON.stringify({ name: "@test/first", version: "1.0.0" }),
+			);
+
+			const ghState = {
+				restResponses: new Map([
+					["pulls.listFiles", { data: [{ filename: "packages/first/package.json", status: "modified" }] }],
+					["pulls.get", { data: { base: { sha: "base-sha-001" } } }],
+					[
+						"repos.getContent",
+						{
+							data: {
+								content: Buffer.from(JSON.stringify({ name: "@test/first", version: "0.9.0" })).toString("base64"),
+							},
+						},
+					],
+				]),
+				graphqlResponses: new Map<string, unknown>(),
+				paginateResponses: new Map<string, Array<unknown[]>>(),
+				repo: { owner: "test-owner", repo: "test-repo" },
+			};
+			const ghLayer = GitHubClientTest.layer(ghState);
+
+			const wsPkg = makeWsPkg("@test/first", "1.0.0", join(tmpCwd, "packages", "first"));
+			const target = makeNpmTarget("@test/first", join(tmpCwd, "packages", "first"));
 
 			const layers = Layer.mergeAll(
 				loggerLayer,
-				commandRunnerLayer,
+				CommandRunnerTest.empty(),
 				pubLayer,
 				npmLayer,
 				sbomLayer,
@@ -160,7 +392,7 @@ describe("runPublish", () => {
 				oidcTokenIssuerLayer,
 				sigstoreSignerLayer,
 				ghLayer,
-				makeWorkspaceDiscoveryLayer([pkg]),
+				makeWorkspaceDiscoveryLayer([wsPkg]),
 				makePublishabilityLayer(new Map([["@test/first", [target]]])),
 				makeTopologicalSorterLayer(["@test/first"]),
 			);
@@ -169,12 +401,13 @@ describe("runPublish", () => {
 				packageManager: "pnpm",
 				targetBranch: "main",
 				dryRun: false,
-				mergedReleasePRNumber: undefined,
-				preDetectedReleases,
+				mergedReleasePRNumber: 99,
 			};
 
 			// Act
-			const result = await Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)));
+			const result: PublishPackagesResult = await runInCwd(tmpCwd, () =>
+				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>),
+			);
 
 			// Assert
 			expect(result.success).toBe(true);
@@ -200,9 +433,6 @@ describe("runPublish", () => {
 	describe("already-published-identical path", () => {
 		it("returns status: 'skipped' with skipReason: 'already-published-identical' when version exists with identical content", async () => {
 			// Arrange: version 1.0.0 is already in the registry with matching integrity
-			const pkg = makeWsPkg("@test/idempotent", "1.0.0");
-			const target = makeNpmTarget("@test/idempotent", "/tmp/dist/idempotent");
-
 			const npmState = {
 				packages: new Map([
 					[
@@ -224,13 +454,40 @@ describe("runPublish", () => {
 			});
 
 			const attestState = AttestTest.empty();
-			const ghLayer = GitHubClientTest.empty();
 
-			const preDetectedReleases = [{ name: "@test/idempotent", version: "1.0.0", path: "/tmp/test/@test/idempotent" }];
+			// Detection: set up a PR that bumped @test/idempotent from 0.9.0 → 1.0.0
+			const tmpCwd = join(tmpdir(), `silk-publish-idempotent-${Date.now()}`);
+			mkdirSync(join(tmpCwd, "packages", "idempotent"), { recursive: true });
+			writeFileSync(
+				join(tmpCwd, "packages", "idempotent", "package.json"),
+				JSON.stringify({ name: "@test/idempotent", version: "1.0.0" }),
+			);
+
+			const ghState = {
+				restResponses: new Map([
+					["pulls.listFiles", { data: [{ filename: "packages/idempotent/package.json", status: "modified" }] }],
+					["pulls.get", { data: { base: { sha: "base-sha-002" } } }],
+					[
+						"repos.getContent",
+						{
+							data: {
+								content: Buffer.from(JSON.stringify({ name: "@test/idempotent", version: "0.9.0" })).toString("base64"),
+							},
+						},
+					],
+				]),
+				graphqlResponses: new Map<string, unknown>(),
+				paginateResponses: new Map<string, Array<unknown[]>>(),
+				repo: { owner: "test-owner", repo: "test-repo" },
+			};
+			const ghLayer = GitHubClientTest.layer(ghState);
+
+			const wsPkg = makeWsPkg("@test/idempotent", "1.0.0", join(tmpCwd, "packages", "idempotent"));
+			const target = makeNpmTarget("@test/idempotent", join(tmpCwd, "packages", "idempotent"));
 
 			const layers = Layer.mergeAll(
 				loggerLayer,
-				commandRunnerLayer,
+				CommandRunnerTest.empty(),
 				pubLayer,
 				npmLayer,
 				sbomLayer,
@@ -238,7 +495,7 @@ describe("runPublish", () => {
 				oidcTokenIssuerLayer,
 				sigstoreSignerLayer,
 				ghLayer,
-				makeWorkspaceDiscoveryLayer([pkg]),
+				makeWorkspaceDiscoveryLayer([wsPkg]),
 				makePublishabilityLayer(new Map([["@test/idempotent", [target]]])),
 				makeTopologicalSorterLayer(["@test/idempotent"]),
 			);
@@ -247,12 +504,13 @@ describe("runPublish", () => {
 				packageManager: "pnpm",
 				targetBranch: "main",
 				dryRun: false,
-				mergedReleasePRNumber: undefined,
-				preDetectedReleases,
+				mergedReleasePRNumber: 100,
 			};
 
 			// Act
-			const result = await Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)));
+			const result: PublishPackagesResult = await runInCwd(tmpCwd, () =>
+				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>),
+			);
 
 			// Assert
 			expect(result.success).toBe(true);
@@ -269,25 +527,144 @@ describe("runPublish", () => {
 		});
 	});
 
+	describe("JSR target skipping", () => {
+		it("skips JSR targets with a warning and does not call npm publish for them", async () => {
+			// Arrange: a package with a JSR target
+			const tmpCwd = join(tmpdir(), `silk-publish-jsr-${Date.now()}`);
+			mkdirSync(join(tmpCwd, "packages", "jsr-pkg"), { recursive: true });
+			writeFileSync(
+				join(tmpCwd, "packages", "jsr-pkg", "package.json"),
+				JSON.stringify({ name: "@test/jsr-pkg", version: "1.0.0" }),
+			);
+
+			const ghState = {
+				restResponses: new Map([
+					["pulls.listFiles", { data: [{ filename: "packages/jsr-pkg/package.json", status: "modified" }] }],
+					["pulls.get", { data: { base: { sha: "base-sha-003" } } }],
+					[
+						"repos.getContent",
+						{
+							data: {
+								content: Buffer.from(JSON.stringify({ name: "@test/jsr-pkg", version: "0.5.0" })).toString("base64"),
+							},
+						},
+					],
+				]),
+				graphqlResponses: new Map<string, unknown>(),
+				paginateResponses: new Map<string, Array<unknown[]>>(),
+				repo: { owner: "test-owner", repo: "test-repo" },
+			};
+			const ghLayer = GitHubClientTest.layer(ghState);
+
+			// A JSR-only target (no npm target)
+			const jsrTarget = new PublishTarget({
+				name: "@test/jsr-pkg",
+				registry: "https://jsr.io/",
+				directory: join(tmpCwd, "packages", "jsr-pkg"),
+				access: "public",
+				provenance: false,
+			});
+
+			const wsPkg = makeWsPkg("@test/jsr-pkg", "1.0.0", join(tmpCwd, "packages", "jsr-pkg"));
+			const npmLayer = NpmRegistryTest.empty();
+			const { state: pubState, layer: pubLayer } = PackagePublishTest.layer({
+				publishedVersions: [],
+				integrityMatch: false,
+			});
+			const attestState = AttestTest.empty();
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				CommandRunnerTest.empty(),
+				pubLayer,
+				npmLayer,
+				sbomLayer,
+				attestState,
+				oidcTokenIssuerLayer,
+				sigstoreSignerLayer,
+				ghLayer,
+				makeWorkspaceDiscoveryLayer([wsPkg]),
+				makePublishabilityLayer(new Map([["@test/jsr-pkg", [jsrTarget]]])),
+				makeTopologicalSorterLayer(["@test/jsr-pkg"]),
+			);
+
+			const args: PublishInputArgs = {
+				packageManager: "pnpm",
+				targetBranch: "main",
+				dryRun: false,
+				mergedReleasePRNumber: 101,
+			};
+
+			// Act
+			const result: PublishPackagesResult = await runInCwd(tmpCwd, () =>
+				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>),
+			);
+
+			// Assert: package was detected but JSR target was skipped → 0 npm targets
+			// The package has no npm targets so it counts as a version-only publish
+			expect(result.packages).toHaveLength(1);
+			expect(result.packages[0]?.name).toBe("@test/jsr-pkg");
+			// No npm pack/publish calls made
+			expect(pubState.packCalls).toHaveLength(0);
+			expect(pubState.publishCalls).toHaveLength(0);
+			// success is true (version-only packages count as successful)
+			expect(result.success).toBe(true);
+		});
+	});
+
 	describe("batch error resilience", () => {
 		it("does not abort the batch when one package fails to publish", async () => {
-			// Arrange: two packages; the first fails to pack, the second succeeds
-			const pkgA = makeWsPkg("@test/fail-pkg", "2.0.0");
-			const pkgB = makeWsPkg("@test/ok-pkg", "1.0.0");
-			const targetA = makeNpmTarget("@test/fail-pkg", "/tmp/dist/fail-pkg");
-			const targetB = makeNpmTarget("@test/ok-pkg", "/tmp/dist/ok-pkg");
+			// Arrange: two packages — the first fails to pack, the second succeeds.
+			// Both packages are detected by injecting a PR that modified their package.jsons.
+			const tmpCwd = join(tmpdir(), `silk-publish-batch-${Date.now()}`);
+			mkdirSync(join(tmpCwd, "packages", "fail-pkg"), { recursive: true });
+			mkdirSync(join(tmpCwd, "packages", "ok-pkg"), { recursive: true });
+			writeFileSync(
+				join(tmpCwd, "packages", "fail-pkg", "package.json"),
+				JSON.stringify({ name: "@test/fail-pkg", version: "2.0.0" }),
+			);
+			writeFileSync(
+				join(tmpCwd, "packages", "ok-pkg", "package.json"),
+				JSON.stringify({ name: "@test/ok-pkg", version: "1.0.0" }),
+			);
+
+			// GitHubClientTest: listFiles returns both package.json files.
+			// "repos.getContent" returns a single response — for simplicity, both
+			// packages will share the same base content (different versions).
+			// We register "repos.getContent" twice — but the test layer only stores
+			// one response per key, so we use the first package's old content.
+			// Since the new version differs from the old, detection will include both.
+			const ghState = {
+				restResponses: new Map([
+					[
+						"pulls.listFiles",
+						{
+							data: [
+								{ filename: "packages/fail-pkg/package.json", status: "modified" },
+								{ filename: "packages/ok-pkg/package.json", status: "modified" },
+							],
+						},
+					],
+					["pulls.get", { data: { base: { sha: "base-sha-004" } } }],
+					// Single "repos.getContent" response → used for both packages.
+					// old version "0.5.0" differs from new versions "2.0.0" / "1.0.0" → both detected.
+					[
+						"repos.getContent",
+						{
+							data: {
+								content: Buffer.from(JSON.stringify({ version: "0.5.0" })).toString("base64"),
+							},
+						},
+					],
+				]),
+				graphqlResponses: new Map<string, unknown>(),
+				paginateResponses: new Map<string, Array<unknown[]>>(),
+				repo: { owner: "test-owner", repo: "test-repo" },
+			};
+			const ghLayer = GitHubClientTest.layer(ghState);
 
 			// Empty NpmRegistry — both packages are new (no versions)
 			const npmLayer = NpmRegistryTest.empty();
-
-			// PackagePublish: pack will succeed (default), publish succeeds
-			// We simulate the first package failing by overriding via the test state
-			// Since PackagePublishTest does not allow per-package overrides, we build
-			// a custom layer that fails publish for "@test/fail-pkg".
-			const { state: pubState } = PackagePublishTest.layer({
-				publishedVersions: [], // no versions — both go through first-publish
-				integrityMatch: false,
-			});
 
 			// Custom PackagePublish layer that causes the first package to fail at pack
 			const { PackagePublishError } = await import("@savvy-web/github-action-effects");
@@ -302,7 +679,7 @@ describe("runPublish", () => {
 							}),
 						);
 					}
-					return Effect.succeed({ tarball: "/tmp/dist/ok-pkg/pkg.tgz", digest: "sha256:abc123" });
+					return Effect.succeed({ tarball: `${packageDir}/pkg.tgz`, digest: "sha256:abc123" });
 				},
 				publish: (_packageDir: string) => Effect.succeed(undefined as undefined),
 				verifyIntegrity: (_name: string, _version: string, _digest: string) => Effect.succeed(false),
@@ -314,16 +691,15 @@ describe("runPublish", () => {
 			});
 
 			const attestState = AttestTest.empty();
-			const ghLayer = GitHubClientTest.empty();
 
-			const preDetectedReleases = [
-				{ name: "@test/fail-pkg", version: "2.0.0", path: "/tmp/test/@test/fail-pkg" },
-				{ name: "@test/ok-pkg", version: "1.0.0", path: "/tmp/test/@test/ok-pkg" },
-			];
+			const pkgA = makeWsPkg("@test/fail-pkg", "2.0.0", join(tmpCwd, "packages", "fail-pkg"));
+			const pkgB = makeWsPkg("@test/ok-pkg", "1.0.0", join(tmpCwd, "packages", "ok-pkg"));
+			const targetA = makeNpmTarget("@test/fail-pkg", join(tmpCwd, "packages", "fail-pkg"));
+			const targetB = makeNpmTarget("@test/ok-pkg", join(tmpCwd, "packages", "ok-pkg"));
 
 			const layers = Layer.mergeAll(
 				loggerLayer,
-				commandRunnerLayer,
+				CommandRunnerTest.empty(),
 				failingPubLayer,
 				npmLayer,
 				sbomLayer,
@@ -345,12 +721,13 @@ describe("runPublish", () => {
 				packageManager: "pnpm",
 				targetBranch: "main",
 				dryRun: false,
-				mergedReleasePRNumber: undefined,
-				preDetectedReleases,
+				mergedReleasePRNumber: 102,
 			};
 
 			// Act
-			const result = await Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)));
+			const result: PublishPackagesResult = await runInCwd(tmpCwd, () =>
+				Effect.runPromise(runPublish(args).pipe(Effect.provide(layers)) as Effect.Effect<PublishPackagesResult>),
+			);
 
 			// Assert: batch completed (no early abort), result has both packages
 			expect(result.packages).toHaveLength(2);
@@ -364,9 +741,6 @@ describe("runPublish", () => {
 			const failPkg = result.packages.find((p) => p.name === "@test/fail-pkg");
 			expect(failPkg).toBeDefined();
 			expect(failPkg?.targets[0]?.success).toBe(false);
-
-			// Void pubState (failingPubLayer replaced it, pubState is unused)
-			void pubState;
 		});
 	});
 });

@@ -1,38 +1,34 @@
 /**
  * Phase-3 publish orchestrator.
  *
- * Detects released packages from a merged PR or commit diff (or from
- * caller-supplied pre-detected releases), resolves publish targets via
- * `PublishabilityDetector`, orders them topologically, and publishes each
- * package to each configured registry — accumulating errors per package so
- * one failure does not abort the batch.
+ * Detects released packages from a merged PR or commit diff, resolves publish
+ * targets via `PublishabilityDetector`, orders them topologically, builds the
+ * workspace, and publishes each package to each configured registry —
+ * accumulating errors per package so one failure does not abort the batch.
  *
  * @module release/publish
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { AttestError, PackagePublishError } from "@savvy-web/github-action-effects";
-import { Attest, ErrorAccumulator, GitHubClient, NpmRegistry, PackagePublish } from "@savvy-web/github-action-effects";
-import { Effect } from "effect";
+import type { AttestError, CommandRunnerError, PackagePublishError } from "@savvy-web/github-action-effects";
+import {
+	Attest,
+	CommandRunner,
+	ErrorAccumulator,
+	GitHubClient,
+	NpmRegistry,
+	OidcTokenIssuer,
+	PackagePublish,
+	buildSLSAProvenancePredicate,
+	decodeJwtClaims,
+} from "@savvy-web/github-action-effects";
+import { Effect, Redacted } from "effect";
 import { PublishabilityDetector, TopologicalSorter, WorkspaceDiscovery, WorkspacePackage } from "workspaces-effect";
 
-import { PublishError } from "./errors.js";
 import type { PackagePublishResult, PublishPackagesResult, TargetPublishResult } from "./types.js";
 
 // ─── Public interfaces ────────────────────────────────────────────────────────
-
-/**
- * Pre-detected release (name + version + source path) provided by the caller
- * when the detection step has already been done (e.g., from `main.ts`).
- *
- * @public
- */
-export interface PreDetectedRelease {
-	readonly name: string;
-	readonly version: string;
-	readonly path: string;
-}
 
 /**
  * Input arguments for {@link runPublish}.
@@ -44,11 +40,23 @@ export interface PublishInputArgs {
 	readonly targetBranch: string;
 	readonly dryRun: boolean;
 	readonly mergedReleasePRNumber: number | undefined;
-	/**
-	 * Optional pre-detected releases provided by the caller.
-	 * When set, skip the GitHub API detection step.
-	 */
-	readonly preDetectedReleases?: ReadonlyArray<PreDetectedRelease> | undefined;
+}
+
+// ─── Internal types ───────────────────────────────────────────────────────────
+
+/** Detected release (name + version + source path) used internally. */
+interface DetectedRelease {
+	readonly name: string;
+	readonly version: string;
+	readonly path: string;
+}
+
+/** Resolved target shape used internally (subset of the legacy ResolvedTarget). */
+interface TargetSpec {
+	readonly registry: string;
+	readonly directory: string;
+	readonly access: "public" | "restricted";
+	readonly provenance: boolean;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -100,7 +108,7 @@ function inferBumpType(oldVersion: string, newVersion: string): "major" | "minor
  * the filesystem after the merge) and fetches the base-branch version via the
  * GitHub Contents API.
  */
-const detectFromPR = (prNumber: number): Effect.Effect<ReadonlyArray<PreDetectedRelease>, never, GitHubClient> =>
+const detectFromPR = (prNumber: number): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubClient> =>
 	Effect.gen(function* () {
 		const client = yield* GitHubClient;
 		const { owner, repo } = yield* client.repo;
@@ -150,7 +158,7 @@ const detectFromPR = (prNumber: number): Effect.Effect<ReadonlyArray<PreDetected
 			.pipe(Effect.catchAll(() => Effect.succeed({ base: { sha: "" } } as PrData)));
 
 		const baseSha = prData.base.sha;
-		const releases: PreDetectedRelease[] = [];
+		const releases: DetectedRelease[] = [];
 
 		for (const file of allPkgJsonFiles) {
 			const fullPath = join(process.cwd(), file.filename);
@@ -206,7 +214,7 @@ const detectFromPR = (prNumber: number): Effect.Effect<ReadonlyArray<PreDetected
 		}
 
 		return releases;
-	}).pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<PreDetectedRelease>)));
+	}).pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<DetectedRelease>)));
 
 /**
  * Detect released packages by comparing HEAD with its first parent via the
@@ -214,7 +222,7 @@ const detectFromPR = (prNumber: number): Effect.Effect<ReadonlyArray<PreDetected
  *
  * Ports `detectReleasedPackagesFromCommit` using `GitHubClient.rest`.
  */
-const detectFromCommit = (): Effect.Effect<ReadonlyArray<PreDetectedRelease>, never, GitHubClient> =>
+const detectFromCommit = (): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubClient> =>
 	Effect.gen(function* () {
 		const client = yield* GitHubClient;
 		const { owner, repo } = yield* client.repo;
@@ -257,7 +265,7 @@ const detectFromCommit = (): Effect.Effect<ReadonlyArray<PreDetectedRelease>, ne
 
 		if (modifiedPkgJsonFiles.length === 0) return [];
 
-		const releases: PreDetectedRelease[] = [];
+		const releases: DetectedRelease[] = [];
 
 		for (const file of modifiedPkgJsonFiles) {
 			const fullPath = join(process.cwd(), file.filename);
@@ -308,22 +316,46 @@ const detectFromCommit = (): Effect.Effect<ReadonlyArray<PreDetectedRelease>, ne
 		}
 
 		return releases;
-	}).pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<PreDetectedRelease>)));
+	}).pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<DetectedRelease>)));
 
 // ─── Per-target publish ───────────────────────────────────────────────────────
 
-/** Resolved target shape used internally (subset of the legacy ResolvedTarget). */
-interface TargetSpec {
-	readonly registry: string;
-	readonly directory: string;
-	readonly access: "public" | "restricted";
-	readonly provenance: boolean;
-}
+/**
+ * Build a SLSA provenance predicate from the GitHub Actions OIDC token.
+ *
+ * Ports the `runProvenanceAttestation` predicate construction from
+ * `attest-runner.ts`: obtains an OIDC token, decodes the JWT claims, and
+ * builds the SLSA predicate from those claims.
+ *
+ * Failures are caught and yield `null`; the caller falls back to logging a
+ * warning so attestation failures remain non-fatal.
+ */
+const buildProvenancePredicate = (): Effect.Effect<Record<string, unknown> | null, never, OidcTokenIssuer> =>
+	Effect.gen(function* () {
+		const issuer = yield* OidcTokenIssuer;
+		const oidcToken = yield* issuer.getToken("sigstore");
+		const claims = yield* decodeJwtClaims(Redacted.value(oidcToken));
+		const predicate = yield* buildSLSAProvenancePredicate(claims);
+		return predicate;
+	}).pipe(
+		Effect.catchAll((e: unknown) =>
+			Effect.gen(function* () {
+				yield* Effect.logWarning(
+					`Failed to build SLSA provenance predicate: ${e instanceof Error ? e.message : String(e)}`,
+				);
+				return null;
+			}),
+		),
+	);
 
 /**
  * Publish a single package to a single target, returning a `TargetPublishResult`.
  *
- * Decision tree:
+ * JSR targets are skipped — they require a different publish path that is
+ * outside the scope of this orchestrator. A warning is logged and the result
+ * is recorded as skipped.
+ *
+ * For npm targets, the decision tree is:
  * 1. `PackagePublish.pack(target.directory)` → content digest.
  * 2. `NpmRegistry.getVersions(packageName)` to determine if the package has
  *    ever been published:
@@ -332,7 +364,7 @@ interface TargetSpec {
  *    - Versions list returned → existing package → `PackagePublish.publishIdempotent`
  *      (handles already-published-identical skip and content-mismatch error).
  * 3. On a `"published"` outcome with `provenance: true`:
- *    `Attest.provenance` + `Attest.sbom`.
+ *    `Attest.provenance` (with real SLSA predicate from OIDC) + `Attest.sbom`.
  *
  * All errors are caught at the target level and turned into a failed
  * `TargetPublishResult` so the caller can accumulate without aborting.
@@ -347,6 +379,25 @@ const publishOneTarget = (packageName: string, version: string, target: TargetSp
 		tag: "latest" as const,
 		tokenEnv: null,
 	};
+
+	// Check for JSR registry — skip with a clear warning
+	const isJsr = target.registry.toLowerCase().includes("jsr.io") || target.registry.toLowerCase().includes("jsr:");
+
+	if (isJsr) {
+		return Effect.gen(function* () {
+			yield* Effect.logWarning(
+				`runPublish: skipping JSR target for ${packageName}@${version} — JSR publishing is not yet supported in this orchestrator`,
+			);
+			return {
+				target: { ...legacyTarget, protocol: "jsr" as const },
+				success: true,
+				alreadyPublished: false,
+				error: undefined,
+				// Use a synthetic "skipped" marker in the alreadyPublished fields
+				// so the caller can distinguish JSR skips from real publishes.
+			} satisfies TargetPublishResult;
+		});
+	}
 
 	return Effect.gen(function* () {
 		const publishSvc = yield* PackagePublish;
@@ -405,25 +456,33 @@ const publishOneTarget = (packageName: string, version: string, target: TargetSp
 		let sbomAttestationUrl: string | undefined;
 
 		if (publishStatus === "published" && target.provenance) {
-			// Provenance attestation (SLSA). The predicate is built inside the
-			// live Attest layer from OIDC claims; in tests AttestTest ignores it.
-			const provenanceRecord = yield* attestSvc
-				.provenance({
-					subjectName: `pkg:npm/${packageName}@${version}`,
-					subjectSha256: packResult.digest.replace(/^sha256:/i, ""),
-					predicate: {},
-				})
-				.pipe(
-					Effect.catchAll((e: AttestError) =>
-						Effect.gen(function* () {
-							yield* Effect.logWarning(`Provenance attestation failed for ${packageName}@${version}: ${e.message}`);
-							return null;
-						}),
-					),
-				);
+			// Build real SLSA predicate from OIDC claims (ports attest-runner.ts).
+			const predicate = yield* buildProvenancePredicate();
 
-			if (provenanceRecord !== null) {
-				attestationUrl = provenanceRecord.attestationUrl;
+			if (predicate !== null) {
+				// Provenance attestation (SLSA).
+				const provenanceRecord = yield* attestSvc
+					.provenance({
+						subjectName: `pkg:npm/${packageName}@${version}`,
+						subjectSha256: packResult.digest.replace(/^sha256:/i, ""),
+						predicate,
+					})
+					.pipe(
+						Effect.catchAll((e: AttestError) =>
+							Effect.gen(function* () {
+								yield* Effect.logWarning(`Provenance attestation failed for ${packageName}@${version}: ${e.message}`);
+								return null;
+							}),
+						),
+					);
+
+				if (provenanceRecord !== null) {
+					attestationUrl = provenanceRecord.attestationUrl;
+				}
+			} else {
+				yield* Effect.logWarning(
+					`Skipping provenance attestation for ${packageName}@${version}: could not obtain OIDC claims`,
+				);
 			}
 
 			// SBOM attestation (CycloneDX).
@@ -475,9 +534,9 @@ const publishOneTarget = (packageName: string, version: string, target: TargetSp
  * Effect-based Phase-3 publish orchestrator.
  *
  * @remarks
- * Orchestrates package detection, target resolution, topological ordering, and
- * multi-registry publishing. Accumulates errors per package so one failure does
- * not abort the batch.
+ * Orchestrates the build, package detection, target resolution, topological
+ * ordering, and multi-registry publishing. Accumulates errors per package so
+ * one failure does not abort the batch.
  *
  * The returned effect fails with {@link PublishError} only for fatal
  * infrastructure errors (e.g., workspace discovery or topological sort failure).
@@ -488,32 +547,62 @@ const publishOneTarget = (packageName: string, version: string, target: TargetSp
  */
 export const runPublish = (args: PublishInputArgs) =>
 	Effect.gen(function* () {
+		const runner = yield* CommandRunner;
 		const discovery = yield* WorkspaceDiscovery;
 		const detector = yield* PublishabilityDetector;
 		const sorter = yield* TopologicalSorter;
 
-		// ── Step 1: Detect released packages ─────────────────────────────────
+		// ── Step 1: Build ──────────────────────────────────────────────────────
+
+		yield* Effect.logInfo("runPublish: running ci:build");
+
+		const buildArgs = args.packageManager === "npm" ? ["run", "ci:build"] : ["ci:build"];
+		const buildResult = yield* runner.execCapture(args.packageManager, buildArgs).pipe(
+			Effect.map((output) => ({ success: true as const, output })),
+			Effect.catchAll((e: CommandRunnerError) =>
+				Effect.succeed({
+					success: false as const,
+					error: e.stderr ?? e.message,
+					output: "",
+				}),
+			),
+		);
+
+		if (!buildResult.success) {
+			yield* Effect.logWarning("runPublish: build failed, aborting publish");
+			return {
+				success: false,
+				packages: [],
+				totalPackages: 0,
+				successfulPackages: 0,
+				totalTargets: 0,
+				successfulTargets: 0,
+				buildError: buildResult.error,
+				buildOutput: "",
+			} satisfies PublishPackagesResult;
+		}
+
+		yield* Effect.logInfo("runPublish: build succeeded");
+
+		// ── Step 2: Detect released packages ──────────────────────────────────
 
 		yield* Effect.logInfo("runPublish: detecting released packages");
 
-		let preDetected: ReadonlyArray<PreDetectedRelease>;
+		let detected: ReadonlyArray<DetectedRelease>;
 
-		if (args.preDetectedReleases !== undefined && args.preDetectedReleases.length > 0) {
-			preDetected = args.preDetectedReleases;
-			yield* Effect.logInfo(`runPublish: using ${preDetected.length} pre-detected release(s)`);
-		} else if (args.mergedReleasePRNumber !== undefined) {
+		if (args.mergedReleasePRNumber !== undefined) {
 			yield* Effect.logInfo(`runPublish: detecting from PR #${args.mergedReleasePRNumber}`);
-			preDetected = yield* detectFromPR(args.mergedReleasePRNumber);
-			if (preDetected.length === 0) {
+			detected = yield* detectFromPR(args.mergedReleasePRNumber);
+			if (detected.length === 0) {
 				yield* Effect.logInfo("runPublish: PR detection returned nothing, falling back to commit diff");
-				preDetected = yield* detectFromCommit();
+				detected = yield* detectFromCommit();
 			}
 		} else {
 			yield* Effect.logInfo("runPublish: detecting from commit diff");
-			preDetected = yield* detectFromCommit();
+			detected = yield* detectFromCommit();
 		}
 
-		if (preDetected.length === 0) {
+		if (detected.length === 0) {
 			yield* Effect.logInfo("runPublish: no packages to publish");
 			return {
 				success: true,
@@ -525,7 +614,7 @@ export const runPublish = (args: PublishInputArgs) =>
 			} satisfies PublishPackagesResult;
 		}
 
-		// ── Step 2: Resolve publish targets ──────────────────────────────────
+		// ── Step 3: Resolve publish targets ───────────────────────────────────
 
 		yield* Effect.logInfo("runPublish: resolving publish targets");
 
@@ -542,17 +631,17 @@ export const runPublish = (args: PublishInputArgs) =>
 		}
 		const targetsByPackage = new Map<string, PkgEntry>();
 
-		for (const detected of preDetected) {
+		for (const rel of detected) {
 			// Resolve the WorkspacePackage from discovery, synthesising a minimal
 			// one if the package is not in the workspace (e.g. deleted monorepo member).
-			const wsPkg = yield* discovery.getPackage(detected.name).pipe(
+			const wsPkg = yield* discovery.getPackage(rel.name).pipe(
 				Effect.catchAll(() =>
 					Effect.succeed(
 						new WorkspacePackage({
-							name: detected.name,
-							version: detected.version,
-							path: detected.path,
-							packageJsonPath: join(detected.path, "package.json"),
+							name: rel.name,
+							version: rel.version,
+							path: rel.path,
+							packageJsonPath: join(rel.path, "package.json"),
 							relativePath: "",
 						}),
 					),
@@ -562,7 +651,7 @@ export const runPublish = (args: PublishInputArgs) =>
 			const publishTargets = yield* detector.detect(wsPkg, workspaceRoot).pipe(
 				Effect.catchAll((e: unknown) =>
 					Effect.gen(function* () {
-						yield* Effect.logWarning(`Failed to resolve targets for ${detected.name}: ${String(e)}`);
+						yield* Effect.logWarning(`Failed to resolve targets for ${rel.name}: ${String(e)}`);
 						return [] as ReadonlyArray<{
 							registry: string;
 							directory: string;
@@ -573,9 +662,23 @@ export const runPublish = (args: PublishInputArgs) =>
 				),
 			);
 
-			targetsByPackage.set(detected.name, {
-				version: detected.version,
-				targets: publishTargets.map((t) => ({
+			// Filter out JSR targets — log a warning for each
+			const jsrTargets = publishTargets.filter(
+				(t) => t.registry.toLowerCase().includes("jsr.io") || t.registry.toLowerCase().includes("jsr:"),
+			);
+			const npmTargets = publishTargets.filter(
+				(t) => !t.registry.toLowerCase().includes("jsr.io") && !t.registry.toLowerCase().includes("jsr:"),
+			);
+
+			for (const t of jsrTargets) {
+				yield* Effect.logWarning(
+					`runPublish: skipping JSR target ${t.registry} for ${rel.name} — JSR publishing is not yet supported`,
+				);
+			}
+
+			targetsByPackage.set(rel.name, {
+				version: rel.version,
+				targets: npmTargets.map((t) => ({
 					registry: t.registry,
 					directory: t.directory,
 					access: t.access,
@@ -583,23 +686,26 @@ export const runPublish = (args: PublishInputArgs) =>
 				})),
 			});
 
-			yield* Effect.logInfo(`runPublish: ${detected.name}@${detected.version}: ${publishTargets.length} target(s)`);
+			yield* Effect.logInfo(
+				`runPublish: ${rel.name}@${rel.version}: ${npmTargets.length} target(s)` +
+					(jsrTargets.length > 0 ? ` (${jsrTargets.length} JSR skipped)` : ""),
+			);
 		}
 
-		// ── Step 3: Topological ordering ──────────────────────────────────────
+		// ── Step 4: Topological ordering ───────────────────────────────────────
 
 		yield* Effect.logInfo("runPublish: sorting packages topologically");
 
-		const sortedNames = yield* sorter.sortSubset(preDetected.map((r) => r.name)).pipe(
+		const sortedNames = yield* sorter.sortSubset(detected.map((r) => r.name)).pipe(
 			Effect.catchAll((e: unknown) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Topological sort failed, using insertion order: ${String(e)}`);
-					return preDetected.map((r) => r.name) as ReadonlyArray<string>;
+					return detected.map((r) => r.name) as ReadonlyArray<string>;
 				}),
 			),
 		);
 
-		// ── Step 4: Publish each package (accumulate errors) ──────────────────
+		// ── Step 5: Publish each package (accumulate errors) ───────────────────
 
 		const totalTargets = [...targetsByPackage.values()].reduce((sum, p) => sum + p.targets.length, 0);
 		yield* Effect.logInfo(`runPublish: publishing ${sortedNames.length} package(s), ${totalTargets} total target(s)`);
@@ -639,7 +745,7 @@ export const runPublish = (args: PublishInputArgs) =>
 			}),
 		);
 
-		// ── Step 5: Assemble PublishPackagesResult ─────────────────────────────
+		// ── Step 6: Assemble PublishPackagesResult ─────────────────────────────
 
 		const packages: PackagePublishResult[] = [];
 		let successfulPackages = 0;
