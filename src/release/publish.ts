@@ -418,6 +418,20 @@ const publishOneTarget = (
 		// Step 1: Pack to get digest.
 		const packResult = yield* publishSvc.pack(target.directory);
 
+		// Set up registry auth before the publish decision — both the
+		// first-publish path and the existing-package `publishIdempotent`
+		// path publish to the registry and need it authenticated.
+		const token = pickToken(target.registry, npmToken, ghPkgsToken);
+		if (token !== null) {
+			yield* publishSvc
+				.setupAuth(target.registry, token)
+				.pipe(
+					Effect.catchAll((e: PackagePublishError) =>
+						Effect.logWarning(`setupAuth failed for ${target.registry}: ${e.message}`),
+					),
+				);
+		}
+
 		// Step 2: First-publish vs. existing-package decision.
 		const versionsCheck = yield* registrySvc.getVersions(packageName).pipe(
 			Effect.map((versions) => ({ exists: true as const, versions })),
@@ -428,17 +442,7 @@ const publishOneTarget = (
 		let skipReason: "already-published-identical" | undefined;
 
 		if (!versionsCheck.exists) {
-			// First publish: set up auth and publish.
-			const token = pickToken(target.registry, npmToken, ghPkgsToken);
-			if (token !== null) {
-				yield* publishSvc
-					.setupAuth(target.registry, token)
-					.pipe(
-						Effect.catchAll((e: PackagePublishError) =>
-							Effect.logWarning(`setupAuth failed for ${target.registry}: ${e.message}`),
-						),
-					);
-			}
+			// First publish.
 			yield* publishSvc.publish(target.directory, {
 				registry: target.registry,
 				access: target.access,
@@ -530,11 +534,17 @@ const publishOneTarget = (
 		} satisfies TargetPublishResult;
 	}).pipe(
 		Effect.catchAll((e: unknown) =>
-			Effect.succeed({
-				target: legacyTarget,
-				success: false,
-				error: e instanceof Error ? e.message : String(e),
-			} satisfies TargetPublishResult),
+			Effect.gen(function* () {
+				const message = e instanceof Error ? e.message : String(e);
+				yield* Effect.logError(
+					`runPublish: publishing ${packageName}@${version} to ${target.registry} failed — ${message}`,
+				);
+				return {
+					target: legacyTarget,
+					success: false,
+					error: message,
+				} satisfies TargetPublishResult;
+			}),
 		),
 	);
 };
