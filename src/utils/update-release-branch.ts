@@ -20,6 +20,8 @@ import type {
 	CommandRunnerError,
 	GitCommitError,
 	GitHubClientError,
+	GitHubIssueError,
+	PullRequestError,
 } from "@savvy-web/github-action-effects";
 import {
 	ActionEnvironment,
@@ -28,6 +30,8 @@ import {
 	CommandRunner,
 	GitCommit,
 	GitHubClient,
+	GitHubIssue,
+	PullRequest,
 } from "@savvy-web/github-action-effects";
 import type { ConfigError } from "effect";
 import { Config, Duration, Effect } from "effect";
@@ -35,7 +39,12 @@ import { resolveSignoff } from "./commit-signoff.js";
 import { isSinglePackage } from "./detect-repo-type.js";
 import { summaryWriter } from "./summary-writer.js";
 
-interface LinkedIssue {
+/**
+ * An issue linked to the release via a changeset commit.
+ *
+ * @public
+ */
+export interface LinkedIssue {
 	number: number;
 	title: string;
 	state: string;
@@ -44,7 +53,12 @@ interface LinkedIssue {
 	nodeId?: string;
 }
 
-interface UpdateReleaseBranchResult {
+/**
+ * Result of the {@link updateReleaseBranch} stage.
+ *
+ * @public
+ */
+export interface UpdateReleaseBranchResult {
 	success: boolean;
 	hadConflicts: boolean;
 	prNumber: number | null;
@@ -125,22 +139,11 @@ const buildLinkedIssuesSection = (linkedIssues: ReadonlyArray<LinkedIssue>): str
 	return summaryWriter.build([{ heading: "Linked Issues", content: summaryWriter.list(items) }]);
 };
 
-interface PullRequestRecord {
-	number: number;
-	merged_at: string | null;
-	html_url: string;
-	body: string | null;
-}
-
 interface IssueDetailsResponse {
 	title: string;
 	state: string;
 	html_url: string;
 	node_id: string;
-}
-
-interface ClosingIssuesResponse {
-	repository: { pullRequest: { closingIssuesReferences: { nodes: Array<{ number: number }> } } };
 }
 
 interface RefResponse {
@@ -162,7 +165,9 @@ export const updateReleaseBranch = (
 	| CommandRunnerError
 	| ConfigError.ConfigError
 	| GitCommitError
-	| GitHubClientError,
+	| GitHubClientError
+	| GitHubIssueError
+	| PullRequestError,
 	| ActionEnvironment
 	| ActionOutputs
 	| ActionState
@@ -171,6 +176,8 @@ export const updateReleaseBranch = (
 	| FileSystem.FileSystem
 	| GitCommit
 	| GitHubClient
+	| GitHubIssue
+	| PullRequest
 > =>
 	Effect.gen(function* () {
 		const env = yield* ActionEnvironment;
@@ -179,6 +186,8 @@ export const updateReleaseBranch = (
 		const runner = yield* CommandRunner;
 		const gitCommit = yield* GitCommit;
 		const client = yield* GitHubClient;
+		const pr = yield* PullRequest;
+		const issues = yield* GitHubIssue;
 		const fs = yield* FileSystem.FileSystem;
 		const signoff = yield* resolveSignoff();
 
@@ -196,29 +205,7 @@ export const updateReleaseBranch = (
 		let prWasClosed = false;
 
 		const openPrs = yield* Effect.either(
-			client.rest<ReadonlyArray<PullRequestRecord>>("pulls.list.open", (octokit) =>
-				(
-					octokit as {
-						rest: {
-							pulls: {
-								list: (params: {
-									owner: string;
-									repo: string;
-									state: "open" | "closed";
-									head: string;
-									base: string;
-								}) => Promise<{ data: ReadonlyArray<PullRequestRecord> }>;
-							};
-						};
-					}
-				).rest.pulls.list({
-					owner,
-					repo,
-					state: "open",
-					head: `${owner}:${releaseBranch}`,
-					base: targetBranch,
-				}),
-			),
+			pr.list({ state: "open", head: `${owner}:${releaseBranch}`, base: targetBranch }),
 		);
 
 		if (openPrs._tag === "Right" && openPrs.right.length > 0) {
@@ -227,32 +214,10 @@ export const updateReleaseBranch = (
 			yield* Effect.logWarning(`Could not list open PRs: ${openPrs.left.reason}`);
 		} else {
 			const closedPrs = yield* Effect.either(
-				client.rest<ReadonlyArray<PullRequestRecord>>("pulls.list.closed", (octokit) =>
-					(
-						octokit as {
-							rest: {
-								pulls: {
-									list: (params: {
-										owner: string;
-										repo: string;
-										state: "open" | "closed";
-										head: string;
-										base: string;
-									}) => Promise<{ data: ReadonlyArray<PullRequestRecord> }>;
-								};
-							};
-						}
-					).rest.pulls.list({
-						owner,
-						repo,
-						state: "closed",
-						head: `${owner}:${releaseBranch}`,
-						base: targetBranch,
-					}),
-				),
+				pr.list({ state: "closed", head: `${owner}:${releaseBranch}`, base: targetBranch }),
 			);
 			if (closedPrs._tag === "Right") {
-				const unmerged = closedPrs.right.find((pr) => pr.merged_at === null);
+				const unmerged = closedPrs.right.find((p) => (p.mergedAt ?? null) === null);
 				if (unmerged) {
 					prNumber = unmerged.number;
 					prWasClosed = true;
@@ -353,24 +318,7 @@ export const updateReleaseBranch = (
 
 		// ---------- Reopen PR if it was closed ----------
 		if (prWasClosed && prNumber !== null && !dryRun) {
-			const reopen = yield* Effect.either(
-				client.rest<undefined>("pulls.update.reopen", (octokit) =>
-					(
-						octokit as {
-							rest: {
-								pulls: {
-									update: (params: {
-										owner: string;
-										repo: string;
-										pull_number: number;
-										state: "open";
-									}) => Promise<{ data: undefined }>;
-								};
-							};
-						}
-					).rest.pulls.update({ owner, repo, pull_number: prNumber as number, state: "open" }),
-				),
-			);
+			const reopen = yield* Effect.either(pr.update(prNumber, { state: "open" }));
 			if (reopen._tag === "Right") {
 				yield* Effect.logInfo(`✓ Reopened PR #${prNumber}`);
 			} else {
@@ -384,24 +332,7 @@ export const updateReleaseBranch = (
 
 		// ---------- Update PR title for existing open PRs ----------
 		if (prNumber !== null && !prWasClosed && !dryRun) {
-			const update = yield* Effect.either(
-				client.rest<undefined>("pulls.update.title", (octokit) =>
-					(
-						octokit as {
-							rest: {
-								pulls: {
-									update: (params: {
-										owner: string;
-										repo: string;
-										pull_number: number;
-										title: string;
-									}) => Promise<{ data: undefined }>;
-								};
-							};
-						}
-					).rest.pulls.update({ owner, repo, pull_number: prNumber as number, title: prTitle }),
-				),
-			);
+			const update = yield* Effect.either(pr.update(prNumber, { title: prTitle }));
 			if (update._tag === "Right") {
 				yield* Effect.logInfo(`✓ Updated PR #${prNumber} title to: ${prTitle}`);
 			} else {
@@ -412,76 +343,23 @@ export const updateReleaseBranch = (
 		// ---------- Create new PR if none exists ----------
 		if (prNumber === null && !dryRun) {
 			const prBody = buildPrBody({ versionSummary, linkedIssues, owner, repo, runId });
-			const create = (): Effect.Effect<{ number: number; html_url: string }, GitHubClientError, GitHubClient> =>
-				client.rest<{ number: number; html_url: string }>("pulls.create", (octokit) =>
-					(
-						octokit as {
-							rest: {
-								pulls: {
-									create: (params: {
-										owner: string;
-										repo: string;
-										title: string;
-										head: string;
-										base: string;
-										body: string;
-									}) => Promise<{ data: { number: number; html_url: string } }>;
-								};
-							};
-						}
-					).rest.pulls.create({
-						owner,
-						repo,
-						title: prTitle,
-						head: releaseBranch,
-						base: targetBranch,
-						body: prBody,
-					}),
-				);
+			const create = (): Effect.Effect<{ number: number; url: string }, PullRequestError, PullRequest> =>
+				pr.create({ title: prTitle, body: prBody, head: releaseBranch, base: targetBranch });
 
 			const result = yield* create().pipe(
 				Effect.tapError((e) => Effect.logWarning(`PR creation failed, retrying: ${e.reason}`)),
 				Effect.retry({ times: 1, schedule: undefined }),
 			);
 			prNumber = result.number;
-			yield* client.rest<undefined>("issues.addLabels", (octokit) =>
-				(
-					octokit as {
-						rest: {
-							issues: {
-								addLabels: (params: {
-									owner: string;
-									repo: string;
-									issue_number: number;
-									labels: string[];
-								}) => Promise<{ data: undefined }>;
-							};
-						};
-					}
-				).rest.issues.addLabels({ owner, repo, issue_number: prNumber as number, labels: ["automated", "release"] }),
-			);
-			yield* Effect.logInfo(`✓ Created new release PR #${prNumber}: ${result.html_url}`);
+			yield* pr.addLabels(prNumber, ["automated", "release"]);
+			yield* Effect.logInfo(`✓ Created new release PR #${prNumber}: ${result.url}`);
 		} else if (prNumber === null && dryRun) {
 			yield* Effect.logInfo("[DRY RUN] Would create new release PR (no existing PR found)");
 		}
 
 		// ---------- Update PR body with linked issues ----------
 		if (prNumber !== null && linkedIssues.length > 0 && !dryRun) {
-			const getPr = yield* Effect.either(
-				client.rest<PullRequestRecord>("pulls.get", (octokit) =>
-					(
-						octokit as {
-							rest: {
-								pulls: {
-									get: (params: { owner: string; repo: string; pull_number: number }) => Promise<{
-										data: PullRequestRecord;
-									}>;
-								};
-							};
-						}
-					).rest.pulls.get({ owner, repo, pull_number: prNumber as number }),
-				),
-			);
+			const getPr = yield* Effect.either(pr.get(prNumber));
 
 			if (getPr._tag === "Right") {
 				const linkedSection = buildLinkedIssuesSection(linkedIssues);
@@ -496,24 +374,7 @@ export const updateReleaseBranch = (
 				}
 				const newBody = `${linkedSection}\n${currentBody.trim()}`;
 
-				const update = yield* Effect.either(
-					client.rest<undefined>("pulls.update.body", (octokit) =>
-						(
-							octokit as {
-								rest: {
-									pulls: {
-										update: (params: {
-											owner: string;
-											repo: string;
-											pull_number: number;
-											body: string;
-										}) => Promise<{ data: undefined }>;
-									};
-								};
-							}
-						).rest.pulls.update({ owner, repo, pull_number: prNumber as number, body: newBody }),
-					),
-				);
+				const update = yield* Effect.either(pr.update(prNumber, { body: newBody }));
 				if (update._tag === "Right") {
 					yield* Effect.logInfo(`✓ Updated PR #${prNumber} with ${linkedIssues.length} linked issue(s)`);
 				} else {
@@ -616,7 +477,11 @@ export const updateReleaseBranch = (
 			owner: string;
 			repo: string;
 			targetBranch: string;
-		}): Effect.Effect<LinkedIssue[], CommandRunnerError, CommandRunner | FileSystem.FileSystem | GitHubClient> {
+		}): Effect.Effect<
+			LinkedIssue[],
+			CommandRunnerError,
+			CommandRunner | FileSystem.FileSystem | GitHubClient | GitHubIssue
+		> {
 			return Effect.gen(function* () {
 				const dirEntries = yield* fs.readDirectory(".changeset").pipe(Effect.catchAll(() => Effect.succeed([])));
 				const changesetFiles = dirEntries.filter((f) => f.endsWith(".md") && f !== "README.md");
@@ -678,24 +543,9 @@ export const updateReleaseBranch = (
 					const prNum = extractPRNumber(commit.message);
 					if (prNum !== null) {
 						yield* Effect.logInfo(`  PR reference: #${prNum}`);
-						const prIssuesResult = yield* Effect.either(
-							client.graphql<ClosingIssuesResponse>(
-								`
-								query ($owner: String!, $repo: String!, $prNumber: Int!) {
-									repository(owner: $owner, name: $repo) {
-										pullRequest(number: $prNumber) {
-											closingIssuesReferences(first: 50) { nodes { number } }
-										}
-									}
-								}
-							`,
-								{ owner: args.owner, repo: args.repo, prNumber: prNum },
-							),
-						);
+						const prIssuesResult = yield* Effect.either(issues.getLinkedIssues(prNum));
 						if (prIssuesResult._tag === "Right") {
-							const prIssues = prIssuesResult.right.repository.pullRequest.closingIssuesReferences.nodes.map(
-								(n) => n.number,
-							);
+							const prIssues = prIssuesResult.right.map((n) => n.number);
 							if (prIssues.length > 0) {
 								yield* Effect.logInfo(`  PR #${prNum} has ${prIssues.length} linked issue(s):`);
 								for (const n of prIssues) {
