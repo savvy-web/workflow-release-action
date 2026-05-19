@@ -29,6 +29,9 @@ import {
 	CheckRun,
 	GitHubClient,
 	GitHubClientLive,
+	GitTag,
+	GitTagLive,
+	SemverResolver,
 } from "@savvy-web/github-action-effects";
 import type { ConfigError } from "effect";
 import { Config, Effect, Layer } from "effect";
@@ -88,11 +91,6 @@ const extractPRNumber = (message: string): number | null => {
 	return match ? Number.parseInt(match[1], 10) : null;
 };
 
-/** REST tag entry, narrowed to fields we read. */
-interface TagRecord {
-	commit: { sha: string };
-}
-
 /** REST commit entry, narrowed to fields we read. */
 interface CommitRecord {
 	sha: string;
@@ -118,39 +116,78 @@ const toCommitInfo = (c: CommitRecord): CommitInfo => ({
 	author: c.commit.author?.name ?? "Unknown",
 });
 
+/** A tag entry enriched with its extracted semver version string. @internal */
+interface TagEntry {
+	tag: string;
+	sha: string;
+	version: string;
+}
+
 /**
- * Fetch the latest release tag's SHA. Returns `null` when no tags exist
- * or the API call fails.
+ * Extract the version string from a tag name.
+ *
+ * Handles both `vX.Y.Z` (single-package / `v`-prefixed) and
+ * `@scope/pkg@X.Y.Z` (monorepo per-package) formats by taking the
+ * substring after the last `@` sign when present, or stripping a
+ * leading `v` otherwise.
  *
  * @internal
  */
-const getLatestTagSha = Effect.gen(function* () {
-	const client = yield* GitHubClient;
-	const env = yield* ActionEnvironment;
-	const { repository } = yield* env.github;
-	const [owner, repo] = repository.split("/");
-	const result = yield* Effect.either(
-		client.rest<ReadonlyArray<TagRecord>>("listTags", (octokit) =>
-			(
-				octokit as {
-					rest: {
-						repos: {
-							listTags: (params: {
-								owner: string;
-								repo: string;
-								per_page: number;
-							}) => Promise<{ data: ReadonlyArray<TagRecord> }>;
-						};
-					};
-				}
-			).rest.repos.listTags({ owner, repo, per_page: 1 }),
-		),
-	);
+const extractVersionFromTag = (tag: string): string => {
+	const atIdx = tag.lastIndexOf("@");
+	if (atIdx !== -1) return tag.slice(atIdx + 1);
+	return tag.startsWith("v") ? tag.slice(1) : tag;
+};
+
+/**
+ * Fetch the latest release tag's SHA. Returns `null` when no tags exist,
+ * none yield a parseable semver, or the API call fails.
+ *
+ * @remarks
+ * Selects the tag with the highest **semantic** version using
+ * `SemverResolver.compare`, so multi-digit version components (e.g.
+ * `v1.10.0` vs `v1.9.0`) are ordered correctly regardless of how
+ * `GitTag.list()` returns the entries.
+ *
+ * Exported for direct unit testing; consuming modules should prefer
+ * {@link getLinkedIssuesFromCommits} which composes this internally.
+ *
+ * @public
+ */
+export const getLatestTagSha = Effect.gen(function* () {
+	const gitTag = yield* GitTag;
+	const result = yield* Effect.either(gitTag.list());
 	if (result._tag === "Left") {
 		yield* Effect.logWarning(`Failed to get latest tag: ${result.left.reason}`);
 		return null;
 	}
-	return result.right.length > 0 ? result.right[0].commit.sha : null;
+	const tags = result.right;
+	if (tags.length === 0) return null;
+
+	// Filter to tags with parseable semver versions.
+	const parseable: TagEntry[] = [];
+	for (const entry of tags) {
+		const version = extractVersionFromTag(entry.tag);
+		const parseResult = yield* Effect.either(SemverResolver.parse(version));
+		if (parseResult._tag === "Right") {
+			parseable.push({ ...entry, version });
+		}
+	}
+
+	if (parseable.length === 0) return null;
+
+	// Select the tag with the highest semantic version.
+	let latest = parseable[0] as TagEntry;
+	for (let i = 1; i < parseable.length; i++) {
+		const candidate = parseable[i] as TagEntry;
+		const cmp = yield* Effect.either(SemverResolver.compare(candidate.version, latest.version));
+		// On parse failure, keep the current latest.
+		if (cmp._tag === "Right" && cmp.right === 1) {
+			latest = candidate;
+		}
+	}
+
+	return latest.sha;
 });
 
 /**
@@ -331,7 +368,7 @@ export const getLinkedIssuesFromCommits = (
 ): Effect.Effect<
 	{ linkedIssues: LinkedIssue[]; commits: CommitInfo[] },
 	ActionEnvironmentError,
-	ActionEnvironment | GitHubClient
+	ActionEnvironment | GitHubClient | GitTag
 > =>
 	Effect.gen(function* () {
 		const client = yield* GitHubClient;
@@ -584,7 +621,7 @@ const linkIssuesToPR = (
 export const linkIssuesFromCommits: Effect.Effect<
 	LinkIssuesResult,
 	ActionEnvironmentError | ActionOutputError | CheckRunError | GitHubClientError | ConfigError.ConfigError,
-	ActionEnvironment | ActionOutputs | CheckRun | GitHubClient
+	ActionEnvironment | ActionOutputs | CheckRun | GitHubClient | GitTag
 > = Effect.gen(function* () {
 	const env = yield* ActionEnvironment;
 	const outputs = yield* ActionOutputs;
@@ -652,6 +689,12 @@ export const getLinkedIssuesFromCommitsPromise = (
 ): Promise<{ linkedIssues: LinkedIssue[]; commits: CommitInfo[] }> =>
 	Effect.runPromise(
 		getLinkedIssuesFromCommits(targetBranch).pipe(
-			Effect.provide(Layer.mergeAll(ActionEnvironmentLive, GitHubClientLive.fromToken(appToken()))),
+			Effect.provide(
+				Layer.mergeAll(
+					ActionEnvironmentLive,
+					GitHubClientLive.fromToken(appToken()),
+					GitTagLive.pipe(Layer.provide(GitHubClientLive.fromToken(appToken()))),
+				),
+			),
 		),
 	);

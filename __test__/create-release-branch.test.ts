@@ -31,6 +31,7 @@ import {
 	CommandRunnerTest,
 	GitCommitTest,
 	GitHubClientTest,
+	GitTagTest,
 	PullRequestTest,
 } from "@savvy-web/github-action-effects/testing";
 import { ConfigProvider, Effect, Layer, Logger } from "effect";
@@ -155,6 +156,7 @@ const runStage = (
 		),
 		GitCommitTest.layer(f.commitState),
 		GitHubClientTest.layer(f.clientState),
+		GitTagTest.empty().layer,
 		PullRequestTest.layer(f.prState),
 		FileSystem.layerNoop({}),
 	);
