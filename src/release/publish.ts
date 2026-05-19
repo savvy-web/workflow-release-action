@@ -111,8 +111,17 @@ function pickToken(registry: string, npmToken: string | null, ghPkgsToken: strin
 	return process.env[envName] ?? null;
 }
 
-/** Infer bump type from old/new version strings (for logging). */
-function inferBumpType(oldVersion: string, newVersion: string): "major" | "minor" | "patch" | "unknown" {
+/**
+ * Infer the semver bump type from old/new version strings.
+ *
+ * @param oldVersion - The previous version string (e.g. `1.2.3`).
+ * @param newVersion - The new version string (e.g. `1.3.0`).
+ * @returns The bump type, or `"unknown"` when either version is not a
+ *   three-part semver string.
+ *
+ * @public
+ */
+export function inferBumpType(oldVersion: string, newVersion: string): "major" | "minor" | "patch" | "unknown" {
 	const oldParts = oldVersion.split(".").map(Number);
 	const newParts = newVersion.split(".").map(Number);
 	if (oldParts.length < 3 || newParts.length < 3) return "unknown";
