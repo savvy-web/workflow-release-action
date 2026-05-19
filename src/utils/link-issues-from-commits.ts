@@ -69,6 +69,8 @@ export interface LinkIssuesResult {
 	linkedIssues: LinkedIssue[];
 	commits: CommitInfo[];
 	checkId: number;
+	/** Web URL of the Link Issues check run, for the checks-table link. */
+	htmlUrl: string;
 }
 
 const CLOSE_KEYWORD_PATTERN = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi;
@@ -573,7 +575,7 @@ export const linkIssuesFromCommits: Effect.Effect<
 		{ heading: "📝 Commits Analyzed", level: 3, content: commitsContent },
 	]);
 
-	const { id: checkId } = yield* checks.create(checkTitle, sha);
+	const { id: checkId, htmlUrl } = yield* checks.create(checkTitle, sha);
 	yield* checks.complete(checkId, "success", { title: checkSummary, summary: checkDetails });
 	yield* outputs.summary(checkDetails);
 
@@ -581,7 +583,7 @@ export const linkIssuesFromCommits: Effect.Effect<
 		yield* linkIssuesToPR(linkedIssues);
 	}
 
-	return { linkedIssues, commits, checkId } satisfies LinkIssuesResult;
+	return { linkedIssues, commits, checkId, htmlUrl } satisfies LinkIssuesResult;
 });
 
 /**
