@@ -653,6 +653,7 @@ describe("runValidation", () => {
 			const publishError = errorFindings.find((f) => f.check === "Publish Validation");
 			expect(publishError).toBeDefined();
 			expect(publishError?.scope).toBe("@test/finding-fail");
+			expect(publishError?.message).toContain("dry-run failed");
 		});
 
 		it("produces a warning finding when the generated SBOM is NTIA-incomplete", async () => {

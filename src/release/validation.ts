@@ -372,7 +372,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 							})
 							.pipe(
 								Effect.map((dryRunResult) => ({
-									success: dryRunResult.ok as boolean,
+									success: dryRunResult.ok,
 									output: dryRunResult.output,
 									packedSize: dryRunResult.packedSize,
 									unpackedSize: dryRunResult.unpackedSize,
@@ -503,7 +503,10 @@ export const runValidation = (args: ValidationInputArgs) =>
 										// by `serializeJson`) into the plain document shape.
 										let document: EnhancedCycloneDXDocument | null = null;
 										try {
-											document = JSON.parse(bomJson) as EnhancedCycloneDXDocument;
+											const parsed: unknown = JSON.parse(bomJson);
+											// Shape is trusted: bomJson is the CycloneDX library's own
+											// canonical serialization.
+											document = parsed as EnhancedCycloneDXDocument;
 										} catch {
 											document = null;
 										}
