@@ -380,7 +380,13 @@ export function buildFindingsTable(findings: ReadonlyArray<ValidationFinding>): 
 	const ordered = [...errors, ...warnings];
 	const tableRows: ReadonlyArray<ReadonlyArray<string>> = ordered.map((f) => {
 		const icon = f.severity === "error" ? "❌" : "⚠️";
-		return [icon, f.check, f.scope ?? "—", f.message];
+		const scopeCell =
+			f.scope === null || f.scope.package === null
+				? "—"
+				: f.scope.directory === null
+					? f.scope.package
+					: `${f.scope.package} · ${basename(f.scope.directory)}`;
+		return [icon, f.check, scopeCell, f.message];
 	});
 	const table = GithubMarkdown.table([" ", "Check", "Package", "Detail"], tableRows);
 

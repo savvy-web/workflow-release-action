@@ -344,8 +344,18 @@ describe("buildFindingsTable", () => {
 
 	it("orders errors before warnings regardless of discovery order", () => {
 		const findings: ReadonlyArray<ValidationFinding> = [
-			{ severity: "warning", check: "SBOM Preview", scope: "@org/a", message: "missing NTIA fields" },
-			{ severity: "error", check: "Publish Validation", scope: "@org/b", message: "dry-run failed" },
+			{
+				severity: "warning",
+				check: "SBOM Preview",
+				scope: { package: "@org/a", directory: null },
+				message: "missing NTIA fields",
+			},
+			{
+				severity: "error",
+				check: "Publish Validation",
+				scope: { package: "@org/b", directory: null },
+				message: "dry-run failed",
+			},
 		];
 
 		const table = buildFindingsTable(findings);
@@ -359,7 +369,12 @@ describe("buildFindingsTable", () => {
 
 	it("omits the error side of the heading when there are no errors", () => {
 		const table = buildFindingsTable([
-			{ severity: "warning", check: "SBOM Preview", scope: "@org/a", message: "missing NTIA fields" },
+			{
+				severity: "warning",
+				check: "SBOM Preview",
+				scope: { package: "@org/a", directory: null },
+				message: "missing NTIA fields",
+			},
 		]);
 
 		expect(table).toContain("### ⚠️ 1 warning");
@@ -367,7 +382,9 @@ describe("buildFindingsTable", () => {
 	});
 
 	it("omits the warning side of the heading when there are no warnings", () => {
-		const table = buildFindingsTable([{ severity: "error", check: "Build Validation", message: "tsc exited 2" }]);
+		const table = buildFindingsTable([
+			{ severity: "error", check: "Build Validation", scope: null, message: "tsc exited 2" },
+		]);
 
 		expect(table).toContain("### ❌ 1 error");
 		expect(table).not.toContain("warning");
@@ -375,10 +392,10 @@ describe("buildFindingsTable", () => {
 
 	it("pluralises the heading counts", () => {
 		const table = buildFindingsTable([
-			{ severity: "error", check: "Build Validation", message: "a" },
-			{ severity: "error", check: "Publish Validation", message: "b" },
-			{ severity: "warning", check: "SBOM Preview", message: "c" },
-			{ severity: "warning", check: "SBOM Preview", message: "d" },
+			{ severity: "error", check: "Build Validation", scope: null, message: "a" },
+			{ severity: "error", check: "Publish Validation", scope: null, message: "b" },
+			{ severity: "warning", check: "SBOM Preview", scope: null, message: "c" },
+			{ severity: "warning", check: "SBOM Preview", scope: null, message: "d" },
 		]);
 
 		expect(table).toContain("❌ 2 errors");
@@ -386,14 +403,21 @@ describe("buildFindingsTable", () => {
 	});
 
 	it("renders '—' in the Package column for a repo-wide finding with no scope", () => {
-		const table = buildFindingsTable([{ severity: "error", check: "Build Validation", message: "tsc exited 2" }]);
+		const table = buildFindingsTable([
+			{ severity: "error", check: "Build Validation", scope: null, message: "tsc exited 2" },
+		]);
 
 		expect(table).toContain("| — |");
 	});
 
 	it("renders the scope in the Package column for a package-scoped finding", () => {
 		const table = buildFindingsTable([
-			{ severity: "error", check: "Publish Validation", scope: "@savvy-web/linked-2", message: "dry-run failed" },
+			{
+				severity: "error",
+				check: "Publish Validation",
+				scope: { package: "@savvy-web/linked-2", directory: null },
+				message: "dry-run failed",
+			},
 		]);
 
 		expect(table).toContain("@savvy-web/linked-2");
@@ -414,7 +438,12 @@ describe("buildValidationComment", () => {
 
 	it("renders a ⚠️ header icon when the worst finding is a warning", () => {
 		const findings: ReadonlyArray<ValidationFinding> = [
-			{ severity: "warning", check: "SBOM Preview", scope: "@org/a", message: "missing NTIA fields" },
+			{
+				severity: "warning",
+				check: "SBOM Preview",
+				scope: { package: "@org/a", directory: null },
+				message: "missing NTIA fields",
+			},
 		];
 		const comment = buildValidationComment({ checks: passingChecks, findings, publishSummary: "" });
 
@@ -423,8 +452,13 @@ describe("buildValidationComment", () => {
 
 	it("renders a ❌ header icon when any finding is an error", () => {
 		const findings: ReadonlyArray<ValidationFinding> = [
-			{ severity: "warning", check: "SBOM Preview", scope: "@org/a", message: "missing NTIA fields" },
-			{ severity: "error", check: "Build Validation", message: "tsc exited 2" },
+			{
+				severity: "warning",
+				check: "SBOM Preview",
+				scope: { package: "@org/a", directory: null },
+				message: "missing NTIA fields",
+			},
+			{ severity: "error", check: "Build Validation", scope: null, message: "tsc exited 2" },
 		];
 		const comment = buildValidationComment({ checks: passingChecks, findings, publishSummary: "" });
 
@@ -441,7 +475,12 @@ describe("buildValidationComment", () => {
 
 	it("includes the findings table when findings are present", () => {
 		const findings: ReadonlyArray<ValidationFinding> = [
-			{ severity: "error", check: "Publish Validation", scope: "@org/b", message: "dry-run failed" },
+			{
+				severity: "error",
+				check: "Publish Validation",
+				scope: { package: "@org/b", directory: null },
+				message: "dry-run failed",
+			},
 		];
 		const comment = buildValidationComment({ checks: passingChecks, findings, publishSummary: "" });
 

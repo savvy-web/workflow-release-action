@@ -652,7 +652,7 @@ describe("runValidation", () => {
 			expect(errorFindings.length).toBeGreaterThanOrEqual(1);
 			const publishError = errorFindings.find((f) => f.check === "Publish Validation");
 			expect(publishError).toBeDefined();
-			expect(publishError?.scope).toBe("@test/finding-fail");
+			expect(publishError?.scope?.package).toBe("@test/finding-fail");
 			expect(publishError?.message).toContain("dry-run failed");
 		});
 
@@ -694,7 +694,7 @@ describe("runValidation", () => {
 				(f) => f.severity === "warning" && f.check === "SBOM Preview" && f.message.includes("NTIA fields"),
 			);
 			expect(ntiaWarning).toBeDefined();
-			expect(ntiaWarning?.scope).toBe("@test/ntia-incomplete");
+			expect(ntiaWarning?.scope?.package).toBe("@test/ntia-incomplete");
 		});
 
 		it("yields findings: [] for an all-pass run with an NTIA-complete SBOM", async () => {
@@ -758,6 +758,247 @@ describe("runValidation", () => {
 			expect(report.publishOk).toBe(true);
 			expect(report.sbomOk).toBe(true);
 			expect(report.findings).toEqual([]);
+		});
+	});
+
+	describe("directory-keyed builds", () => {
+		it("groups two targets sharing a directory into one build with one SBOM", async () => {
+			// Arrange — two registry targets that publish from the same `dist/npm`
+			// directory. They must collapse into a single build node with a single
+			// SBOM (the tarball is identical across the two registries).
+			const pkg = makeWsPkg("@test/shared-dir", "1.1.0", "packages/shared-dir");
+			const targetA = new PublishTarget({
+				name: "@test/shared-dir",
+				registry: "https://registry.one.example.com/",
+				directory: "/tmp/dist/shared-dir/npm",
+				access: "public",
+				provenance: false,
+			});
+			const targetB = new PublishTarget({
+				name: "@test/shared-dir",
+				registry: "https://registry.two.example.com/",
+				directory: "/tmp/dist/shared-dir/npm",
+				access: "public",
+				provenance: false,
+			});
+
+			const commandResponses = new Map<string, CommandResponse>([
+				[
+					"git show main:packages/shared-dir/package.json",
+					{ exitCode: 0, stdout: JSON.stringify({ name: "@test/shared-dir", version: "1.0.0" }), stderr: "" },
+				],
+			]);
+
+			const sbomTestState = {
+				generateCalls: [] as import("@savvy-web/github-action-effects/testing").SbomInput[],
+				saves: new Map(),
+			};
+			const sbomTestLayer = SbomTest.layer(sbomTestState);
+
+			const { layer: pubLayer } = PackagePublishTest.empty();
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				makeCommandRunnerLayer(commandResponses),
+				pubLayer,
+				npmRegistryLayer,
+				sbomTestLayer,
+				attestLayer,
+				makeWorkspaceDiscoveryLayer([pkg]),
+				makePublishabilityLayer(new Map([["@test/shared-dir", [targetA, targetB]]])),
+			);
+
+			// Act
+			const report = await Effect.runPromise(
+				runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
+			);
+
+			// Assert — one build node, one SBOM, two registry targets.
+			expect(report.validationPackages).toHaveLength(1);
+			const builds = report.validationPackages[0]?.builds ?? [];
+			expect(builds).toHaveLength(1);
+			expect(builds[0]?.targets).toHaveLength(2);
+			expect(builds[0]?.sbom).not.toBeNull();
+			// SBOM generated exactly once despite two registry targets.
+			expect(sbomTestState.generateCalls).toHaveLength(1);
+			// Both registries still counted as targets.
+			expect(report.totalTargets).toBe(2);
+		});
+
+		it("produces two builds when a package's targets span two directories", async () => {
+			// Arrange — one target in `dist/npm`, one in `dist/github`.
+			const pkg = makeWsPkg("@test/two-dirs", "2.1.0", "packages/two-dirs");
+			const npmTarget = new PublishTarget({
+				name: "@test/two-dirs",
+				registry: "https://registry.npmjs.org/",
+				directory: "/tmp/dist/two-dirs/npm",
+				access: "public",
+				provenance: false,
+			});
+			const ghTarget = new PublishTarget({
+				name: "@test/two-dirs",
+				registry: "https://npm.pkg.github.com/",
+				directory: "/tmp/dist/two-dirs/github",
+				access: "restricted",
+				provenance: false,
+			});
+
+			const commandResponses = new Map<string, CommandResponse>([
+				[
+					"git show main:packages/two-dirs/package.json",
+					{ exitCode: 0, stdout: JSON.stringify({ name: "@test/two-dirs", version: "2.0.0" }), stderr: "" },
+				],
+			]);
+
+			const sbomTestState = {
+				generateCalls: [] as import("@savvy-web/github-action-effects/testing").SbomInput[],
+				saves: new Map(),
+			};
+			const sbomTestLayer = SbomTest.layer(sbomTestState);
+
+			const { layer: pubLayer } = PackagePublishTest.empty();
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				makeCommandRunnerLayer(commandResponses),
+				pubLayer,
+				npmRegistryLayer,
+				sbomTestLayer,
+				attestLayer,
+				makeWorkspaceDiscoveryLayer([pkg]),
+				makePublishabilityLayer(new Map([["@test/two-dirs", [npmTarget, ghTarget]]])),
+			);
+
+			// Act
+			const report = await Effect.runPromise(
+				runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
+			);
+
+			// Assert — two builds, one SBOM each.
+			const builds = report.validationPackages[0]?.builds ?? [];
+			expect(builds).toHaveLength(2);
+			expect(builds.every((b) => b.targets.length === 1)).toBe(true);
+			expect(sbomTestState.generateCalls).toHaveLength(2);
+			expect(report.sbomSummary).toBe("2 SBOM(s) generated successfully");
+		});
+
+		it("applies sbom-config metadata so a supplied template silences NTIA supplier/author warnings", async () => {
+			// Arrange — a BOM that has component name/version/PURL and a timestamp
+			// but NO supplier. Without a template NTIA warns; with a `sbom-config`
+			// supplier the resolved metadata is merged onto the BOM and NTIA passes.
+			const pkg = makeWsPkg("@test/metadata", "1.0.1", "packages/metadata");
+			const target = makeNpmTarget("@test/metadata", "/tmp/dist/metadata");
+
+			const commandResponses = new Map<string, CommandResponse>([
+				[
+					"git show main:packages/metadata/package.json",
+					{ exitCode: 0, stdout: JSON.stringify({ name: "@test/metadata", version: "1.0.0" }), stderr: "" },
+				],
+			]);
+
+			// Supplier deliberately absent — it must come from the sbom-config input.
+			const bomJsonNoSupplier = JSON.stringify({
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2026-05-19T00:00:00.000Z",
+					component: {
+						type: "library",
+						name: "@test/metadata",
+						version: "1.0.1",
+						purl: "pkg:npm/%40test/metadata@1.0.1",
+					},
+				},
+				components: [{ type: "library", name: "dep-a", version: "1.0.0" }],
+			});
+
+			const sbomTestState = {
+				generateCalls: [] as import("@savvy-web/github-action-effects/testing").SbomInput[],
+				saves: new Map(),
+				jsonResponse: bomJsonNoSupplier,
+			};
+			const sbomTestLayer = SbomTest.layer(sbomTestState);
+
+			const { layer: pubLayer } = PackagePublishTest.empty();
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				makeCommandRunnerLayer(commandResponses),
+				pubLayer,
+				npmRegistryLayer,
+				sbomTestLayer,
+				attestLayer,
+				makeWorkspaceDiscoveryLayer([pkg]),
+				makePublishabilityLayer(new Map([["@test/metadata", [target]]])),
+			);
+
+			// The `sbom-config` action input is read via the GitHub Actions env
+			// convention `INPUT_<NAME>` — supply a supplier template here.
+			const prev = process.env.INPUT_SBOM_CONFIG;
+			process.env.INPUT_SBOM_CONFIG = JSON.stringify({ sbom: { supplier: { name: "Savvy Web Systems" } } });
+			const runReport = () =>
+				Effect.runPromise(
+					runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
+				);
+			const report = await runReport().finally(() => {
+				if (prev === undefined) {
+					delete process.env.INPUT_SBOM_CONFIG;
+				} else {
+					process.env.INPUT_SBOM_CONFIG = prev;
+				}
+			});
+
+			// Assert — the supplied supplier reaches the BOM, NTIA passes, no
+			// SBOM-Preview warning is emitted.
+			const build = report.validationPackages[0]?.builds[0];
+			expect(build?.sbom?.ntiaCompliant).toBe(true);
+			expect(build?.sbom?.missingNtiaFields).toEqual([]);
+			const sbomWarnings = report.findings.filter((f) => f.check === "SBOM Preview");
+			expect(sbomWarnings).toEqual([]);
+		});
+
+		it("does not warn about a component-less BOM for a dependency-free package", async () => {
+			// Arrange — the default SbomTest BOM carries `components: []`. A
+			// dependency-free package legitimately has a component-less BOM, so no
+			// "no components" warning must be emitted.
+			const pkg = makeWsPkg("@test/no-deps", "1.0.1", "packages/no-deps");
+			const target = makeNpmTarget("@test/no-deps", "/tmp/dist/no-deps");
+
+			const commandResponses = new Map<string, CommandResponse>([
+				[
+					"git show main:packages/no-deps/package.json",
+					{ exitCode: 0, stdout: JSON.stringify({ name: "@test/no-deps", version: "1.0.0" }), stderr: "" },
+				],
+			]);
+
+			const { layer: pubLayer } = PackagePublishTest.empty();
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				makeCommandRunnerLayer(commandResponses),
+				pubLayer,
+				npmRegistryLayer,
+				sbomLayer,
+				attestLayer,
+				makeWorkspaceDiscoveryLayer([pkg]),
+				makePublishabilityLayer(new Map([["@test/no-deps", [target]]])),
+			);
+
+			// Act
+			const report = await Effect.runPromise(
+				runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
+			);
+
+			// Assert — the build has a component-less SBOM but no "no components" finding.
+			const build = report.validationPackages[0]?.builds[0];
+			expect(build?.sbom?.componentCount).toBe(0);
+			const noComponentsWarning = report.findings.find((f) => f.message.includes("no components"));
+			expect(noComponentsWarning).toBeUndefined();
 		});
 	});
 });

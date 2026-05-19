@@ -93,6 +93,23 @@ export interface PublishPackagesResult {
 }
 
 /**
+ * The package / build directory a {@link ValidationFinding} concerns.
+ *
+ * @remarks
+ * A repo-wide finding (e.g. a build failure) carries `null`. A package-scoped
+ * finding sets `package` and leaves `directory` `null`. A build-scoped finding
+ * (e.g. an SBOM issue for one build directory) sets both.
+ *
+ * @public
+ */
+export interface ValidationFindingScope {
+	/** The package the finding concerns, or `null` for a repo-wide finding. */
+	readonly package: string | null;
+	/** The build directory the finding concerns, or `null` when not build-scoped. */
+	readonly directory: string | null;
+}
+
+/**
  * A non-pass outcome from a validation check.
  *
  * @remarks
@@ -107,10 +124,89 @@ export interface ValidationFinding {
 	readonly severity: "error" | "warning";
 	/** The check that produced it, e.g. `"Publish Validation"`, `"SBOM Preview"`. */
 	readonly check: string;
-	/** The package it concerns, when package-scoped; omitted for repo-wide findings. */
-	readonly scope?: string;
+	/** The package / build directory it concerns; `null` for repo-wide findings. */
+	readonly scope: ValidationFindingScope | null;
 	/** Human-readable detail. */
 	readonly message: string;
+}
+
+/**
+ * The SBOM preview computed once per build directory.
+ *
+ * @public
+ */
+export interface BuildSbom {
+	/** Number of components (direct runtime dependencies) in the BOM. */
+	readonly componentCount: number;
+	/** Whether the BOM satisfies all seven NTIA minimum elements. */
+	readonly ntiaCompliant: boolean;
+	/** Names of the NTIA minimum elements the BOM is missing. */
+	readonly missingNtiaFields: ReadonlyArray<string>;
+}
+
+/**
+ * A single registry target under a build — its per-registry publish readiness.
+ *
+ * @public
+ */
+export interface BuildTargetResult {
+	/** Registry URL the target publishes to. */
+	readonly registry: string;
+	/** Per-registry publish readiness. */
+	readonly status: "ready" | "skipped" | "failed";
+	/** npm access level. */
+	readonly access: "public" | "restricted";
+	/** Whether provenance attestation is enabled for this target. */
+	readonly provenance: boolean;
+	/** Failure detail when `status` is `"failed"`. */
+	readonly error?: string | undefined;
+}
+
+/**
+ * A build — one per unique target directory of a released package.
+ *
+ * @remarks
+ * Each build packs once (one tarball → one set of sizes) and generates one
+ * SBOM; it then publishes to N registry {@link BuildTargetResult | targets}
+ * that share the directory.
+ *
+ * @public
+ */
+export interface PackageBuildResult {
+	/** Build directory (absolute path). */
+	readonly directory: string;
+	/** Packed tarball size in bytes, or `null` when the dry-run did not report it. */
+	readonly packedBytes: number | null;
+	/** Unpacked size in bytes, or `null` when the dry-run did not report it. */
+	readonly unpackedBytes: number | null;
+	/** File count in the tarball, or `null` when the dry-run did not report it. */
+	readonly fileCount: number | null;
+	/** SBOM preview for this build, or `null` when generation failed. */
+	readonly sbom: BuildSbom | null;
+	/** Registry targets that publish this build. */
+	readonly targets: ReadonlyArray<BuildTargetResult>;
+}
+
+/**
+ * A released package and its builds — the build-centric validation result.
+ *
+ * @remarks
+ * The Phase-2 validation path uses this in place of {@link PackagePublishResult}
+ * (which the Phase-3 publish path shares and must not be restructured).
+ *
+ * @public
+ */
+export interface ValidationPackageResult {
+	/** Package name. */
+	readonly name: string;
+	/** Version being released. */
+	readonly version: string;
+	/** Version on the target branch; `null` for a brand-new package. */
+	readonly baseVersion: string | null;
+	/** Number of changesets attributed to this package, or `null` when unknown. */
+	readonly changesetCount: number | null;
+	/** Builds — one per unique target directory. Empty for a version-only package. */
+	readonly builds: ReadonlyArray<PackageBuildResult>;
 }
 
 /**

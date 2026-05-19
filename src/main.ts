@@ -346,6 +346,7 @@ const runValidation = Effect.gen(function* () {
 			findings.push({
 				severity: "error",
 				check: "Build Validation",
+				scope: null,
 				message: buildResult.errors.trim() || "Build failed",
 			});
 		}
