@@ -74,6 +74,21 @@ const resolveTargetAccess = (
 	return target.access ?? parentAccess;
 };
 
+/**
+ * Expand a shorthand string target to a registry URL.
+ *
+ * `"npm"` / `"github"` / `"jsr"` map to their canonical registries; a full
+ * `https://` / `http://` URL is used verbatim; any other string falls back to
+ * the parent `publishConfig.registry` (or the npm default).
+ */
+const expandShorthand = (target: string, pcRegistry: string | undefined): string => {
+	if (target === "npm") return "https://registry.npmjs.org/";
+	if (target === "github") return "https://npm.pkg.github.com/";
+	if (target === "jsr") return "https://jsr.io/";
+	if (target.startsWith("https://") || target.startsWith("http://")) return target;
+	return pcRegistry ?? "https://registry.npmjs.org/";
+};
+
 const readRawPackageJson = (pkgPath: string): RawPackageJson | null => {
 	try {
 		const file = join(pkgPath, "package.json");
@@ -116,7 +131,7 @@ const silkDetect = (pkgName: string, raw: RawPackageJson): ReadonlyArray<Publish
 			if (access !== "public" && access !== "restricted") continue;
 			const registry =
 				typeof target === "string"
-					? (pc.registry ?? "https://registry.npmjs.org/")
+					? expandShorthand(target, pc.registry)
 					: (target.registry ?? pc.registry ?? "https://registry.npmjs.org/");
 			const directory = typeof target === "string" ? (pc.directory ?? ".") : (target.directory ?? pc.directory ?? ".");
 			const provenance = typeof target === "string" ? undefined : target.provenance;
