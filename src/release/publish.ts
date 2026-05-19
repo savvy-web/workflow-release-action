@@ -106,35 +106,6 @@ function pickToken(registry: string, npmToken: string | null, ghPkgsToken: strin
 	return process.env[envName] ?? null;
 }
 
-/**
- * Format a caught publish error into a human-readable log line.
- *
- * A `PackagePublishError` is a `Data.TaggedError` with no `message` field, so
- * `error.message` is empty — its detail lives in `operation` / `reason`, and
- * the underlying `npm` failure (with `stderr`) is in `cause`. This formatter
- * surfaces all of it; anything else falls back to `message` / `String`.
- */
-function formatPublishError(error: unknown): string {
-	if (
-		typeof error === "object" &&
-		error !== null &&
-		"_tag" in error &&
-		(error as { _tag: unknown })._tag === "PackagePublishError"
-	) {
-		const err = error as unknown as { operation: string; reason: string; cause?: unknown };
-		let line = `[${err.operation}] ${err.reason}`;
-		const cause = err.cause;
-		if (typeof cause === "object" && cause !== null && "stderr" in cause) {
-			const stderr = (cause as { stderr?: unknown }).stderr;
-			if (typeof stderr === "string" && stderr.trim() !== "") {
-				line += `: ${stderr.trim()}`;
-			}
-		}
-		return line;
-	}
-	return error instanceof Error ? error.message : String(error);
-}
-
 /** Infer bump type from old/new version strings (for logging). */
 function inferBumpType(oldVersion: string, newVersion: string): "major" | "minor" | "patch" | "unknown" {
 	const oldParts = oldVersion.split(".").map(Number);
@@ -492,7 +463,7 @@ const publishOneTarget = (
 				.setupAuth(target.registry, token)
 				.pipe(
 					Effect.catchAll((e: PackagePublishError) =>
-						Effect.logWarning(`setupAuth failed for ${target.registry}: ${formatPublishError(e)}`),
+						Effect.logWarning(`setupAuth failed for ${target.registry}: ${e.message}`),
 					),
 				);
 		}
@@ -602,7 +573,7 @@ const publishOneTarget = (
 	}).pipe(
 		Effect.catchAll((e: unknown) =>
 			Effect.gen(function* () {
-				const message = formatPublishError(e);
+				const message = e instanceof Error ? e.message : String(e);
 				yield* Effect.logError(
 					`runPublishTargets: publishing ${packageName}@${version} to ${target.registry} failed — ${message}`,
 				);
@@ -992,7 +963,10 @@ export const runPublishTargets = (
 		}
 
 		for (const { item: name, error: rawError } of accumulateResult.failures) {
-			yield* Effect.logError(`runPublishTargets: publishing ${name} failed — ${formatPublishError(rawError)}`);
+			const err: unknown = rawError;
+			yield* Effect.logError(
+				`runPublishTargets: publishing ${name} failed — ${err instanceof Error ? err.message : String(err)}`,
+			);
 			const version = targetsByPackage.get(name)?.version ?? "unknown";
 			packages.push({
 				name,
@@ -1009,7 +983,7 @@ export const runPublishTargets = (
 							tokenEnv: null,
 						},
 						success: false,
-						error: formatPublishError(rawError),
+						error: err instanceof Error ? err.message : String(err),
 					},
 				],
 			});
