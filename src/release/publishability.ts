@@ -80,6 +80,10 @@ const resolveTargetAccess = (
  * `"npm"` / `"github"` / `"jsr"` map to their canonical registries; a full
  * `https://` / `http://` URL is used verbatim; any other string falls back to
  * the parent `publishConfig.registry` (or the npm default).
+ *
+ * Note: the `"jsr"` mapping yields a `jsr.io` registry string for
+ * classification only — the Effect publish path does not model JSR (it is
+ * documented as unreachable in `validation.ts`).
  */
 const expandShorthand = (target: string, pcRegistry: string | undefined): string => {
 	if (target === "npm") return "https://registry.npmjs.org/";

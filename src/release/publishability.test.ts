@@ -144,6 +144,7 @@ describe("SilkPublishabilityDetectorLive — silk rules", () => {
 		);
 		expect(targets.length).toBe(1);
 		expect(targets[0].access).toBe("public");
+		expect(targets[0].registry).toBe("https://npm.pkg.github.com/");
 	});
 
 	it("private === true + object target with own directory → uses target.directory", async () => {
