@@ -39,7 +39,13 @@ interface RawPublishConfig {
 
 type RawTargetSpec =
 	| string
-	| { readonly access?: "public" | "restricted"; readonly protocol?: string; readonly registry?: string };
+	| {
+			readonly access?: "public" | "restricted";
+			readonly protocol?: string;
+			readonly registry?: string;
+			readonly directory?: string;
+			readonly provenance?: boolean;
+	  };
 
 interface RawPackageJson {
 	readonly name?: string;
@@ -112,12 +118,15 @@ const silkDetect = (pkgName: string, raw: RawPackageJson): ReadonlyArray<Publish
 				typeof target === "string"
 					? (pc.registry ?? "https://registry.npmjs.org/")
 					: (target.registry ?? pc.registry ?? "https://registry.npmjs.org/");
+			const directory = typeof target === "string" ? (pc.directory ?? ".") : (target.directory ?? pc.directory ?? ".");
+			const provenance = typeof target === "string" ? undefined : target.provenance;
 			results.push(
 				new PublishTarget({
 					name: pkgName,
 					registry,
-					directory: pc.directory ?? ".",
+					directory,
 					access,
+					...(provenance !== undefined ? { provenance } : {}),
 				}),
 			);
 		}
