@@ -93,6 +93,27 @@ export interface PublishPackagesResult {
 }
 
 /**
+ * A non-pass outcome from a validation check.
+ *
+ * @remarks
+ * Findings are additive to the existing boolean `ValidationReport` fields.
+ * An `error` finding fails the check (check-run conclusion `failure`); a
+ * `warning` is advisory — the release PR remains mergeable.
+ *
+ * @public
+ */
+export interface ValidationFinding {
+	/** `"error"` fails the check; `"warning"` is advisory (release still proceeds). */
+	readonly severity: "error" | "warning";
+	/** The check that produced it, e.g. `"Publish Validation"`, `"SBOM Preview"`. */
+	readonly check: string;
+	/** The package it concerns, when package-scoped; omitted for repo-wide findings. */
+	readonly scope?: string;
+	/** Human-readable detail. */
+	readonly message: string;
+}
+
+/**
  * Pre-detected release information for publishing
  *
  * @public

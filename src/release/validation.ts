@@ -24,13 +24,14 @@ import {
 import { Config, Effect, Option } from "effect";
 import type { WorkspacePackage } from "workspaces-effect";
 import { WorkspaceDiscovery } from "workspaces-effect";
-
 import { GithubPackagesTokenState, STATE_KEYS } from "../state.js";
+import type { EnhancedCycloneDXDocument } from "../types/sbom-config.js";
 import { countChangesetsPerPackage } from "../utils/count-changesets.js";
+import { validateNTIACompliance } from "../utils/validate-ntia-compliance.js";
 import { ValidationError } from "./errors.js";
 import { buildPublishSummary } from "./report.js";
 import { resolvePublishableTargets } from "./resolve-targets.js";
-import type { PackagePublishResult, PublishPackagesResult, TargetPublishResult } from "./types.js";
+import type { PackagePublishResult, PublishPackagesResult, TargetPublishResult, ValidationFinding } from "./types.js";
 
 // ─── Public interfaces ────────────────────────────────────────────────────────
 
@@ -71,6 +72,8 @@ export interface ValidationReport {
 	readonly sbomOk: boolean;
 	/** Human-readable SBOM status line. */
 	readonly sbomSummary: string;
+	/** Structured error/warning findings produced by the validation checks. */
+	readonly findings: ReadonlyArray<ValidationFinding>;
 }
 
 // ─── Internal types ───────────────────────────────────────────────────────────
@@ -277,8 +280,14 @@ export const runValidation = (args: ValidationInputArgs) =>
 				publishSummary: buildPublishSummary(emptyResult, { dryRun: args.dryRun }),
 				sbomOk: true,
 				sbomSummary: "No packages require SBOM",
+				findings: [],
 			} satisfies ValidationReport;
 		}
+
+		// Structured findings accumulated across the publish dry-run and SBOM
+		// steps. Errors fail their check; warnings are advisory. Discovery order
+		// is preserved (the comment renderer reorders errors-before-warnings).
+		const findings: ValidationFinding[] = [];
 
 		// ── Step 3: Resolve publish targets + dry-run per package ─────────────
 
@@ -422,6 +431,12 @@ export const runValidation = (args: ValidationInputArgs) =>
 					allPublishOk = false;
 					if (targetIsNpm) npmReadyAll = false;
 					if (targetIsGhPkgs) githubPackagesReadyAll = false;
+					findings.push({
+						severity: "error",
+						check: "Publish Validation",
+						scope: pkg.name,
+						message: `dry-run failed: ${(dryRunOutcome.output ?? "").trim() || "unknown error"}`,
+					});
 				}
 			}
 
@@ -462,7 +477,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 
 				sbomCount++;
 
-				const ok = yield* logger.group(
+				const sbomOutcome = yield* logger.group(
 					`SBOM · ${pkg.name} · ${distDir} · ${registryUrl}`,
 					Effect.gen(function* () {
 						yield* Effect.logDebug(
@@ -481,20 +496,66 @@ export const runValidation = (args: ValidationInputArgs) =>
 										const bomJson = yield* sbomSvc.serializeJson(bom);
 										yield* Effect.logDebug(`generated CycloneDX BOM:\n${bomJson}`);
 										yield* Effect.logInfo("✅ SBOM generated");
-										return true as const;
+
+										// The CycloneDX `Bom` model is a class instance, not the
+										// plain `EnhancedCycloneDXDocument` the NTIA validator
+										// reads. Parse the canonical CycloneDX JSON form (produced
+										// by `serializeJson`) into the plain document shape.
+										let document: EnhancedCycloneDXDocument | null = null;
+										try {
+											document = JSON.parse(bomJson) as EnhancedCycloneDXDocument;
+										} catch {
+											document = null;
+										}
+
+										const sbomFindings: ValidationFinding[] = [];
+										if (document !== null) {
+											const ntia = validateNTIACompliance(document);
+											if (!ntia.compliant) {
+												const failed = ntia.fields.filter((f) => !f.passed).map((f) => f.name);
+												sbomFindings.push({
+													severity: "warning",
+													check: "SBOM Preview",
+													scope: pkg.name,
+													message: `SBOM generated but missing NTIA fields: ${failed.join(", ")}`,
+												});
+											}
+											if ((document.components?.length ?? 0) === 0) {
+												sbomFindings.push({
+													severity: "warning",
+													check: "SBOM Preview",
+													scope: pkg.name,
+													message: "SBOM has no components",
+												});
+											}
+										}
+
+										return { ok: true as const, findings: sbomFindings };
 									}),
 								),
 								Effect.catchAll((e: SbomError) =>
 									Effect.gen(function* () {
 										yield* Effect.logWarning(`SBOM generation failed for ${pkg.name}: ${e.message}`);
-										return false as const;
+										return {
+											ok: false as const,
+											findings: [
+												{
+													severity: "error" as const,
+													check: "SBOM Preview",
+													scope: pkg.name,
+													message: `SBOM generation failed: ${e.message}`,
+												},
+											],
+										};
 									}),
 								),
 							);
 					}),
 				);
 
-				if (ok) {
+				findings.push(...sbomOutcome.findings);
+
+				if (sbomOutcome.ok) {
 					sbomSuccess++;
 				} else {
 					sbomOk = false;
@@ -541,5 +602,6 @@ export const runValidation = (args: ValidationInputArgs) =>
 			publishSummary: summary,
 			sbomOk,
 			sbomSummary,
+			findings,
 		} satisfies ValidationReport;
 	});

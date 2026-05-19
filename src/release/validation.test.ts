@@ -614,4 +614,149 @@ describe("runValidation", () => {
 			expect(report.sbomSummary).toBe("1 SBOM(s) generated successfully");
 		});
 	});
+
+	describe("validation findings", () => {
+		it("produces an error finding when a publish dry-run fails", async () => {
+			// Arrange
+			const pkg = makeWsPkg("@test/finding-fail", "2.0.0", "packages/finding-fail");
+			const target = makeNpmTarget("@test/finding-fail", "/tmp/dist/finding-fail");
+
+			const commandResponses = new Map<string, CommandResponse>([
+				[
+					"git show main:packages/finding-fail/package.json",
+					{ exitCode: 0, stdout: JSON.stringify({ name: "@test/finding-fail", version: "1.9.0" }), stderr: "" },
+				],
+			]);
+
+			const { layer: pubLayer } = PackagePublishTest.layer({ dryRunOk: false });
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				makeCommandRunnerLayer(commandResponses),
+				pubLayer,
+				npmRegistryLayer,
+				sbomLayer,
+				attestLayer,
+				makeWorkspaceDiscoveryLayer([pkg]),
+				makePublishabilityLayer(new Map([["@test/finding-fail", [target]]])),
+			);
+
+			// Act
+			const report = await Effect.runPromise(
+				runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
+			);
+
+			// Assert — the failed dry-run surfaces as an error finding.
+			const errorFindings = report.findings.filter((f) => f.severity === "error");
+			expect(errorFindings.length).toBeGreaterThanOrEqual(1);
+			const publishError = errorFindings.find((f) => f.check === "Publish Validation");
+			expect(publishError).toBeDefined();
+			expect(publishError?.scope).toBe("@test/finding-fail");
+		});
+
+		it("produces a warning finding when the generated SBOM is NTIA-incomplete", async () => {
+			// Arrange — the default SbomTest BOM JSON lacks supplier/PURL/author/
+			// timestamp and carries zero components, so it is NTIA-incomplete.
+			const pkg = makeWsPkg("@test/ntia-incomplete", "1.0.1", "packages/ntia-incomplete");
+			const target = makeNpmTarget("@test/ntia-incomplete", "/tmp/dist/ntia-incomplete");
+
+			const commandResponses = new Map<string, CommandResponse>([
+				[
+					"git show main:packages/ntia-incomplete/package.json",
+					{ exitCode: 0, stdout: JSON.stringify({ name: "@test/ntia-incomplete", version: "1.0.0" }), stderr: "" },
+				],
+			]);
+
+			const { layer: pubLayer } = PackagePublishTest.empty();
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				makeCommandRunnerLayer(commandResponses),
+				pubLayer,
+				npmRegistryLayer,
+				sbomLayer,
+				attestLayer,
+				makeWorkspaceDiscoveryLayer([pkg]),
+				makePublishabilityLayer(new Map([["@test/ntia-incomplete", [target]]])),
+			);
+
+			// Act
+			const report = await Effect.runPromise(
+				runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
+			);
+
+			// Assert — NTIA-incomplete BOM yields a warning finding; SBOM still "ok".
+			expect(report.sbomOk).toBe(true);
+			const ntiaWarning = report.findings.find(
+				(f) => f.severity === "warning" && f.check === "SBOM Preview" && f.message.includes("NTIA fields"),
+			);
+			expect(ntiaWarning).toBeDefined();
+			expect(ntiaWarning?.scope).toBe("@test/ntia-incomplete");
+		});
+
+		it("yields findings: [] for an all-pass run with an NTIA-complete SBOM", async () => {
+			// Arrange — an NTIA-complete BOM with at least one component, fed via
+			// the SbomTest `jsonResponse` override.
+			const pkg = makeWsPkg("@test/all-pass", "1.0.1", "packages/all-pass");
+			const target = makeNpmTarget("@test/all-pass", "/tmp/dist/all-pass");
+
+			const commandResponses = new Map<string, CommandResponse>([
+				[
+					"git show main:packages/all-pass/package.json",
+					{ exitCode: 0, stdout: JSON.stringify({ name: "@test/all-pass", version: "1.0.0" }), stderr: "" },
+				],
+			]);
+
+			const compliantBomJson = JSON.stringify({
+				bomFormat: "CycloneDX",
+				specVersion: "1.5",
+				version: 1,
+				metadata: {
+					timestamp: "2026-05-19T00:00:00.000Z",
+					supplier: { name: "Savvy Web Systems" },
+					component: {
+						type: "library",
+						name: "@test/all-pass",
+						version: "1.0.1",
+						publisher: "Savvy Web Systems",
+						purl: "pkg:npm/%40test/all-pass@1.0.1",
+					},
+				},
+				components: [{ type: "library", name: "dep-a", version: "1.0.0" }],
+			});
+
+			const sbomTestState = {
+				generateCalls: [] as import("@savvy-web/github-action-effects/testing").SbomInput[],
+				saves: new Map(),
+				jsonResponse: compliantBomJson,
+			};
+			const sbomTestLayer = SbomTest.layer(sbomTestState);
+
+			const { layer: pubLayer } = PackagePublishTest.empty();
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				makeCommandRunnerLayer(commandResponses),
+				pubLayer,
+				npmRegistryLayer,
+				sbomTestLayer,
+				attestLayer,
+				makeWorkspaceDiscoveryLayer([pkg]),
+				makePublishabilityLayer(new Map([["@test/all-pass", [target]]])),
+			);
+
+			// Act
+			const report = await Effect.runPromise(
+				runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
+			);
+
+			// Assert — no errors, no warnings.
+			expect(report.publishOk).toBe(true);
+			expect(report.sbomOk).toBe(true);
+			expect(report.findings).toEqual([]);
+		});
+	});
 });
