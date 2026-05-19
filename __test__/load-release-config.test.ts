@@ -14,10 +14,34 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ActionsConfigProvider } from "@savvy-web/github-action-effects";
+import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadReleaseConfig, loadSBOMConfig } from "../src/utils/load-release-config.js";
+import type { LoadReleaseConfigResult, LoadSBOMConfigResult } from "../src/utils/load-release-config.js";
+import {
+	loadReleaseConfig as loadReleaseConfigEffect,
+	loadSBOMConfig as loadSBOMConfigEffect,
+} from "../src/utils/load-release-config.js";
 
-const ENV_VARS = ["INPUT_SBOM_CONFIG", "SILK_RELEASE_SBOM_TEMPLATE"] as const;
+// GitHub Actions sets `INPUT_SBOM-CONFIG` (hyphen preserved) — the canonical
+// convention `ActionsConfigProvider` follows. The prior tests set
+// `INPUT_SBOM_CONFIG` (underscore), matching the loader's (incorrect) prior
+// env-var read; that bug was a silent "no template supplied" symptom in CI.
+const ENV_VARS = ["INPUT_SBOM-CONFIG", "SILK_RELEASE_SBOM_TEMPLATE"] as const;
+
+/**
+ * Synchronously evaluate `loadReleaseConfig` against the `ActionsConfigProvider`,
+ * so tests exercise the same env-var convention the action uses in CI.
+ */
+const runLoadReleaseConfig = (rootDir?: string): LoadReleaseConfigResult =>
+	Effect.runSync(loadReleaseConfigEffect(rootDir).pipe(Effect.withConfigProvider(ActionsConfigProvider)));
+
+const runLoadSBOMConfig = (rootDir?: string): LoadSBOMConfigResult =>
+	Effect.runSync(loadSBOMConfigEffect(rootDir).pipe(Effect.withConfigProvider(ActionsConfigProvider)));
+
+// Thin sync façades so the existing tests below can keep their call shape.
+const loadReleaseConfig = runLoadReleaseConfig;
+const loadSBOMConfig = runLoadSBOMConfig;
 
 let tmpRoot: string;
 let savedEnv: Map<(typeof ENV_VARS)[number], string | undefined>;
@@ -184,7 +208,7 @@ describe("loadReleaseConfig - structural failures", () => {
 
 describe("loadReleaseConfig - source priority", () => {
 	it("action input wins over the env-var fallback", () => {
-		process.env.INPUT_SBOM_CONFIG = JSON.stringify({ sbom: { supplier: { name: "from-input" } } });
+		process.env["INPUT_SBOM-CONFIG"] = JSON.stringify({ sbom: { supplier: { name: "from-input" } } });
 		process.env.SILK_RELEASE_SBOM_TEMPLATE = JSON.stringify({ sbom: { supplier: { name: "from-env" } } });
 
 		const result = loadReleaseConfig(tmpRoot);

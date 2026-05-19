@@ -424,21 +424,21 @@ export const runValidation = (args: ValidationInputArgs) =>
 
 		// ── Resolve the SBOM metadata template once ──────────────────────────
 		// `loadSBOMConfig` looks up `.github/silk-release.json`, then the
-		// `sbom-config` action input (read via `INPUT_SBOM_CONFIG`, the same env
-		// var `Config.string("sbom-config")` reads), then the
+		// `sbom-config` action input (read via `Config.string("sbom-config")`
+		// under the ambient `ActionsConfigProvider`, which uses the canonical
+		// GitHub Actions env-var convention `INPUT_SBOM-CONFIG` — hyphens
+		// preserved, only spaces mapped to underscores), then the
 		// `SILK_RELEASE_SBOM_TEMPLATE` variable. Each candidate is decoded
 		// through the `SilkReleaseConfig` Effect Schema; a decode failure
 		// returns `{ ok: false, error }` so the SBOM step can record a warning
 		// finding and proceed with an empty resolved metadata (preserving the
 		// "continue on bad template" behaviour of the prior cast).
-		const sbomConfigResult = yield* Effect.sync(() => {
-			try {
-				return loadSBOMConfig();
-			} catch (e) {
+		const sbomConfigResult = yield* loadSBOMConfig().pipe(
+			Effect.catchAllDefect((e) => {
 				const message = e instanceof Error ? e.message : String(e);
-				return { ok: false as const, error: message, source: { source: "none" as const } };
-			}
-		});
+				return Effect.succeed({ ok: false as const, error: message, source: { source: "none" as const } });
+			}),
+		);
 
 		let sbomConfig: SBOMMetadataConfig | undefined;
 		const sbomConfigFindings: ValidationFinding[] = [];

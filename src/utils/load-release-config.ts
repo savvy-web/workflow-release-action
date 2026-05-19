@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ParseResult } from "effect";
-import { Either, Schema } from "effect";
+import { Config, Effect, Either, Schema } from "effect";
 import { ArrayFormatter } from "effect/ParseResult";
 import { parse as parseJsonc } from "jsonc-parser";
 import { SilkReleaseConfig } from "../schema/silk-release-config.js";
@@ -204,27 +204,35 @@ function loadConfigFromEnvVar(): Either.Either<ReleaseConfig | undefined, string
 }
 
 /**
- * Load configuration from sbom-config action input
+ * Load configuration from the `sbom-config` action input.
  *
  * @remarks
- * This allows the SBOM configuration to be passed directly as an action input,
- * which is useful for reusable workflows where environment variables don't
- * propagate through the workflow_call chain.
+ * Reads via `Config.string` so the ambient `ActionsConfigProvider`
+ * (`main.ts`'s default provider) handles the GitHub Actions env-var
+ * convention — `core.getInput("sbom-config")` reads `INPUT_SBOM-CONFIG`,
+ * with **hyphens preserved** (only spaces are mapped to underscores). The
+ * prior direct `process.env["INPUT_SBOM_CONFIG"]` read silently missed the
+ * input because the actual env-var name is `INPUT_SBOM-CONFIG` — a
+ * single-character bug that produced exactly the "no template supplied"
+ * symptom this loader was meant to handle.
  *
- * @returns `Right(config)` when set and valid, `Right(undefined)` when unset,
- *   `Left(error)` when set but malformed.
+ * @returns Effect yielding `Right(config)` when set and valid,
+ *   `Right(undefined)` when unset, `Left(error)` when set but malformed.
  */
-function loadConfigFromInput(): Either.Either<ReleaseConfig | undefined, string> {
-	// Read the action input via the standard GitHub Actions env convention:
-	// INPUT_<NAME-UPPERCASED-WITH-UNDERSCORES>
-	const inputValue = (process.env[`INPUT_${CONFIG_INPUT_NAME.replace(/-/g, "_").toUpperCase()}`] ?? "").trim();
+// `Config.withDefault` covers the `MissingData` case; any other `ConfigError`
+// (e.g. an unparseable primitive — impossible for a free-form string) is
+// surfaced as a defect via `Effect.orDie` so the loader's success type stays
+// pure and `loadReleaseConfig`'s caller does not have to thread `ConfigError`
+// through its error channel.
+const loadConfigFromInput: Effect.Effect<Either.Either<ReleaseConfig | undefined, string>> = Effect.gen(function* () {
+	const inputValue = (yield* Config.string(CONFIG_INPUT_NAME).pipe(Config.withDefault(""))).trim();
 
 	if (!inputValue) {
 		return Either.right(undefined);
 	}
 
 	return parseConfigContent(inputValue, `${CONFIG_INPUT_NAME} input`);
-}
+}).pipe(Effect.orDie);
 
 /**
  * Configuration source information
@@ -292,41 +300,43 @@ export type LoadReleaseConfigResult = LoadReleaseConfigOk | LoadReleaseConfigErr
  * @param rootDir - Repository root directory (defaults to process.cwd())
  * @returns Discriminated result the caller can branch on.
  */
-export function loadReleaseConfig(rootDir?: string): LoadReleaseConfigResult {
-	const root = rootDir || process.cwd();
+export function loadReleaseConfig(rootDir?: string): Effect.Effect<LoadReleaseConfigResult> {
+	return Effect.gen(function* () {
+		const root = rootDir || process.cwd();
 
-	const local = loadConfigFromLocalRepo(root);
-	if (local.kind === "error") {
-		// `local.path` is the specific file that matched (`.json` or `.jsonc`),
-		// so the reported `source.location` always agrees with the file the
-		// parse error refers to.
-		return { ok: false, error: local.error, source: { source: "local", location: local.path } };
-	}
-	if (local.kind === "found") {
-		return {
-			ok: true,
-			config: local.config,
-			source: { source: "local", location: local.path },
-		};
-	}
+		const local = loadConfigFromLocalRepo(root);
+		if (local.kind === "error") {
+			// `local.path` is the specific file that matched (`.json` or `.jsonc`),
+			// so the reported `source.location` always agrees with the file the
+			// parse error refers to.
+			return { ok: false, error: local.error, source: { source: "local", location: local.path } } as const;
+		}
+		if (local.kind === "found") {
+			return {
+				ok: true,
+				config: local.config,
+				source: { source: "local", location: local.path },
+			} as const;
+		}
 
-	const input = loadConfigFromInput();
-	if (Either.isLeft(input)) {
-		return { ok: false, error: input.left, source: { source: "input", location: CONFIG_INPUT_NAME } };
-	}
-	if (input.right !== undefined) {
-		return { ok: true, config: input.right, source: { source: "input", location: CONFIG_INPUT_NAME } };
-	}
+		const input = yield* loadConfigFromInput;
+		if (Either.isLeft(input)) {
+			return { ok: false, error: input.left, source: { source: "input", location: CONFIG_INPUT_NAME } } as const;
+		}
+		if (input.right !== undefined) {
+			return { ok: true, config: input.right, source: { source: "input", location: CONFIG_INPUT_NAME } } as const;
+		}
 
-	const env = loadConfigFromEnvVar();
-	if (Either.isLeft(env)) {
-		return { ok: false, error: env.left, source: { source: "variable", location: CONFIG_ENV_VAR } };
-	}
-	if (env.right !== undefined) {
-		return { ok: true, config: env.right, source: { source: "variable", location: CONFIG_ENV_VAR } };
-	}
+		const env = loadConfigFromEnvVar();
+		if (Either.isLeft(env)) {
+			return { ok: false, error: env.left, source: { source: "variable", location: CONFIG_ENV_VAR } } as const;
+		}
+		if (env.right !== undefined) {
+			return { ok: true, config: env.right, source: { source: "variable", location: CONFIG_ENV_VAR } } as const;
+		}
 
-	return { ok: true, config: undefined, source: { source: "none" } };
+		return { ok: true, config: undefined, source: { source: "none" } } as const;
+	});
 }
 
 /**
@@ -365,10 +375,11 @@ export type LoadSBOMConfigResult = LoadSBOMConfigOk | LoadSBOMConfigError;
  * @returns Discriminated result; on success, `config` is the SBOM sub-section
  *   or `undefined` when no source supplied one.
  */
-export function loadSBOMConfig(rootDir?: string): LoadSBOMConfigResult {
-	const result = loadReleaseConfig(rootDir);
-	if (!result.ok) {
-		return result;
-	}
-	return { ok: true, config: result.config?.sbom, source: result.source };
+export function loadSBOMConfig(rootDir?: string): Effect.Effect<LoadSBOMConfigResult> {
+	return Effect.map(loadReleaseConfig(rootDir), (result) => {
+		if (!result.ok) {
+			return result;
+		}
+		return { ok: true, config: result.config?.sbom, source: result.source } as const;
+	});
 }

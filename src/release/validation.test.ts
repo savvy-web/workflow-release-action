@@ -5,6 +5,7 @@
  * registry, git, or SBOM tooling is exercised.
  */
 
+import { ActionsConfigProvider } from "@savvy-web/github-action-effects";
 import type { CommandResponse } from "@savvy-web/github-action-effects/testing";
 import {
 	ActionLoggerTest,
@@ -968,22 +969,31 @@ describe("runValidation", () => {
 				makePublishabilityLayer(new Map([["@test/metadata", [target]]])),
 			);
 
-			// The `sbom-config` action input is read via the GitHub Actions env
-			// convention `INPUT_<NAME>` — supply a supplier template (with a URL)
-			// here.
-			const prev = process.env.INPUT_SBOM_CONFIG;
-			process.env.INPUT_SBOM_CONFIG = JSON.stringify({
+			// The `sbom-config` action input is read via the canonical GitHub
+			// Actions env convention: `core.getInput("sbom-config")` reads
+			// `INPUT_SBOM-CONFIG` (hyphens preserved; only spaces map to
+			// underscores). `ActionsConfigProvider` — wired into `main.ts` and
+			// supplied by `runValidation`'s caller — implements the same rule.
+			const ENV_KEY = "INPUT_SBOM-CONFIG";
+			const prev = process.env[ENV_KEY];
+			process.env[ENV_KEY] = JSON.stringify({
 				sbom: { supplier: { name: "Savvy Web Systems", url: "https://savvyweb.systems" } },
 			});
+			// `ActionsConfigProvider` makes `Config.string("sbom-config")` resolve
+			// to `INPUT_SBOM-CONFIG` — matching `main.ts`'s runtime — so the test
+			// exercises the real env-var convention, not Effect's default mapping.
 			const runReport = () =>
 				Effect.runPromise(
-					runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
+					runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(
+						Effect.provide(layers),
+						Effect.withConfigProvider(ActionsConfigProvider),
+					),
 				);
 			const report = await runReport().finally(() => {
 				if (prev === undefined) {
-					delete process.env.INPUT_SBOM_CONFIG;
+					delete process.env[ENV_KEY];
 				} else {
-					process.env.INPUT_SBOM_CONFIG = prev;
+					process.env[ENV_KEY] = prev;
 				}
 			});
 
