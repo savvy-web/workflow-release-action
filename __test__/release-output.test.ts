@@ -137,6 +137,12 @@ describe("ReleaseOutput schema", () => {
 		expect(decoded).toEqual(branchSample);
 	});
 
+	it("round-trips validation encode then decode as identity", () => {
+		const encoded = Schema.encodeSync(ReleaseOutput)(validationSample);
+		const decoded = Schema.decodeUnknownSync(ReleaseOutput)(encoded);
+		expect(decoded).toEqual(validationSample);
+	});
+
 	it("decodes a publishing instance and keeps the phase block", () => {
 		const decoded = Schema.decodeUnknownSync(ReleaseOutput)(publishingSample);
 		expect(decoded.phase).toBe("publishing");

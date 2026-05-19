@@ -226,6 +226,27 @@ describe("toValidationOutput", () => {
 		expect(pkg?.bumpType).toBe("patch");
 	});
 
+	it("derives an unknown bumpType for a non-semver base version", () => {
+		const output = toValidationOutput({
+			buildsPassed: true,
+			packageCount: 1,
+			npmReady: true,
+			githubPackagesReady: true,
+			totalTargets: 0,
+			readyTargets: 0,
+			checks: [],
+			findings: [],
+			validationPackages: [
+				// A two-part base version is not a three-part semver string.
+				{ name: "@savvy-web/foo", version: "1.2.0", baseVersion: "1.0", changesetCount: 1, builds: [] },
+			],
+			checkRun: null,
+			dryRun: false,
+		});
+
+		expect(output.validation.publish.packages[0]?.bumpType).toBe("unknown");
+	});
+
 	it("flags failed builds and an error finding as a failure", () => {
 		const output = toValidationOutput({
 			buildsPassed: false,
