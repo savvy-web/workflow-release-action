@@ -1,5 +1,10 @@
-import { GithubMarkdown, ReportBuilder } from "@savvy-web/github-action-effects";
-import { getRegistryDisplayName, isGitHubPackagesRegistry, isNpmRegistry } from "../utils/registry-utils.js";
+import {
+	GithubMarkdown,
+	ReportBuilder,
+	getRegistryDisplayName,
+	isGitHubPackagesRegistry,
+	isNpmRegistry,
+} from "@savvy-web/github-action-effects";
 import type { PackagePublishResult, PublishPackagesResult, TargetPublishResult } from "./types.js";
 
 /**

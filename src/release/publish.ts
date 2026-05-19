@@ -34,12 +34,13 @@ import {
 	Sbom,
 	buildSLSAProvenancePredicate,
 	decodeJwtClaims,
+	isGitHubPackagesRegistry,
+	isNpmRegistry,
 } from "@savvy-web/github-action-effects";
 import { Config, Effect, Option, Redacted } from "effect";
 import { PublishabilityDetector, TopologicalSorter, WorkspaceDiscovery, WorkspacePackage } from "workspaces-effect";
 
 import { GithubPackagesTokenState, STATE_KEYS } from "../state.js";
-import { isGitHubPackagesRegistry, isNpmRegistry } from "../utils/registry-utils.js";
 import type { PackagePublishResult, PublishPackagesResult, TargetPublishResult } from "./types.js";
 
 // ─── Public interfaces ────────────────────────────────────────────────────────

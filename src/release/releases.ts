@@ -35,11 +35,12 @@ import {
 	OidcTokenIssuer,
 	buildSLSAProvenancePredicate,
 	decodeJwtClaims,
+	getRegistryDisplayName,
+	isGitHubPackagesRegistry,
 } from "@savvy-web/github-action-effects";
 import { Effect, Redacted } from "effect";
 
 import { WorkspaceDiscovery } from "workspaces-effect";
-import { getRegistryDisplayName, isGitHubPackagesRegistry } from "../utils/registry-utils.js";
 import { ReleasesError } from "./errors.js";
 import { getPackagePageUrl } from "./report.js";
 import type { AssetInfo, PackagePublishResult, PublishPackagesResult, ReleaseInfo, TagInfo } from "./types.js";

@@ -13,13 +13,20 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
 
 import type { PackagePublishError, ResolvedDependency, SbomError } from "@savvy-web/github-action-effects";
-import { ActionLogger, ActionState, CommandRunner, PackagePublish, Sbom } from "@savvy-web/github-action-effects";
+import {
+	ActionLogger,
+	ActionState,
+	CommandRunner,
+	PackagePublish,
+	Sbom,
+	isGitHubPackagesRegistry,
+	isNpmRegistry,
+} from "@savvy-web/github-action-effects";
 import { Config, Effect, Option } from "effect";
 import type { WorkspacePackage } from "workspaces-effect";
 import { PublishabilityDetector, WorkspaceDiscovery } from "workspaces-effect";
 
 import { GithubPackagesTokenState, STATE_KEYS } from "../state.js";
-import { isGitHubPackagesRegistry, isNpmRegistry } from "../utils/registry-utils.js";
 import { ValidationError } from "./errors.js";
 import { buildPublishSummary } from "./report.js";
 import type { PackagePublishResult, PublishPackagesResult, TargetPublishResult } from "./types.js";
