@@ -19,6 +19,8 @@ import type {
 	CommandRunnerError,
 	GitCommitError,
 	GitHubClientError,
+	GitHubIssue,
+	GitHubIssueError,
 	GitTag,
 	PullRequestError,
 } from "@savvy-web/github-action-effects";
@@ -156,6 +158,7 @@ export const createReleaseBranch = (
 	| ConfigError.ConfigError
 	| GitCommitError
 	| GitHubClientError
+	| GitHubIssueError
 	| PullRequestError,
 	| ActionEnvironment
 	| ActionOutputs
@@ -165,6 +168,7 @@ export const createReleaseBranch = (
 	| FileSystem.FileSystem
 	| GitCommit
 	| GitHubClient
+	| GitHubIssue
 	| GitTag
 	| PullRequest
 > =>

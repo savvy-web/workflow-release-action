@@ -139,13 +139,6 @@ const buildLinkedIssuesSection = (linkedIssues: ReadonlyArray<LinkedIssue>): str
 	return summaryWriter.build([{ heading: "Linked Issues", content: summaryWriter.list(items) }]);
 };
 
-interface IssueDetailsResponse {
-	title: string;
-	state: string;
-	html_url: string;
-	node_id: string;
-}
-
 interface RefResponse {
 	object: { sha: string };
 }
@@ -567,32 +560,16 @@ export const updateReleaseBranch = (
 
 				const result: LinkedIssue[] = [];
 				for (const [issueNumber, commitShas] of issueMap) {
-					const issueResult = yield* Effect.either(
-						client.rest<IssueDetailsResponse>("issues.get", (octokit) =>
-							(
-								octokit as {
-									rest: {
-										issues: {
-											get: (params: {
-												owner: string;
-												repo: string;
-												issue_number: number;
-											}) => Promise<{ data: IssueDetailsResponse }>;
-										};
-									};
-								}
-							).rest.issues.get({ owner: args.owner, repo: args.repo, issue_number: issueNumber }),
-						),
-					);
+					const issueResult = yield* Effect.either(issues.get(issueNumber));
 					if (issueResult._tag === "Right") {
 						const i = issueResult.right;
 						result.push({
 							number: issueNumber,
 							title: i.title,
 							state: i.state,
-							url: i.html_url,
+							url: i.htmlUrl ?? "",
 							commits: commitShas,
-							nodeId: i.node_id,
+							nodeId: i.nodeId ?? "",
 						});
 						yield* Effect.logInfo(`✓ Issue #${issueNumber}: ${i.title} (${i.state})`);
 					} else {

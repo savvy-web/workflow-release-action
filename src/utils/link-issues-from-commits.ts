@@ -21,6 +21,8 @@ import type {
 	ActionOutputError,
 	CheckRunError,
 	GitHubClientError,
+	GitHubIssueError,
+	IssueData,
 } from "@savvy-web/github-action-effects";
 import {
 	ActionEnvironment,
@@ -29,6 +31,9 @@ import {
 	CheckRun,
 	GitHubClient,
 	GitHubClientLive,
+	GitHubGraphQLLive,
+	GitHubIssue,
+	GitHubIssueLive,
 	GitTag,
 	GitTagLive,
 	SemverResolver,
@@ -100,14 +105,6 @@ interface CommitRecord {
 /** REST compareCommits response, narrowed to fields we read. */
 interface CompareResponse {
 	commits: ReadonlyArray<CommitRecord>;
-}
-
-/** REST issues.get response, narrowed to fields we read. */
-interface IssueRecord {
-	title: string;
-	state: string;
-	html_url: string;
-	node_id: string;
 }
 
 const toCommitInfo = (c: CommitRecord): CommitInfo => ({
@@ -327,29 +324,10 @@ const getLinkedIssuesFromPR = (
  *
  * @internal
  */
-const fetchIssueDetails = (
-	issueNumber: number,
-): Effect.Effect<IssueRecord | null, ActionEnvironmentError, ActionEnvironment | GitHubClient> =>
+const fetchIssueDetails = (issueNumber: number): Effect.Effect<IssueData | null, GitHubIssueError, GitHubIssue> =>
 	Effect.gen(function* () {
-		const client = yield* GitHubClient;
-		const env = yield* ActionEnvironment;
-		const { repository } = yield* env.github;
-		const [owner, repo] = repository.split("/");
-		const result = yield* Effect.either(
-			client.rest<IssueRecord>("issues.get", (octokit) =>
-				(
-					octokit as {
-						rest: {
-							issues: {
-								get: (params: { owner: string; repo: string; issue_number: number }) => Promise<{
-									data: IssueRecord;
-								}>;
-							};
-						};
-					}
-				).rest.issues.get({ owner, repo, issue_number: issueNumber }),
-			),
-		);
+		const issues = yield* GitHubIssue;
+		const result = yield* Effect.either(issues.get(issueNumber));
 		if (result._tag === "Left") {
 			yield* Effect.logWarning(`Failed to fetch issue #${issueNumber}: ${result.left.reason}`);
 			return null;
@@ -367,8 +345,8 @@ export const getLinkedIssuesFromCommits = (
 	targetBranch: string,
 ): Effect.Effect<
 	{ linkedIssues: LinkedIssue[]; commits: CommitInfo[] },
-	ActionEnvironmentError,
-	ActionEnvironment | GitHubClient | GitTag
+	ActionEnvironmentError | GitHubIssueError,
+	ActionEnvironment | GitHubClient | GitHubIssue | GitTag
 > =>
 	Effect.gen(function* () {
 		const client = yield* GitHubClient;
@@ -477,8 +455,8 @@ export const getLinkedIssuesFromCommits = (
 					number: issueNumber,
 					title: details.title,
 					state: details.state,
-					url: details.html_url,
-					node_id: details.node_id,
+					url: details.htmlUrl ?? "",
+					node_id: details.nodeId ?? "",
 					commits: issue.commits,
 				});
 				yield* Effect.logInfo(`✓ Issue #${issueNumber}: ${details.title} (${details.state})`);
@@ -620,8 +598,13 @@ const linkIssuesToPR = (
  */
 export const linkIssuesFromCommits: Effect.Effect<
 	LinkIssuesResult,
-	ActionEnvironmentError | ActionOutputError | CheckRunError | GitHubClientError | ConfigError.ConfigError,
-	ActionEnvironment | ActionOutputs | CheckRun | GitHubClient | GitTag
+	| ActionEnvironmentError
+	| ActionOutputError
+	| CheckRunError
+	| ConfigError.ConfigError
+	| GitHubClientError
+	| GitHubIssueError,
+	ActionEnvironment | ActionOutputs | CheckRun | GitHubClient | GitHubIssue | GitTag
 > = Effect.gen(function* () {
 	const env = yield* ActionEnvironment;
 	const outputs = yield* ActionOutputs;
@@ -694,6 +677,7 @@ export const getLinkedIssuesFromCommitsPromise = (
 					ActionEnvironmentLive,
 					GitHubClientLive.fromToken(appToken()),
 					GitTagLive.pipe(Layer.provide(GitHubClientLive.fromToken(appToken()))),
+					GitHubIssueLive.pipe(Layer.provide(GitHubGraphQLLive), Layer.provide(GitHubClientLive.fromToken(appToken()))),
 				),
 			),
 		),

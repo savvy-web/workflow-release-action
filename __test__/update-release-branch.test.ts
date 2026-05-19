@@ -4,8 +4,9 @@
  * @remarks
  * Exercises the paths rewired onto the `PullRequest` and `GitHubIssue` library
  * services: PR discovery (open/closed), creation, title/body updates, reopen,
- * and linked-issue harvesting. The still-raw `client.rest` calls (`git.getRef`,
- * `issues.get`) are satisfied through `GitHubClientTest` recorded responses.
+ * and linked-issue harvesting. The still-raw `client.rest` calls (`git.getRef`)
+ * are satisfied through `GitHubClientTest` recorded responses; issue details
+ * are seeded via `GitHubIssueTest`.
  */
 
 import { FileSystem } from "@effect/platform";
@@ -59,6 +60,7 @@ const makeFixtures = (
 			merged?: boolean;
 		}>;
 		linkedIssues?: Array<[number, Array<{ number: number; title: string }>]>;
+		issueDetails?: Array<{ number: number; title: string; state: string; htmlUrl?: string; nodeId?: string }>;
 		restResponses?: Array<[string, unknown]>;
 	} = {},
 ): Fixtures => {
@@ -89,6 +91,16 @@ const makeFixtures = (
 	const issue = GitHubIssueTest.empty();
 	for (const [prNumber, linked] of params.linkedIssues ?? []) {
 		issue.state.linkedIssues.set(prNumber, linked);
+	}
+	for (const detail of params.issueDetails ?? []) {
+		issue.state.issues.set(detail.number, {
+			number: detail.number,
+			title: detail.title,
+			state: detail.state,
+			labels: [],
+			...(detail.htmlUrl !== undefined ? { htmlUrl: detail.htmlUrl } : {}),
+			...(detail.nodeId !== undefined ? { nodeId: detail.nodeId } : {}),
+		});
 	}
 
 	const clientState: GitHubClientTestState = {
@@ -220,16 +232,15 @@ describe("updateReleaseBranch", () => {
 		const f = makeFixtures({
 			prs: [{ number: 9, head: RELEASE_BRANCH, base: TARGET_BRANCH, state: "open" }],
 			linkedIssues: [[123, [{ number: 55, title: "Linked bug" }]]],
-			restResponses: [
-				...refResponse,
-				["issues.get", { title: "Linked bug", state: "open", html_url: "https://x/55", node_id: "I_55" }],
-			],
+			issueDetails: [{ number: 55, title: "Linked bug", state: "open", htmlUrl: "https://x/55", nodeId: "I_55" }],
+			restResponses: [...refResponse],
 		});
 
 		// One changeset file whose harvested commit message references PR #123
 		// via the `(#NNN)` merge-commit suffix; the git-log format is
 		// `%H%n%B%n---END---`. `getLinkedIssues(123)` then yields issue #55,
-		// whose details are resolved via the still-raw `issues.get` REST call.
+		// whose details are seeded via `GitHubIssueTest` and resolved
+		// through the `GitHubIssue.get` service method.
 		const result = await runStage(
 			f,
 			[

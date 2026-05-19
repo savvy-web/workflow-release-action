@@ -3,8 +3,9 @@
  *
  * @remarks
  * Exercises the rewired `GitTag.list()` path that replaced the raw
- * `repos.listTags` Octokit call. The still-raw calls (`compareCommits`,
- * `listCommits`, `issues.get`, `closingIssuesReferences` GraphQL) are
+ * `repos.listTags` Octokit call, and the rewired `GitHubIssue.get` path
+ * that replaced the raw `issues.get` Octokit call. The still-raw calls
+ * (`compareCommits`, `listCommits`, `closingIssuesReferences` GraphQL) are
  * satisfied via `GitHubClientTest` — either by seeding a response or by
  * letting `Effect.either` absorb the 404 that the test layer emits for
  * unregistered operations.
@@ -25,8 +26,17 @@
  *    those paginated commits.
  */
 
-import type { GitHubClientTestState, GitTagTestState } from "@savvy-web/github-action-effects/testing";
-import { ActionEnvironmentTest, GitHubClientTest, GitTagTest } from "@savvy-web/github-action-effects/testing";
+import type {
+	GitHubClientTestState,
+	GitHubIssueTestState,
+	GitTagTestState,
+} from "@savvy-web/github-action-effects/testing";
+import {
+	ActionEnvironmentTest,
+	GitHubClientTest,
+	GitHubIssueTest,
+	GitTagTest,
+} from "@savvy-web/github-action-effects/testing";
 import { Effect, Layer, Logger } from "effect";
 import { describe, expect, it } from "vitest";
 import { getLatestTagSha, getLinkedIssuesFromCommits } from "../src/utils/link-issues-from-commits.js";
@@ -52,6 +62,7 @@ const makeCommit = (sha: string, message: string, author = "Test Author") => ({
 interface Fixtures {
 	tagState: GitTagTestState;
 	clientState: GitHubClientTestState;
+	issueState: GitHubIssueTestState;
 }
 
 const makeFixtures = (
@@ -59,6 +70,7 @@ const makeFixtures = (
 		tags?: Array<{ tag: string; sha: string }>;
 		compareCommitsData?: Array<{ sha: string; commit: { message: string; author?: { name?: string } } }>;
 		listCommitsData?: Array<Array<{ sha: string; commit: { message: string; author?: { name?: string } } }>>;
+		issues?: Array<{ number: number; title: string; state: string; htmlUrl?: string; nodeId?: string }>;
 	} = {},
 ): Fixtures => {
 	const tagState = GitTagTest.empty().state;
@@ -87,7 +99,19 @@ const makeFixtures = (
 		repo: { owner: OWNER, repo: REPO },
 	};
 
-	return { tagState, clientState };
+	const issueState = GitHubIssueTest.empty().state;
+	for (const issue of params.issues ?? []) {
+		issueState.issues.set(issue.number, {
+			number: issue.number,
+			title: issue.title,
+			state: issue.state,
+			labels: [],
+			...(issue.htmlUrl !== undefined ? { htmlUrl: issue.htmlUrl } : {}),
+			...(issue.nodeId !== undefined ? { nodeId: issue.nodeId } : {}),
+		});
+	}
+
+	return { tagState, clientState, issueState };
 };
 
 // ---------------------------------------------------------------------------
@@ -124,6 +148,7 @@ const runStage = (
 		}),
 		GitTagTest.layer(f.tagState),
 		GitHubClientTest.layer(f.clientState),
+		GitHubIssueTest.layer(f.issueState),
 	);
 	return Effect.runPromise(
 		getLinkedIssuesFromCommits(TARGET_BRANCH).pipe(
@@ -227,15 +252,16 @@ describe("getLinkedIssuesFromCommits", () => {
 			const f = makeFixtures({
 				tags,
 				compareCommitsData: [commitWithRef],
-			});
-			// Seed the issues.get response so the issue details are backfilled.
-			f.clientState.restResponses.set("issues.get", {
-				data: {
-					title: "Bug report",
-					state: "closed",
-					html_url: "https://github.com/owner/repo/issues/7",
-					node_id: "node7",
-				},
+				// Seed the GitHubIssue.get response so the issue details are backfilled.
+				issues: [
+					{
+						number: 7,
+						title: "Bug report",
+						state: "closed",
+						htmlUrl: "https://github.com/owner/repo/issues/7",
+						nodeId: "node7",
+					},
+				],
 			});
 
 			const result = await runStage(f);
