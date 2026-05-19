@@ -13,7 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
 
-import type { PackagePublishError, ResolvedDependency, SbomError } from "@savvy-web/github-action-effects";
+import type { PackagePublishError, ResolvedDependency, SbomError, SbomInput } from "@savvy-web/github-action-effects";
 import {
 	ActionLogger,
 	ActionState,
@@ -194,7 +194,7 @@ function readBuiltDependencies(buildDirectory: string): ReadonlyArray<ResolvedDe
 	try {
 		const parsed = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as { dependencies?: Record<string, unknown> };
 		const deps = parsed.dependencies;
-		if (deps === undefined || deps === null || typeof deps !== "object") {
+		if (deps === undefined || typeof deps !== "object") {
 			return [];
 		}
 		return Object.entries(deps)
@@ -206,36 +206,48 @@ function readBuiltDependencies(buildDirectory: string): ReadonlyArray<ResolvedDe
 }
 
 /**
- * Apply resolved `sbom-config` metadata onto a parsed CycloneDX document.
+ * The `supplier` / `authors` fields of {@link SbomInput} derived from a
+ * resolved `sbom-config` metadata template.
+ */
+interface SbomMetadataInput {
+	readonly supplier?: SbomInput["supplier"];
+	readonly authors?: SbomInput["authors"];
+}
+
+/**
+ * Map the resolved `sbom-config` metadata into the `supplier` / `authors`
+ * shape that `Sbom.generate` threads onto the emitted BOM's
+ * `metadata.supplier` / `metadata.authors`.
  *
  * @remarks
- * The linked `Sbom` service builds a BOM without a `metadata.supplier` and with
- * an auto-`metadata.component` (name/version/purl). It exposes no `metadata`
- * input on `SbomInput`, so the `sbom-config` template is merged here onto the
- * plain `EnhancedCycloneDXDocument` that the NTIA validator reads — after
- * `serializeJson` and before `validateNTIACompliance`. This is the
- * consumer-side wiring of `infer-sbom-metadata.ts` into Phase 2 and is what
- * silences false NTIA supplier/author warnings when a template is supplied.
+ * `Sbom.generate` now carries this metadata into the BOM it actually produces
+ * (and ships), so `validateNTIACompliance` runs against the real artifact — no
+ * post-serialization document mutation. An absent supplier name or author
+ * yields `undefined` for that field (NTIA then genuinely warns).
  */
-function applySbomMetadata(document: EnhancedCycloneDXDocument, metadata: ResolvedSBOMMetadata): void {
-	const existing = document.metadata ?? {};
-	const component = existing.component;
-	const mergedComponent =
-		component === undefined
-			? undefined
-			: {
-					...component,
-					...(metadata.component?.publisher !== undefined && { publisher: metadata.component.publisher }),
-					...(metadata.component?.copyright !== undefined && { copyright: metadata.component.copyright }),
-					...(metadata.component?.externalReferences !== undefined && {
-						externalReferences: metadata.component.externalReferences,
-					}),
-				};
-	document.metadata = {
-		...existing,
-		...(metadata.supplier !== undefined && { supplier: metadata.supplier }),
-		...(mergedComponent !== undefined && { component: mergedComponent }),
-	};
+function toSbomMetadataInput(metadata: ResolvedSBOMMetadata): SbomMetadataInput {
+	const result: { supplier?: SbomInput["supplier"]; authors?: SbomInput["authors"] } = {};
+
+	if (metadata.supplier?.name !== undefined && metadata.supplier.name !== "") {
+		// `exactOptionalPropertyTypes` on the library types forbids explicit
+		// `undefined` — build each field only when it has a value.
+		const contact = metadata.supplier.contact?.map((c) => ({
+			...(c.name !== undefined && { name: c.name }),
+			...(c.email !== undefined && { email: c.email }),
+			...(c.phone !== undefined && { phone: c.phone }),
+		}));
+		result.supplier = {
+			name: metadata.supplier.name,
+			...(metadata.supplier.url !== undefined && { url: metadata.supplier.url }),
+			...(contact !== undefined && { contact }),
+		};
+	}
+
+	if (metadata.author !== undefined && metadata.author !== "") {
+		result.authors = [{ name: metadata.author }];
+	}
+
+	return result;
 }
 
 /**
@@ -616,10 +628,13 @@ export const runValidation = (args: ValidationInputArgs) =>
 
 				// ── Per-build SBOM (one per directory) ─────────────────────────
 				// Dependencies come from the built `dist/<dir>/package.json` — the
-				// artifact that actually ships. `sbom-config` metadata is applied to
-				// the parsed BOM before the NTIA check.
+				// artifact that actually ships. The resolved `sbom-config` metadata
+				// (merged with package.json-inferred defaults) is passed to
+				// `Sbom.generate` so the emitted BOM genuinely carries supplier and
+				// author — NTIA then validates the real shipped artifact.
 				sbomCount++;
 				const dependencies = readBuiltDependencies(build.directory);
+				const sbomMetadata = toSbomMetadataInput(resolveSBOMMetadata(inferSBOMMetadata(build.directory), sbomConfig));
 
 				const sbomOutcome = yield* logger.group(
 					`SBOM · ${pkg.name} · ${distDir}`,
@@ -633,6 +648,8 @@ export const runValidation = (args: ValidationInputArgs) =>
 								rootName: pkg.name,
 								rootVersion: pkg.version,
 								dependencies,
+								...(sbomMetadata.supplier !== undefined && { supplier: sbomMetadata.supplier }),
+								...(sbomMetadata.authors !== undefined && { authors: sbomMetadata.authors }),
 							})
 							.pipe(
 								Effect.flatMap((bom) =>
@@ -643,8 +660,9 @@ export const runValidation = (args: ValidationInputArgs) =>
 
 										// The CycloneDX `Bom` model is a class instance, not the
 										// plain `EnhancedCycloneDXDocument` the NTIA validator
-										// reads. Parse the canonical CycloneDX JSON form into the
-										// plain document shape.
+										// reads. Parse the canonical CycloneDX JSON form (the BOM
+										// `Sbom.generate` actually produced, metadata included)
+										// into the plain document shape.
 										let document: EnhancedCycloneDXDocument | null = null;
 										try {
 											document = JSON.parse(bomJson) as EnhancedCycloneDXDocument;
@@ -656,11 +674,6 @@ export const runValidation = (args: ValidationInputArgs) =>
 										let sbom: BuildSbom | null = null;
 
 										if (document !== null) {
-											// Apply the resolved `sbom-config` metadata template (and
-											// the package.json-inferred defaults) before NTIA validation.
-											const resolved = resolveSBOMMetadata(inferSBOMMetadata(build.directory), sbomConfig);
-											applySbomMetadata(document, resolved);
-
 											const ntia = validateNTIACompliance(document);
 											const missing = ntia.fields.filter((f) => !f.passed).map((f) => f.name);
 											const componentCount = document.components?.length ?? 0;

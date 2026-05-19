@@ -884,10 +884,12 @@ describe("runValidation", () => {
 			expect(report.sbomSummary).toBe("2 SBOM(s) generated successfully");
 		});
 
-		it("applies sbom-config metadata so a supplied template silences NTIA supplier/author warnings", async () => {
-			// Arrange — a BOM that has component name/version/PURL and a timestamp
-			// but NO supplier. Without a template NTIA warns; with a `sbom-config`
-			// supplier the resolved metadata is merged onto the BOM and NTIA passes.
+		it("passes sbom-config supplier to Sbom.generate so the real BOM carries it and NTIA passes", async () => {
+			// Arrange — the `sbom-config` supplier must be threaded into the
+			// `Sbom.generate` input (`SbomInput.supplier` / `authors`); the library
+			// then carries it onto the emitted BOM's `metadata.supplier` / `authors`.
+			// The `jsonResponse` here stands in for that real emitted BOM — it
+			// carries the supplier the consumer passed, so NTIA genuinely passes.
 			const pkg = makeWsPkg("@test/metadata", "1.0.1", "packages/metadata");
 			const target = makeNpmTarget("@test/metadata", "/tmp/dist/metadata");
 
@@ -898,13 +900,17 @@ describe("runValidation", () => {
 				],
 			]);
 
-			// Supplier deliberately absent — it must come from the sbom-config input.
-			const bomJsonNoSupplier = JSON.stringify({
+			// The BOM `Sbom.generate` emits when handed `SbomInput.supplier` —
+			// `metadata.supplier` and `metadata.authors` are present, as the real
+			// `SbomLive` now produces. NTIA validates this actual artifact.
+			const bomJsonWithSupplier = JSON.stringify({
 				bomFormat: "CycloneDX",
 				specVersion: "1.5",
 				version: 1,
 				metadata: {
 					timestamp: "2026-05-19T00:00:00.000Z",
+					supplier: { name: "Savvy Web Systems" },
+					authors: [{ name: "Savvy Web Systems" }],
 					component: {
 						type: "library",
 						name: "@test/metadata",
@@ -918,7 +924,7 @@ describe("runValidation", () => {
 			const sbomTestState = {
 				generateCalls: [] as import("@savvy-web/github-action-effects/testing").SbomInput[],
 				saves: new Map(),
-				jsonResponse: bomJsonNoSupplier,
+				jsonResponse: bomJsonWithSupplier,
 			};
 			const sbomTestLayer = SbomTest.layer(sbomTestState);
 
@@ -952,8 +958,13 @@ describe("runValidation", () => {
 				}
 			});
 
-			// Assert — the supplied supplier reaches the BOM, NTIA passes, no
-			// SBOM-Preview warning is emitted.
+			// Assert — the resolved supplier was passed into `Sbom.generate` (so the
+			// real BOM carries it), and NTIA passes against that BOM with no
+			// SBOM-Preview warning. (`authors` stays absent here: the template
+			// supplies only a supplier and the synthetic dist dir has no
+			// package.json author to infer from.)
+			expect(sbomTestState.generateCalls).toHaveLength(1);
+			expect(sbomTestState.generateCalls[0]?.supplier?.name).toBe("Savvy Web Systems");
 			const build = report.validationPackages[0]?.builds[0];
 			expect(build?.sbom?.ntiaCompliant).toBe(true);
 			expect(build?.sbom?.missingNtiaFields).toEqual([]);
