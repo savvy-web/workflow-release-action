@@ -88,6 +88,11 @@ function parseConfigContent(content: string, source: string): Either.Either<Rele
 	try {
 		parsed = parseJsonc(content, jsonErrors);
 	} catch (e) {
+		// jsonc-parser populates the `jsonErrors` array for syntax errors and
+		// does not throw — the `errors.length > 0` check below handles the
+		// expected failure mode. This catch only fires on an extraordinary
+		// runtime failure (e.g. a host-environment defect) and is here so the
+		// loader cannot tear down the validation phase.
 		const message = e instanceof Error ? e.message : String(e);
 		return Either.left(`failed to parse ${source} as JSON: ${message}`);
 	}
@@ -116,41 +121,53 @@ function parseConfigContent(content: string, source: string): Either.Either<Rele
 }
 
 /**
+ * Outcome of a local-repo config lookup that carries the matched path on
+ * both the success and failure branches — so the caller's `source.location`
+ * agrees with the file the error refers to.
+ */
+type LocalRepoLookup =
+	| { readonly kind: "found"; readonly config: ReleaseConfig; readonly path: string }
+	| { readonly kind: "error"; readonly error: string; readonly path: string }
+	| { readonly kind: "absent" };
+
+/**
  * Load release configuration from a local file
  *
  * @param configPath - Path to the configuration file
- * @returns `Right(config)` when the file exists and decodes; `Right(undefined)`
- *   when it does not exist; `Left(error)` when present but malformed.
+ * @returns Discriminated `LocalRepoLookup` carrying the matched path on both
+ *   `found` and `error` branches; `absent` when the file does not exist.
  */
-function loadConfigFromFile(configPath: string): Either.Either<ReleaseConfig | undefined, string> {
+function loadConfigFromFile(configPath: string): LocalRepoLookup {
 	if (!existsSync(configPath)) {
-		return Either.right(undefined);
+		return { kind: "absent" };
 	}
 
 	const content = readFileSync(configPath, "utf-8");
-	return parseConfigContent(content, configPath);
+	const parsed = parseConfigContent(content, configPath);
+	if (Either.isLeft(parsed)) {
+		return { kind: "error", error: parsed.left, path: configPath };
+	}
+	return { kind: "found", config: parsed.right, path: configPath };
 }
 
 /**
  * Load configuration from local repository
  *
  * @param rootDir - Repository root directory
- * @returns First config file found (right), or `Right(undefined)` if none.
- *   A present-but-malformed config short-circuits as `Left(error)`.
+ * @returns First config file found (with the matched path), the matched path
+ *   on a decode failure (so the caller can report the specific `.json` /
+ *   `.jsonc` file), or `absent` when neither file exists.
  */
-function loadConfigFromLocalRepo(rootDir: string): Either.Either<ReleaseConfig | undefined, string> {
+function loadConfigFromLocalRepo(rootDir: string): LocalRepoLookup {
 	for (const fileName of CONFIG_FILE_NAMES) {
 		const configPath = join(rootDir, ".github", fileName);
 		const result = loadConfigFromFile(configPath);
-		if (Either.isLeft(result)) {
-			return result;
-		}
-		if (result.right !== undefined) {
+		if (result.kind !== "absent") {
 			return result;
 		}
 	}
 
-	return Either.right(undefined);
+	return { kind: "absent" };
 }
 
 /**
@@ -268,7 +285,9 @@ export type LoadReleaseConfigResult = LoadReleaseConfigOk | LoadReleaseConfigErr
  * malformed config short-circuits the search with a structured error rather
  * than silently falling through — a typo'd local file should not be masked by
  * a global env var, since the caller needs to know the local config did not
- * apply.
+ * apply. The reported `source.location` for the local-repo path is the
+ * specific file that matched (e.g. `.../silk-release.jsonc`) so the error and
+ * the source line up.
  *
  * @param rootDir - Repository root directory (defaults to process.cwd())
  * @returns Discriminated result the caller can branch on.
@@ -277,11 +296,18 @@ export function loadReleaseConfig(rootDir?: string): LoadReleaseConfigResult {
 	const root = rootDir || process.cwd();
 
 	const local = loadConfigFromLocalRepo(root);
-	if (Either.isLeft(local)) {
-		return { ok: false, error: local.left, source: { source: "local", location: ".github/silk-release.json" } };
+	if (local.kind === "error") {
+		// `local.path` is the specific file that matched (`.json` or `.jsonc`),
+		// so the reported `source.location` always agrees with the file the
+		// parse error refers to.
+		return { ok: false, error: local.error, source: { source: "local", location: local.path } };
 	}
-	if (local.right !== undefined) {
-		return { ok: true, config: local.right, source: { source: "local", location: ".github/silk-release.json" } };
+	if (local.kind === "found") {
+		return {
+			ok: true,
+			config: local.config,
+			source: { source: "local", location: local.path },
+		};
 	}
 
 	const input = loadConfigFromInput();

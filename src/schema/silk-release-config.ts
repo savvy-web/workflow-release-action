@@ -14,6 +14,10 @@
  * object-or-array — so a config that worked under the prior untyped cast
  * continues to decode without change.
  *
+ * Every exported sub-struct carries an `identifier` annotation so the
+ * generated JSON Schema's `$defs` keys remain stable across Effect version
+ * upgrades — matching the convention in `release-output.ts`.
+ *
  * Only the `sbom` section is consumed by Phase 2 today; the top-level shape
  * leaves room for future release-related sections.
  */
@@ -30,7 +34,7 @@ export const SbomContact = Schema.Struct({
 	name: Schema.optional(Schema.String),
 	email: Schema.optional(Schema.String),
 	phone: Schema.optional(Schema.String),
-});
+}).annotations({ identifier: "SbomContact" });
 export type SbomContact = Schema.Schema.Type<typeof SbomContact>;
 
 /**
@@ -45,7 +49,7 @@ export const SbomSupplier = Schema.Struct({
 	name: Schema.String,
 	url: Schema.optional(Schema.Union(Schema.String, Schema.Array(Schema.String))),
 	contact: Schema.optional(Schema.Union(SbomContact, Schema.Array(SbomContact))),
-});
+}).annotations({ identifier: "SbomSupplier" });
 export type SbomSupplier = Schema.Schema.Type<typeof SbomSupplier>;
 
 /**
@@ -54,12 +58,14 @@ export type SbomSupplier = Schema.Schema.Type<typeof SbomSupplier>;
  * @remarks
  * Most users should NOT set `startYear`; it is auto-detected from the npm
  * registry's first-publication date. Override only when registry lookup is
- * unreliable or the copyright predates first npm publication.
+ * unreliable or the copyright predates first npm publication. `startYear` is
+ * a `Schema.Int` because fractional years (e.g. `2024.5`) would otherwise
+ * decode through `Schema.Number` and corrupt the formatted copyright string.
  */
 export const SbomCopyright = Schema.Struct({
 	holder: Schema.optional(Schema.String),
-	startYear: Schema.optional(Schema.Number),
-});
+	startYear: Schema.optional(Schema.Int),
+}).annotations({ identifier: "SbomCopyright" });
 export type SbomCopyright = Schema.Schema.Type<typeof SbomCopyright>;
 
 /**
@@ -76,7 +82,7 @@ export const SbomConfig = Schema.Struct({
 	publisher: Schema.optional(Schema.String),
 	copyright: Schema.optional(SbomCopyright),
 	documentationUrl: Schema.optional(Schema.String),
-});
+}).annotations({ identifier: "SbomConfig" });
 export type SbomConfig = Schema.Schema.Type<typeof SbomConfig>;
 
 // ─── Top-level config ─────────────────────────────────────────────────────

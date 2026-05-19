@@ -7,108 +7,103 @@
 			"type": "string"
 		},
 		"sbom": {
+			"$ref": "#/$defs/SbomConfig"
+		}
+	},
+	"additionalProperties": false,
+	"title": "Silk Release Action input config",
+	"$defs": {
+		"SbomConfig": {
 			"type": "object",
 			"properties": {
 				"supplier": {
-					"type": "object",
-					"required": ["name"],
-					"properties": {
-						"name": {
-							"type": "string"
-						},
-						"url": {
-							"anyOf": [
-								{
-									"type": "string"
-								},
-								{
-									"type": "array",
-									"items": {
-										"type": "string"
-									}
-								}
-							]
-						},
-						"contact": {
-							"anyOf": [
-								{
-									"type": "object",
-									"properties": {
-										"name": {
-											"type": "string"
-										},
-										"email": {
-											"type": "string"
-										},
-										"phone": {
-											"type": "string"
-										}
-									},
-									"additionalProperties": false
-								},
-								{
-									"type": "array",
-									"items": {
-										"type": "object",
-										"properties": {
-											"name": {
-												"type": "string"
-											},
-											"email": {
-												"type": "string"
-											},
-											"phone": {
-												"type": "string"
-											}
-										},
-										"additionalProperties": false
-									}
-								}
-							]
-						}
-					},
-					"additionalProperties": false
+					"$ref": "#/$defs/SbomSupplier"
 				},
 				"authors": {
 					"type": "array",
 					"items": {
-						"type": "object",
-						"properties": {
-							"name": {
-								"type": "string"
-							},
-							"email": {
-								"type": "string"
-							},
-							"phone": {
-								"type": "string"
-							}
-						},
-						"additionalProperties": false
+						"$ref": "#/$defs/SbomContact"
 					}
 				},
 				"publisher": {
 					"type": "string"
 				},
 				"copyright": {
-					"type": "object",
-					"properties": {
-						"holder": {
-							"type": "string"
-						},
-						"startYear": {
-							"type": "number"
-						}
-					},
-					"additionalProperties": false
+					"$ref": "#/$defs/SbomCopyright"
 				},
 				"documentationUrl": {
 					"type": "string"
 				}
 			},
 			"additionalProperties": false
+		},
+		"SbomSupplier": {
+			"type": "object",
+			"required": ["name"],
+			"properties": {
+				"name": {
+					"type": "string"
+				},
+				"url": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "array",
+							"items": {
+								"type": "string"
+							}
+						}
+					]
+				},
+				"contact": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/SbomContact"
+						},
+						{
+							"type": "array",
+							"items": {
+								"$ref": "#/$defs/SbomContact"
+							}
+						}
+					]
+				}
+			},
+			"additionalProperties": false
+		},
+		"SbomContact": {
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string"
+				},
+				"email": {
+					"type": "string"
+				},
+				"phone": {
+					"type": "string"
+				}
+			},
+			"additionalProperties": false
+		},
+		"SbomCopyright": {
+			"type": "object",
+			"properties": {
+				"holder": {
+					"type": "string"
+				},
+				"startYear": {
+					"$ref": "#/$defs/Int"
+				}
+			},
+			"additionalProperties": false
+		},
+		"Int": {
+			"type": "integer",
+			"description": "an integer",
+			"title": "int"
 		}
-	},
-	"additionalProperties": false,
-	"title": "Silk Release Action input config"
+	}
 }
