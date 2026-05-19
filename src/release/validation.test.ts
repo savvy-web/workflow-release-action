@@ -943,9 +943,12 @@ describe("runValidation", () => {
 			);
 
 			// The `sbom-config` action input is read via the GitHub Actions env
-			// convention `INPUT_<NAME>` — supply a supplier template here.
+			// convention `INPUT_<NAME>` — supply a supplier template (with a URL)
+			// here.
 			const prev = process.env.INPUT_SBOM_CONFIG;
-			process.env.INPUT_SBOM_CONFIG = JSON.stringify({ sbom: { supplier: { name: "Savvy Web Systems" } } });
+			process.env.INPUT_SBOM_CONFIG = JSON.stringify({
+				sbom: { supplier: { name: "Savvy Web Systems", url: "https://savvyweb.systems" } },
+			});
 			const runReport = () =>
 				Effect.runPromise(
 					runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
@@ -965,6 +968,8 @@ describe("runValidation", () => {
 			// package.json author to infer from.)
 			expect(sbomTestState.generateCalls).toHaveLength(1);
 			expect(sbomTestState.generateCalls[0]?.supplier?.name).toBe("Savvy Web Systems");
+			// `resolveSBOMMetadata` normalises `supplier.url` to a string array.
+			expect(sbomTestState.generateCalls[0]?.supplier?.url).toEqual(["https://savvyweb.systems"]);
 			const build = report.validationPackages[0]?.builds[0];
 			expect(build?.sbom?.ntiaCompliant).toBe(true);
 			expect(build?.sbom?.missingNtiaFields).toEqual([]);

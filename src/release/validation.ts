@@ -194,7 +194,11 @@ function readBuiltDependencies(buildDirectory: string): ReadonlyArray<ResolvedDe
 	try {
 		const parsed = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as { dependencies?: Record<string, unknown> };
 		const deps = parsed.dependencies;
-		if (deps === undefined || typeof deps !== "object") {
+		// The cast above does not reflect runtime: `JSON.parse` of a literal
+		// `"dependencies": null` yields a real `null`, and `typeof null` is
+		// `"object"` — so the explicit `null` check is what rejects it, not the
+		// `typeof` clause.
+		if (deps === undefined || deps === null || typeof deps !== "object") {
 			return [];
 		}
 		return Object.entries(deps)
@@ -226,28 +230,29 @@ interface SbomMetadataInput {
  * yields `undefined` for that field (NTIA then genuinely warns).
  */
 function toSbomMetadataInput(metadata: ResolvedSBOMMetadata): SbomMetadataInput {
-	const result: { supplier?: SbomInput["supplier"]; authors?: SbomInput["authors"] } = {};
-
+	// `exactOptionalPropertyTypes` on the library types forbids explicit
+	// `undefined` — each field is spread in only when it has a value.
+	let supplier: SbomMetadataInput["supplier"];
 	if (metadata.supplier?.name !== undefined && metadata.supplier.name !== "") {
-		// `exactOptionalPropertyTypes` on the library types forbids explicit
-		// `undefined` — build each field only when it has a value.
 		const contact = metadata.supplier.contact?.map((c) => ({
 			...(c.name !== undefined && { name: c.name }),
 			...(c.email !== undefined && { email: c.email }),
 			...(c.phone !== undefined && { phone: c.phone }),
 		}));
-		result.supplier = {
+		supplier = {
 			name: metadata.supplier.name,
 			...(metadata.supplier.url !== undefined && { url: metadata.supplier.url }),
 			...(contact !== undefined && { contact }),
 		};
 	}
 
-	if (metadata.author !== undefined && metadata.author !== "") {
-		result.authors = [{ name: metadata.author }];
-	}
+	const authors: SbomMetadataInput["authors"] =
+		metadata.author !== undefined && metadata.author !== "" ? [{ name: metadata.author }] : undefined;
 
-	return result;
+	return {
+		...(supplier !== undefined && { supplier }),
+		...(authors !== undefined && { authors }),
+	};
 }
 
 /**
