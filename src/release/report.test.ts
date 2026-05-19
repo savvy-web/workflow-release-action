@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ValidationOutput } from "../schema/release-output.js";
+import type { ResolvedSBOMMetadata } from "../types/sbom-config.js";
 import {
 	buildChecksTable,
 	buildFindingsTable,
 	buildPublishSummary,
+	buildPublishValidationSummary,
+	buildReleaseNotesPreviewSummary,
+	buildSbomPreviewSummary,
 	buildValidationComment,
 	getPackagePageUrl,
 } from "./report.js";
@@ -548,5 +552,171 @@ describe("buildValidationComment", () => {
 		const now = new Date("2026-05-19T12:34:56.000Z");
 		const comment = buildValidationComment(validationOf({ checks: passingChecks }), { now });
 		expect(comment).toContain("<sub>Updated at 2026-05-19T12:34:56.000Z</sub>");
+	});
+});
+
+describe("buildPublishValidationSummary", () => {
+	it("renders the Publish Validation header and totals line", () => {
+		const md = buildPublishValidationSummary(validationOf({ publish: publishOf([pkg()]) }));
+		expect(md).toContain("## 📦 Publish Validation");
+		expect(md).toContain("**Targets ready:** 1/1");
+		expect(md).toContain("**npm:** ✅");
+		expect(md).toContain("**GitHub Packages:** ✅");
+	});
+
+	it("renders one section per package with a header and a registry table per build", () => {
+		const md = buildPublishValidationSummary(validationOf({ publish: publishOf([pkg()]) }));
+		expect(md).toContain("### ✅ @savvy-web/linked-1@5.0.13");
+		// The build headline + registry table both appear, without a <details>
+		// wrapper (flattened so the check-run page renders them expanded).
+		expect(md).toContain("`dist/npm`");
+		expect(md).toContain("Registry");
+		expect(md).not.toContain("<details>");
+	});
+
+	it("renders a no-packages placeholder when nothing is being released", () => {
+		const md = buildPublishValidationSummary(validationOf({ publish: publishOf([]) }));
+		expect(md).toContain("_No packages with publish targets._");
+	});
+
+	it("renders a version-only sub-section for a package with no builds", () => {
+		const versionOnly = pkg({ name: "@org/version-only", versionOnly: true, builds: [] });
+		const md = buildPublishValidationSummary(validationOf({ publish: publishOf([versionOnly]) }));
+		expect(md).toContain("@org/version-only");
+		expect(md).toContain("_Version-only package — no publish targets._");
+	});
+
+	it("renders ❌ npm / ❌ GitHub Packages flags when readiness is false", () => {
+		const failedBuild = build({ targets: [npmTarget({ status: "failed" })] });
+		const publish: ValidationPublish = {
+			...publishOf([pkg({ builds: [failedBuild] })]),
+			npmReady: false,
+			githubPackagesReady: false,
+		};
+		const md = buildPublishValidationSummary(validationOf({ publish }));
+		expect(md).toContain("**npm:** ❌");
+		expect(md).toContain("**GitHub Packages:** ❌");
+	});
+});
+
+describe("buildReleaseNotesPreviewSummary", () => {
+	it("renders the released-packages list with Current → Next, bump, and changeset count", () => {
+		const md = buildReleaseNotesPreviewSummary(
+			validationOf({
+				publish: publishOf([pkg({ changesetCount: 2 })]),
+			}),
+		);
+		expect(md).toContain("## 📋 Release Notes Preview");
+		expect(md).toContain("**1 package(s) ready for release notes generation on merge.**");
+		expect(md).toContain("@savvy-web/linked-1");
+		expect(md).toContain("5.0.12 → 5.0.13");
+		expect(md).toContain("\u{1F7E2} patch");
+		expect(md).toContain("| 2 |");
+	});
+
+	it("renders '—' when changesetCount is null", () => {
+		const md = buildReleaseNotesPreviewSummary(validationOf({ publish: publishOf([pkg({ changesetCount: null })]) }));
+		expect(md).toContain("| — |");
+	});
+
+	it("renders an empty-state when no packages are being released", () => {
+		const md = buildReleaseNotesPreviewSummary(validationOf({ publish: publishOf([]) }));
+		expect(md).toContain("## 📋 Release Notes Preview");
+		expect(md).toContain("_No packages are being released._");
+	});
+});
+
+describe("buildSbomPreviewSummary", () => {
+	const sampleResolved: ResolvedSBOMMetadata = {
+		supplier: {
+			name: "Savvy Web Systems",
+			url: ["https://savvyweb.systems"],
+			contact: [{ email: "security@savvyweb.systems" }],
+		},
+		component: { publisher: "Savvy Web Systems", copyright: "Copyright 2026 Savvy Web Systems" },
+		author: "Spencer Beggs",
+	};
+
+	it("renders per-build component count and NTIA status from the validation payload", () => {
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([pkg()]) }),
+			new Map([["@savvy-web/linked-1:dist/npm", sampleResolved]]),
+		);
+		expect(md).toContain("## 🔏 SBOM Preview");
+		expect(md).toContain("`dist/npm`");
+		expect(md).toContain("SBOM: 3 components · NTIA ✅");
+	});
+
+	it("renders the resolved sbom-config metadata as a fenced JSON block per build", () => {
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([pkg()]) }),
+			new Map([["@savvy-web/linked-1:dist/npm", sampleResolved]]),
+		);
+		expect(md).toContain("_Resolved `sbom-config` metadata used:_");
+		expect(md).toContain("```json");
+		expect(md).toContain("Savvy Web Systems");
+		expect(md).toContain("security@savvyweb.systems");
+	});
+
+	it("surfaces the missing NTIA fields when the build is not NTIA-compliant", () => {
+		const nonCompliant = build({
+			sbom: { componentCount: 0, ntiaCompliant: false, missingNtiaFields: ["Supplier Name", "Author"] },
+		});
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([pkg({ builds: [nonCompliant] })]) }),
+			new Map([["@savvy-web/linked-1:dist/npm", sampleResolved]]),
+		);
+		expect(md).toContain("NTIA ⚠️");
+		expect(md).toContain("**Missing NTIA fields:** Supplier Name, Author");
+	});
+
+	it("surfaces the empty-resolved-config hint when resolvedSbomConfig is null", () => {
+		const md = buildSbomPreviewSummary(validationOf({ publish: publishOf([pkg()]) }), null);
+		expect(md).toContain(
+			"_No `sbom-config` resolved — supply via the `sbom-config` action input or `vars.SILK_RELEASE_SBOM_TEMPLATE`._",
+		);
+	});
+
+	it("surfaces the empty-resolved-config hint when resolvedSbomConfig is an empty map", () => {
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([pkg()]) }),
+			new Map<string, ResolvedSBOMMetadata>(),
+		);
+		expect(md).toContain(
+			"_No `sbom-config` resolved — supply via the `sbom-config` action input or `vars.SILK_RELEASE_SBOM_TEMPLATE`._",
+		);
+	});
+
+	it("renders a per-build no-resolved-metadata note when the map exists but the key is missing", () => {
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([pkg()]) }),
+			// Map populated for an unrelated key.
+			new Map([["@org/other:dist/npm", sampleResolved]]),
+		);
+		expect(md).toContain("_No resolved `sbom-config` metadata for this build._");
+	});
+
+	it("renders an empty-state when no packages require an SBOM", () => {
+		const md = buildSbomPreviewSummary(validationOf({ publish: publishOf([]) }), new Map());
+		expect(md).toContain("## 🔏 SBOM Preview");
+		expect(md).toContain("_No packages require an SBOM._");
+	});
+
+	it("renders the version-only sub-section for a package with no builds", () => {
+		const versionOnly = pkg({ name: "@org/version-only", versionOnly: true, builds: [] });
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([versionOnly]) }),
+			new Map([["@org/version-only:dist/npm", sampleResolved]]),
+		);
+		expect(md).toContain("_Version-only package — no SBOM generated._");
+	});
+
+	it("renders an SBOM-not-generated note when a build has no SBOM document", () => {
+		const noSbom = build({ sbom: null });
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([pkg({ builds: [noSbom] })]) }),
+			new Map([["@savvy-web/linked-1:dist/npm", sampleResolved]]),
+		);
+		expect(md).toContain("_SBOM not generated for this build._");
 	});
 });

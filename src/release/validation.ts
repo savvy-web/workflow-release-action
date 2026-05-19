@@ -88,6 +88,17 @@ export interface ValidationReport {
 	readonly sbomSummary: string;
 	/** Structured error/warning findings produced by the validation checks. */
 	readonly findings: ReadonlyArray<ValidationFinding>;
+	/**
+	 * Debug-only — the resolved `sbom-config` metadata per build, keyed by
+	 * `${pkg.name}:${build.directory}`. Threaded to the SBOM Preview check-run
+	 * summary so config-or-mapping bugs are immediately visible; intentionally
+	 * NOT exposed on the public `ValidationOutput` schema.
+	 *
+	 * `null` value = a build entry was attempted but no metadata was resolved
+	 * (e.g. the package had no SBOM target at all). An entirely empty map plus
+	 * no `sbomConfig` source signals "no sbom-config supplied".
+	 */
+	readonly resolvedSbomConfig: ReadonlyMap<string, ResolvedSBOMMetadata>;
 }
 
 // ─── Internal types ───────────────────────────────────────────────────────────
@@ -471,6 +482,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 				sbomOk: true,
 				sbomSummary: "No packages require SBOM",
 				findings: sbomConfigFindings,
+				resolvedSbomConfig: new Map<string, ResolvedSBOMMetadata>(),
 			} satisfies ValidationReport;
 		}
 
@@ -492,6 +504,9 @@ export const runValidation = (args: ValidationInputArgs) =>
 
 		const workspaceRoot = process.cwd();
 		const validationPackages: ValidationPackageResult[] = [];
+		// Per-build resolved SBOM metadata, keyed by `${pkg.name}:${build.directory}`.
+		// Debug-only — fed into the SBOM Preview check-run summary by `main.ts`.
+		const resolvedSbomConfig = new Map<string, ResolvedSBOMMetadata>();
 		let allPublishOk = true;
 		let npmReadyAll = true;
 		let githubPackagesReadyAll = true;
@@ -634,9 +649,9 @@ export const runValidation = (args: ValidationInputArgs) =>
 				// author — NTIA then validates the real shipped artifact.
 				sbomCount++;
 				const dependencies = readBuiltDependencies(build.absoluteDirectory);
-				const sbomMetadata = toSbomMetadataInput(
-					resolveSBOMMetadata(inferSBOMMetadata(build.absoluteDirectory), sbomConfig),
-				);
+				const resolved = resolveSBOMMetadata(inferSBOMMetadata(build.absoluteDirectory), sbomConfig);
+				resolvedSbomConfig.set(`${pkg.name}:${build.directory}`, resolved);
+				const sbomMetadata = toSbomMetadataInput(resolved);
 
 				const sbomOutcome = yield* logger.group(
 					`SBOM · ${pkg.name} · ${distDir}`,
@@ -781,5 +796,6 @@ export const runValidation = (args: ValidationInputArgs) =>
 			sbomOk,
 			sbomSummary,
 			findings,
+			resolvedSbomConfig,
 		} satisfies ValidationReport;
 	});

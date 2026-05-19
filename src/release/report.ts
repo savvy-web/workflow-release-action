@@ -6,6 +6,7 @@ import {
 	isNpmRegistry,
 } from "@savvy-web/github-action-effects";
 import type { ValidationOutput } from "../schema/release-output.js";
+import type { ResolvedSBOMMetadata } from "../types/sbom-config.js";
 
 /**
  * The `validation` payload of a {@link ValidationOutput} — the single
@@ -519,3 +520,177 @@ export function buildValidationComment(validation: ValidationPayload, options?: 
  * @public
  */
 export { getBumpTypeIcon };
+
+// ─── Per-step check-run summaries ─────────────────────────────────────────────
+
+/**
+ * Build the Publish Validation check-run markdown summary from the canonical
+ * {@link ValidationOutput} validation payload.
+ *
+ * @remarks
+ * Pure function — no I/O. Mirrors the build-grouped registry tables the sticky
+ * comment's Details block carries, but flattened (no `<details>` wrapper) so
+ * the check-run page renders them expanded. One section per released package,
+ * one sub-section per build directory, each with its sizes, SBOM line, and
+ * registry table.
+ *
+ * @param validation - The canonical build-centric validation payload.
+ * @returns Markdown string for the check-run summary.
+ *
+ * @public
+ */
+export function buildPublishValidationSummary(validation: ValidationPayload): string {
+	const publish = validation.publish;
+
+	const header = `## \u{1F4E6} Publish Validation`;
+	const totals =
+		`**Targets ready:** ${publish.readyTargets}/${publish.totalTargets} · ` +
+		`**npm:** ${publish.npmReady ? "✅" : "❌"} · ` +
+		`**GitHub Packages:** ${publish.githubPackagesReady ? "✅" : "❌"}`;
+
+	if (publish.packages.length === 0) {
+		return `${header}\n\n${totals}\n\n_No packages with publish targets._`;
+	}
+
+	const sections: string[] = [header, totals];
+
+	for (const pkg of publish.packages) {
+		const pkgStatus = getPackageStatus(pkg);
+		const statusIcon = getPackageStatusIcon(pkgStatus);
+		sections.push(`### ${statusIcon} ${pkg.name}@${pkg.version}`);
+
+		if (pkg.builds.length === 0) {
+			sections.push("_Version-only package — no publish targets._");
+			continue;
+		}
+
+		for (const buildEntry of pkg.builds) {
+			sections.push(renderBuildHeadline(buildEntry));
+			if (buildEntry.targets.length > 0) {
+				sections.push(renderBuildTargetsTable(buildEntry));
+			}
+		}
+	}
+
+	return sections.join("\n\n");
+}
+
+/**
+ * Build the Release Notes Preview check-run markdown summary from the
+ * canonical {@link ValidationOutput} validation payload.
+ *
+ * @remarks
+ * Pure function — no I/O. Renders the released-packages summary table the
+ * sticky comment's summary section also shows (current → next, bump,
+ * changeset count). When the consumer ever grows a rich release-notes module
+ * this is the natural surface for it.
+ *
+ * @param validation - The canonical build-centric validation payload.
+ * @returns Markdown string for the check-run summary.
+ *
+ * @public
+ */
+export function buildReleaseNotesPreviewSummary(validation: ValidationPayload): string {
+	const header = `## \u{1F4CB} Release Notes Preview`;
+	const packages = validation.publish.packages;
+
+	if (packages.length === 0) {
+		return `${header}\n\n_No packages are being released._`;
+	}
+
+	const tableRows: ReadonlyArray<ReadonlyArray<string>> = packages.map((pkg) => {
+		const changesets = pkg.changesetCount === null ? "—" : String(pkg.changesetCount);
+		return [pkg.name, renderVersionTransition(pkg), renderBumpCell(pkg), changesets];
+	});
+	const table = GithubMarkdown.table(["Package", "Current → Next", "Bump", "Changesets"], tableRows);
+
+	const intro = `**${packages.length} package(s) ready for release notes generation on merge.**`;
+
+	return [header, intro, table].join("\n\n");
+}
+
+/**
+ * Build the SBOM Preview check-run markdown summary from the canonical
+ * {@link ValidationOutput} validation payload, plus the per-build resolved
+ * `sbom-config` metadata threaded through `runValidation`.
+ *
+ * @remarks
+ * Pure function — no I/O. Per build: component count, NTIA pass/fail, the
+ * missing NTIA fields, and the resolved `sbom-config` metadata used (rendered
+ * as a fenced JSON block). When `resolvedSbomConfig` is `null` or its lookup
+ * is empty for every build, surfaces a hint so config-or-mapping bugs are
+ * immediately visible.
+ *
+ * The map is keyed by `${pkg.name}:${build.directory}` (the same key
+ * `runValidation` writes).
+ *
+ * @param validation - The canonical build-centric validation payload.
+ * @param resolvedSbomConfig - Per-build resolved sbom-config metadata, or
+ *   `null` when no map was produced.
+ * @returns Markdown string for the check-run summary.
+ *
+ * @public
+ */
+export function buildSbomPreviewSummary(
+	validation: ValidationPayload,
+	resolvedSbomConfig: ReadonlyMap<string, ResolvedSBOMMetadata | null> | null,
+): string {
+	const header = `## \u{1F50F} SBOM Preview`;
+	const packages = validation.publish.packages;
+
+	const hint =
+		"> _No `sbom-config` resolved — supply via the `sbom-config` action input or `vars.SILK_RELEASE_SBOM_TEMPLATE`._";
+
+	if (packages.length === 0) {
+		return `${header}\n\n_No packages require an SBOM._\n\n${hint}`;
+	}
+
+	// True when no build for any package has a resolved sbom-config entry.
+	const hasAnyResolved =
+		resolvedSbomConfig !== null && Array.from(resolvedSbomConfig.values()).some((v) => v !== null && v !== undefined);
+
+	const sections: string[] = [header];
+
+	if (!hasAnyResolved) {
+		sections.push(hint);
+	}
+
+	for (const pkg of packages) {
+		sections.push(`### ${pkg.name}@${pkg.version}`);
+
+		if (pkg.builds.length === 0) {
+			sections.push("_Version-only package — no SBOM generated._");
+			continue;
+		}
+
+		for (const buildEntry of pkg.builds) {
+			const buildHeader = `**${GithubMarkdown.code(buildEntry.directory)}**`;
+			sections.push(buildHeader);
+
+			if (buildEntry.sbom === null) {
+				sections.push("_SBOM not generated for this build._");
+			} else {
+				const ntiaIcon = buildEntry.sbom.ntiaCompliant ? "✅" : "⚠️";
+				const ntiaLine = `SBOM: ${buildEntry.sbom.componentCount} components · NTIA ${ntiaIcon}`;
+				sections.push(ntiaLine);
+				if (!buildEntry.sbom.ntiaCompliant && buildEntry.sbom.missingNtiaFields.length > 0) {
+					const missing = buildEntry.sbom.missingNtiaFields.join(", ");
+					sections.push(`**Missing NTIA fields:** ${missing}`);
+				}
+			}
+
+			const key = `${pkg.name}:${buildEntry.directory}`;
+			const resolved = resolvedSbomConfig !== null ? (resolvedSbomConfig.get(key) ?? null) : null;
+			if (resolved !== null) {
+				sections.push("_Resolved `sbom-config` metadata used:_");
+				sections.push(GithubMarkdown.codeBlock(JSON.stringify(resolved, null, 2), "json"));
+			} else if (resolvedSbomConfig !== null) {
+				// Map exists but no entry for this build — keep the per-build
+				// rendering honest.
+				sections.push("_No resolved `sbom-config` metadata for this build._");
+			}
+		}
+	}
+
+	return sections.join("\n\n");
+}

@@ -24,6 +24,7 @@ import {
 	AttestLive,
 	ChangesetAnalyzer,
 	ChangesetAnalyzerLive,
+	CheckRun,
 	CheckRunLive,
 	CommandRunner,
 	CommandRunnerLive,
@@ -50,7 +51,12 @@ import { Config, Effect, Layer, Option } from "effect";
 import { ReleaseLive } from "./release/layers.js";
 import { detectReleases, runBuildAndSbom, runPublishTargets } from "./release/publish.js";
 import { runReleases } from "./release/releases.js";
-import { buildValidationComment } from "./release/report.js";
+import {
+	buildPublishValidationSummary,
+	buildReleaseNotesPreviewSummary,
+	buildSbomPreviewSummary,
+	buildValidationComment,
+} from "./release/report.js";
 import type {
 	PublishPackagesResult,
 	ReleaseInfo,
@@ -62,6 +68,7 @@ import { toBranchManagementOutput, toPublishingOutput, toValidationOutput } from
 import type { ValidationOutput } from "./schema/release-output.js";
 import { ReleaseOutput } from "./schema/release-output.js";
 import { GithubPackagesTokenState, STATE_KEYS } from "./state.js";
+import type { ResolvedSBOMMetadata } from "./types/sbom-config.js";
 import { checkReleaseBranch } from "./utils/check-release-branch.js";
 import { cleanupValidationChecks } from "./utils/cleanup-validation-checks.js";
 import { closeLinkedIssues } from "./utils/close-linked-issues.js";
@@ -234,7 +241,7 @@ const runValidation = Effect.gen(function* () {
 	const targetBranch = yield* Config.string("target-branch").pipe(Config.withDefault("main"));
 	const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
 	const packageManager = yield* detectPackageManager;
-	const { repository } = yield* env.github;
+	const { repository, sha } = yield* env.github;
 	const [owner, repo] = repository.split("/");
 
 	yield* Effect.gen(function* () {
@@ -302,6 +309,11 @@ const runValidation = Effect.gen(function* () {
 		// Structured findings produced by the publish dry-run + SBOM/NTIA checks
 		// inside `runValidationEffect`; the build finding is appended below.
 		let reportFindings: ReadonlyArray<ValidationFinding> = [];
+		// Per-build resolved sbom-config metadata, keyed by
+		// `${pkg.name}:${build.directory}`. Debug-only; fed into the SBOM Preview
+		// check-run summary so config-or-mapping bugs are immediately visible.
+		// `null` indicates `runValidationEffect` was not reached (build failure).
+		let resolvedSbomConfig: ReadonlyMap<string, ResolvedSBOMMetadata> | null = null;
 
 		if (buildResult.success) {
 			yield* Effect.logInfo("Validate publishing");
@@ -326,6 +338,7 @@ const runValidation = Effect.gen(function* () {
 				sbomOk = report.sbomOk;
 				sbomSummary = report.sbomSummary;
 				reportFindings = report.findings;
+				resolvedSbomConfig = report.resolvedSbomConfig;
 			}
 			yield* Effect.logInfo(
 				publishOk
@@ -358,6 +371,17 @@ const runValidation = Effect.gen(function* () {
 			});
 		}
 		findings.push(...reportFindings);
+
+		// Conclusion-per-check rule used for the three new per-step check runs:
+		// `failure` if any error-severity finding scopes to that check;
+		// `neutral` if warning-severity findings exist but no errors;
+		// `success` otherwise.
+		const conclusionFor = (checkName: string): "success" | "failure" | "neutral" => {
+			const own = findings.filter((f) => f.check === checkName);
+			if (own.some((f) => f.severity === "error")) return "failure";
+			if (own.some((f) => f.severity === "warning")) return "neutral";
+			return "success";
+		};
 
 		const checkResults = [
 			{
@@ -410,12 +434,30 @@ const runValidation = Effect.gen(function* () {
 			if (own.some((f) => f.severity === "warning")) return "warning";
 			return "pass";
 		};
-		// Publish/Release-Notes/SBOM rows have no own check run — they link to
-		// the unified validation check. Build links to its own check run.
 		const buildUrl = buildResult.htmlUrl !== "" ? buildResult.htmlUrl : unifiedUrl;
-		// The checks-table rows in the canonical ValidationOutput shape — fed
-		// straight into `toValidationOutput` (and from there rendered).
-		const checkRows: ReadonlyArray<ValidationOutput["validation"]["checks"][number]> = [
+
+		// Project the canonical ValidationOutput once so the per-step check
+		// summaries render off the same data the comment will. URLs are filled
+		// in below once the per-step check runs are created; the first projection
+		// passes the unified URL as a placeholder.
+		const projectValidation = (
+			checks: ReadonlyArray<ValidationOutput["validation"]["checks"][number]>,
+		): ValidationOutput =>
+			toValidationOutput({
+				buildsPassed: buildResult.success,
+				packageCount: reportPackages.length,
+				npmReady,
+				githubPackagesReady,
+				totalTargets: publishTotalTargets,
+				readyTargets: publishReadyTargets,
+				checks,
+				findings,
+				validationPackages,
+				checkRun: checkRunResult,
+				dryRun,
+			});
+
+		const placeholderChecks: ReadonlyArray<ValidationOutput["validation"]["checks"][number]> = [
 			{
 				name: "Link Issues from Commits",
 				status: statusFor("Link Issues from Commits", false),
@@ -449,6 +491,66 @@ const runValidation = Effect.gen(function* () {
 			},
 		];
 
+		const provisionalOutput = projectValidation(placeholderChecks);
+
+		// Create the three per-step check runs after the canonical object is
+		// known — each summary is rendered from `provisionalOutput.validation`.
+		const checksSvc = yield* CheckRun;
+
+		const createPerStepCheck = (
+			title: string,
+			conclusion: "success" | "failure" | "neutral",
+			summary: string,
+		): Effect.Effect<string> =>
+			Effect.gen(function* () {
+				const created = yield* checksSvc.create(title, sha).pipe(
+					Effect.catchAll((e) =>
+						Effect.gen(function* () {
+							yield* Effect.logWarning(`Failed to create check run "${title}": ${e.message}`);
+							return null;
+						}),
+					),
+				);
+				if (created === null) {
+					return "";
+				}
+				yield* checksSvc
+					.complete(created.id, conclusion, { title, summary })
+					.pipe(Effect.catchAll((e) => Effect.logWarning(`Failed to complete check run "${title}": ${e.message}`)));
+				return created.htmlUrl;
+			});
+
+		const publishSummary = buildPublishValidationSummary(provisionalOutput.validation);
+		const releaseNotesSummary = buildReleaseNotesPreviewSummary(provisionalOutput.validation);
+		const sbomSummaryMd = buildSbomPreviewSummary(provisionalOutput.validation, resolvedSbomConfig);
+
+		const publishTitle = dryRun ? "🧪 Publish Validation (Dry Run)" : "📦 Publish Validation";
+		const releaseNotesTitle = dryRun ? "🧪 Release Notes Preview (Dry Run)" : "📋 Release Notes Preview";
+		const sbomTitle = dryRun ? "🧪 SBOM Preview (Dry Run)" : "🔏 SBOM Preview";
+
+		const publishCheckUrl = yield* createPerStepCheck(
+			publishTitle,
+			conclusionFor("Publish Validation"),
+			publishSummary,
+		);
+		const releaseNotesCheckUrl = yield* createPerStepCheck(
+			releaseNotesTitle,
+			conclusionFor("Release Notes Preview"),
+			releaseNotesSummary,
+		);
+		const sbomCheckUrl = yield* createPerStepCheck(sbomTitle, conclusionFor("SBOM Preview"), sbomSummaryMd);
+
+		// Replace the unified-fallback URL on Publish / Release Notes / SBOM rows
+		// with each check's real htmlUrl. Build/Link rows keep their existing
+		// per-step URLs.
+		const urlFor = (placeholder: string | null, real: string): string | null => (real !== "" ? real : placeholder);
+		const checkRows: ReadonlyArray<ValidationOutput["validation"]["checks"][number]> = placeholderChecks.map((row) => {
+			if (row.name === "Publish Validation") return { ...row, url: urlFor(row.url, publishCheckUrl) };
+			if (row.name === "Release Notes Preview") return { ...row, url: urlFor(row.url, releaseNotesCheckUrl) };
+			if (row.name === "SBOM Preview") return { ...row, url: urlFor(row.url, sbomCheckUrl) };
+			return row;
+		});
+
 		// Final summary line.
 		const passedCount = checkResults.filter((r) => r.success).length;
 		yield* Effect.logInfo(
@@ -460,24 +562,12 @@ const runValidation = Effect.gen(function* () {
 						.join(", ")}`,
 		);
 
-		// Build the one canonical ValidationOutput. The build-centric struct
-		// projects the per-package builds, the findings, and the checks table.
-		// This single object is both rendered to the sticky comment (Step 7) and
-		// emitted as `result` — the markdown is provably a projection of the
-		// exact emitted JSON.
-		const validationOutput = toValidationOutput({
-			buildsPassed: buildResult.success,
-			packageCount: reportPackages.length,
-			npmReady,
-			githubPackagesReady,
-			totalTargets: publishTotalTargets,
-			readyTargets: publishReadyTargets,
-			checks: checkRows,
-			findings,
-			validationPackages,
-			checkRun: checkRunResult,
-			dryRun,
-		});
+		// Build the one canonical ValidationOutput with the final URLs. The
+		// build-centric struct projects the per-package builds, findings, and
+		// the checks table. This single object is both rendered to the sticky
+		// comment (Step 7) and emitted as `result` — the markdown is provably
+		// a projection of the exact emitted JSON.
+		const validationOutput = projectValidation(checkRows);
 
 		// Step 7 — sticky comment on the release PR (migrated).
 		const prsResult = yield* Effect.either(
