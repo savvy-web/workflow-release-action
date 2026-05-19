@@ -99,21 +99,80 @@ export type BranchManagementOutput = Schema.Schema.Type<typeof BranchManagementO
 
 // --- validation phase ----------------------------------------------------
 
+/** The build-validation step's per-row checks table outcome. */
+const ValidationCheck = Schema.Struct({
+	name: Schema.String,
+	status: Schema.Literal("pass", "warning", "error"),
+	outcome: Schema.String,
+	url: Schema.NullOr(Schema.String),
+});
+
+/** A non-pass outcome — the package / build directory it concerns. */
+const ValidationFindingScope = Schema.Struct({
+	package: Schema.NullOr(Schema.String),
+	directory: Schema.NullOr(Schema.String),
+});
+
+/** Every non-pass validation outcome, projected for the comment / consumers. */
+const ValidationFinding = Schema.Struct({
+	severity: Schema.Literal("error", "warning"),
+	check: Schema.String,
+	scope: Schema.NullOr(ValidationFindingScope),
+	message: Schema.String,
+});
+
+/** The SBOM preview for one build directory. */
+const ValidationBuildSbom = Schema.Struct({
+	componentCount: Schema.Number,
+	ntiaCompliant: Schema.Boolean,
+	missingNtiaFields: Schema.Array(Schema.String),
+});
+
+/** A single registry target under a build — its per-registry publish readiness. */
+const ValidationBuildTarget = Schema.Struct({
+	registry: Schema.String,
+	status: Schema.Literal("ready", "skipped", "failed"),
+	access: Schema.Literal("public", "restricted"),
+	provenance: Schema.Boolean,
+});
+
+/** A build — one per unique target directory of a released package. */
+const ValidationBuild = Schema.Struct({
+	directory: Schema.String,
+	packedBytes: Schema.NullOr(Schema.Number),
+	unpackedBytes: Schema.NullOr(Schema.Number),
+	fileCount: Schema.NullOr(Schema.Number),
+	sbom: Schema.NullOr(ValidationBuildSbom),
+	targets: Schema.Array(ValidationBuildTarget),
+});
+
+/** A released package and the builds it produces. */
+const ValidationPublishPackage = Schema.Struct({
+	name: Schema.String,
+	version: Schema.String,
+	baseVersion: Schema.NullOr(Schema.String),
+	bumpType: Schema.Literal("major", "minor", "patch", "new", "unknown"),
+	changesetCount: Schema.NullOr(Schema.Number),
+	ready: Schema.Boolean,
+	versionOnly: Schema.Boolean,
+	builds: Schema.Array(ValidationBuild),
+});
+
 const ValidationPayload = Schema.Struct({
-	builds: Schema.Struct({
+	// The action's build-validation step (renamed from `builds` to free that
+	// name for the per-package build directories below).
+	buildValidation: Schema.Struct({
 		passed: Schema.Boolean,
 		packageCount: Schema.Number,
 	}),
+	checks: Schema.Array(ValidationCheck),
+	findings: Schema.Array(ValidationFinding),
 	publish: Schema.Struct({
 		npmReady: Schema.Boolean,
 		githubPackagesReady: Schema.Boolean,
-		packages: Schema.Array(
-			Schema.Struct({
-				name: Schema.String,
-				version: Schema.String,
-				ready: Schema.Boolean,
-			}),
-		),
+		totalTargets: Schema.Number,
+		readyTargets: Schema.Number,
+		packages: Schema.Array(ValidationPublishPackage),
 	}),
 	checkRun: Schema.NullOr(
 		Schema.Struct({

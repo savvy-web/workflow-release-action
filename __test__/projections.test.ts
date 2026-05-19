@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { PackagePublishResult } from "../src/release/types.js";
+import type { PackagePublishResult, ValidationPackageResult } from "../src/release/types.js";
 import { toBranchManagementOutput, toPublishingOutput, toValidationOutput } from "../src/schema/projections.js";
 import { SCHEMA_URL, SCHEMA_VERSION } from "../src/schema/release-output.js";
 
@@ -73,16 +73,60 @@ describe("toBranchManagementOutput", () => {
 });
 
 describe("toValidationOutput", () => {
-	it("projects a clean validation run as success", () => {
+	/** A build node with one ready npm target and a compliant SBOM. */
+	const npmBuild: ValidationPackageResult["builds"][number] = {
+		directory: "/repo/dist/npm",
+		packedBytes: 700,
+		unpackedBytes: 2300,
+		fileCount: 5,
+		sbom: { componentCount: 3, ntiaCompliant: true, missingNtiaFields: [] },
+		targets: [{ registry: "https://registry.npmjs.org/", status: "ready", access: "public", provenance: false }],
+	};
+
+	it("projects a clean build-centric validation run as success", () => {
 		const output = toValidationOutput({
 			buildsPassed: true,
 			packageCount: 2,
 			npmReady: true,
 			githubPackagesReady: true,
-			publishOk: true,
-			packages: [
-				{ name: "@savvy-web/foo", version: "1.2.0", ready: true },
-				{ name: "@savvy-web/bar", version: "0.3.0", ready: true },
+			totalTargets: 2,
+			readyTargets: 2,
+			checks: [
+				{ name: "Build Validation", status: "pass", outcome: "Build passed", url: "https://example.com/check/1" },
+				{ name: "Publish Validation", status: "pass", outcome: "2/2 target(s) ready", url: null },
+			],
+			findings: [],
+			validationPackages: [
+				{
+					name: "@savvy-web/foo",
+					version: "1.2.0",
+					baseVersion: "1.1.0",
+					changesetCount: 1,
+					builds: [npmBuild],
+				},
+				{
+					name: "@savvy-web/bar",
+					version: "0.3.0",
+					baseVersion: null,
+					changesetCount: null,
+					builds: [
+						{
+							directory: "/repo/dist/github",
+							packedBytes: 800,
+							unpackedBytes: 2500,
+							fileCount: 6,
+							sbom: { componentCount: 3, ntiaCompliant: false, missingNtiaFields: ["Supplier"] },
+							targets: [
+								{
+									registry: "https://npm.pkg.github.com/",
+									status: "ready",
+									access: "public",
+									provenance: true,
+								},
+							],
+						},
+					],
+				},
 			],
 			checkRun: { url: "https://example.com/check/1", conclusion: "success" },
 			dryRun: false,
@@ -93,17 +137,47 @@ describe("toValidationOutput", () => {
 		expect(output.succeeded).toBe(true);
 		expect(output.hasFailures).toBe(false);
 		expect(output.status).toBe("success");
-		expect(output.validation.builds.packageCount).toBe(2);
 		expect(output.$schema).toBe(SCHEMA_URL);
 		expect(output.schemaVersion).toBe(SCHEMA_VERSION);
 		expect(output.dryRun).toBe(false);
-		expect(output.validation.builds.passed).toBe(true);
+		expect(output.validation.buildValidation).toEqual({ passed: true, packageCount: 2 });
+		expect(output.validation.checks).toEqual([
+			{ name: "Build Validation", status: "pass", outcome: "Build passed", url: "https://example.com/check/1" },
+			{ name: "Publish Validation", status: "pass", outcome: "2/2 target(s) ready", url: null },
+		]);
+		expect(output.validation.findings).toEqual([]);
 		expect(output.validation.publish.npmReady).toBe(true);
 		expect(output.validation.publish.githubPackagesReady).toBe(true);
-		expect(output.validation.publish.packages).toEqual([
-			{ name: "@savvy-web/foo", version: "1.2.0", ready: true },
-			{ name: "@savvy-web/bar", version: "0.3.0", ready: true },
-		]);
+		expect(output.validation.publish.totalTargets).toBe(2);
+		expect(output.validation.publish.readyTargets).toBe(2);
+
+		const [foo, bar] = output.validation.publish.packages;
+		expect(foo).toEqual({
+			name: "@savvy-web/foo",
+			version: "1.2.0",
+			baseVersion: "1.1.0",
+			bumpType: "minor",
+			changesetCount: 1,
+			ready: true,
+			versionOnly: false,
+			builds: [
+				{
+					directory: "/repo/dist/npm",
+					packedBytes: 700,
+					unpackedBytes: 2300,
+					fileCount: 5,
+					sbom: { componentCount: 3, ntiaCompliant: true, missingNtiaFields: [] },
+					targets: [{ registry: "https://registry.npmjs.org/", status: "ready", access: "public", provenance: false }],
+				},
+			],
+		});
+		// A null base version is a brand-new package.
+		expect(bar?.bumpType).toBe("new");
+		expect(bar?.builds[0]?.sbom).toEqual({
+			componentCount: 3,
+			ntiaCompliant: false,
+			missingNtiaFields: ["Supplier"],
+		});
 		expect(output.validation.checkRun).toEqual({ url: "https://example.com/check/1", conclusion: "success" });
 	});
 
@@ -113,8 +187,11 @@ describe("toValidationOutput", () => {
 			packageCount: 0,
 			npmReady: true,
 			githubPackagesReady: true,
-			publishOk: true,
-			packages: [],
+			totalTargets: 0,
+			readyTargets: 0,
+			checks: [],
+			findings: [],
+			validationPackages: [],
 			checkRun: null,
 			dryRun: false,
 		});
@@ -125,14 +202,75 @@ describe("toValidationOutput", () => {
 		expect(output.validation.checkRun).toBeNull();
 	});
 
-	it("flags failed builds and publish-dry-run as a failure", () => {
+	it("projects a version-only package with no builds", () => {
+		const output = toValidationOutput({
+			buildsPassed: true,
+			packageCount: 1,
+			npmReady: true,
+			githubPackagesReady: true,
+			totalTargets: 0,
+			readyTargets: 0,
+			checks: [],
+			findings: [],
+			validationPackages: [
+				{ name: "@savvy-web/foo", version: "1.2.1", baseVersion: "1.2.0", changesetCount: 1, builds: [] },
+			],
+			checkRun: null,
+			dryRun: false,
+		});
+
+		const pkg = output.validation.publish.packages[0];
+		expect(pkg?.versionOnly).toBe(true);
+		expect(pkg?.ready).toBe(true);
+		expect(pkg?.builds).toEqual([]);
+		expect(pkg?.bumpType).toBe("patch");
+	});
+
+	it("flags failed builds and an error finding as a failure", () => {
 		const output = toValidationOutput({
 			buildsPassed: false,
 			packageCount: 1,
 			npmReady: false,
 			githubPackagesReady: false,
-			publishOk: false,
-			packages: [{ name: "@savvy-web/foo", version: "1.2.0", ready: false }],
+			totalTargets: 1,
+			readyTargets: 0,
+			checks: [
+				{ name: "Build Validation", status: "error", outcome: "Build failed", url: null },
+				{ name: "Publish Validation", status: "error", outcome: "0/1 target(s) ready", url: null },
+			],
+			findings: [
+				{
+					severity: "error",
+					check: "Publish Validation",
+					scope: { package: "@savvy-web/foo", directory: "/repo/dist/npm" },
+					message: "dry-run failed: boom",
+				},
+			],
+			validationPackages: [
+				{
+					name: "@savvy-web/foo",
+					version: "1.2.0",
+					baseVersion: "1.1.0",
+					changesetCount: 1,
+					builds: [
+						{
+							directory: "/repo/dist/npm",
+							packedBytes: null,
+							unpackedBytes: null,
+							fileCount: null,
+							sbom: null,
+							targets: [
+								{
+									registry: "https://registry.npmjs.org/",
+									status: "failed",
+									access: "public",
+									provenance: false,
+								},
+							],
+						},
+					],
+				},
+			],
 			checkRun: { url: "https://example.com/check/2", conclusion: "failure" },
 			dryRun: true,
 		});
@@ -141,11 +279,56 @@ describe("toValidationOutput", () => {
 		expect(output.succeeded).toBe(false);
 		expect(output.status).toBe("partial");
 		expect(output.dryRun).toBe(true);
-		expect(output.validation.builds.passed).toBe(false);
+		expect(output.validation.buildValidation.passed).toBe(false);
 		expect(output.validation.publish.npmReady).toBe(false);
 		expect(output.validation.publish.githubPackagesReady).toBe(false);
-		expect(output.validation.publish.packages).toEqual([{ name: "@savvy-web/foo", version: "1.2.0", ready: false }]);
+		expect(output.validation.findings).toEqual([
+			{
+				severity: "error",
+				check: "Publish Validation",
+				scope: { package: "@savvy-web/foo", directory: "/repo/dist/npm" },
+				message: "dry-run failed: boom",
+			},
+		]);
+		// A build with a failed target makes the package not ready.
+		expect(output.validation.publish.packages[0]?.ready).toBe(false);
 		expect(output.validation.checkRun).toEqual({ url: "https://example.com/check/2", conclusion: "failure" });
+	});
+
+	it("keeps a run with only warning findings succeeded", () => {
+		const output = toValidationOutput({
+			buildsPassed: true,
+			packageCount: 1,
+			npmReady: true,
+			githubPackagesReady: true,
+			totalTargets: 1,
+			readyTargets: 1,
+			checks: [],
+			findings: [
+				{
+					severity: "warning",
+					check: "SBOM Preview",
+					scope: { package: "@savvy-web/foo", directory: "/repo/dist/npm" },
+					message: "SBOM generated but missing NTIA fields: Supplier",
+				},
+			],
+			validationPackages: [
+				{
+					name: "@savvy-web/foo",
+					version: "1.2.0",
+					baseVersion: "1.1.0",
+					changesetCount: 1,
+					builds: [npmBuild],
+				},
+			],
+			checkRun: null,
+			dryRun: false,
+		});
+
+		// A warning finding does not fail the run.
+		expect(output.succeeded).toBe(true);
+		expect(output.hasFailures).toBe(false);
+		expect(output.status).toBe("success");
 	});
 });
 

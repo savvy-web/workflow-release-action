@@ -10,7 +10,14 @@
  * normalising per-target status) happens here.
  */
 
-import type { PackagePublishResult, PublishPackagesResult, ReleaseInfo, TagInfo } from "../release/types.js";
+import type {
+	PackagePublishResult,
+	PublishPackagesResult,
+	ReleaseInfo,
+	TagInfo,
+	ValidationFinding,
+	ValidationPackageResult,
+} from "../release/types.js";
 import type { BranchManagementOutput, PublishingOutput, ReleaseFlags, ValidationOutput } from "./release-output.js";
 import { SCHEMA_URL, SCHEMA_VERSION, deriveStatus } from "./release-output.js";
 
@@ -65,32 +72,123 @@ export const toBranchManagementOutput = (input: BranchManagementInput): BranchMa
 	};
 };
 
+/** One row of the validation checks table, as the projection input. */
+export interface ValidationCheckInput {
+	readonly name: string;
+	readonly status: "pass" | "warning" | "error";
+	readonly outcome: string;
+	readonly url: string | null;
+}
+
 /** Input for {@link toValidationOutput}. */
 export interface ValidationInput {
+	/** Whether the build-validation step passed. */
 	readonly buildsPassed: boolean;
+	/** Number of released packages the build-validation step covered. */
 	readonly packageCount: number;
+	/** Whether every npm target is publish-ready. */
 	readonly npmReady: boolean;
+	/** Whether every GitHub Packages target is publish-ready. */
 	readonly githubPackagesReady: boolean;
-	readonly publishOk: boolean;
-	readonly packages: ReadonlyArray<{ readonly name: string; readonly version: string; readonly ready: boolean }>;
+	/** Total number of registry targets across every build. */
+	readonly totalTargets: number;
+	/** Number of registry targets that passed dry-run. */
+	readonly readyTargets: number;
+	/** The five-row checks table outcomes. */
+	readonly checks: ReadonlyArray<ValidationCheckInput>;
+	/** Every non-pass outcome the validation checks produced. */
+	readonly findings: ReadonlyArray<ValidationFinding>;
+	/** Build-centric per-package validation results (builds → SBOM + targets). */
+	readonly validationPackages: ReadonlyArray<ValidationPackageResult>;
+	/** The unified validation check run, or `null` when none was created. */
 	readonly checkRun: { readonly url: string; readonly conclusion: string } | null;
 	readonly dryRun: boolean;
 }
 
 /**
+ * Derive the semver bump type for a released package.
+ *
+ * @remarks
+ * A `null` base version means the package is brand-new on the target branch
+ * (`"new"`). Otherwise the major/minor/patch deltas are compared; a version
+ * that is not a three-part semver string yields `"unknown"`.
+ */
+const deriveBumpType = (
+	baseVersion: string | null,
+	version: string,
+): "major" | "minor" | "patch" | "new" | "unknown" => {
+	if (baseVersion === null) return "new";
+	const oldParts = baseVersion.split(".").map(Number);
+	const newParts = version.split(".").map(Number);
+	if (oldParts.length < 3 || newParts.length < 3 || [...oldParts, ...newParts].some(Number.isNaN)) {
+		return "unknown";
+	}
+	if ((newParts[0] ?? 0) > (oldParts[0] ?? 0)) return "major";
+	if (newParts[0] === oldParts[0] && (newParts[1] ?? 0) > (oldParts[1] ?? 0)) return "minor";
+	return "patch";
+};
+
+/**
+ * Project one build-centric {@link ValidationPackageResult} into the schema's
+ * publish-package struct. A package with no builds is version-only.
+ */
+const toValidationPublishPackage = (
+	pkg: ValidationPackageResult,
+): ValidationOutput["validation"]["publish"]["packages"][number] => {
+	const versionOnly = pkg.builds.length === 0;
+	return {
+		name: pkg.name,
+		version: pkg.version,
+		baseVersion: pkg.baseVersion,
+		bumpType: deriveBumpType(pkg.baseVersion, pkg.version),
+		changesetCount: pkg.changesetCount,
+		// A version-only package is ready; a package with builds is ready when
+		// every registry target of every build passed dry-run.
+		ready: versionOnly || pkg.builds.every((b) => b.targets.every((t) => t.status !== "failed")),
+		versionOnly,
+		builds: pkg.builds.map((build) => ({
+			directory: build.directory,
+			packedBytes: build.packedBytes,
+			unpackedBytes: build.unpackedBytes,
+			fileCount: build.fileCount,
+			sbom:
+				build.sbom === null
+					? null
+					: {
+							componentCount: build.sbom.componentCount,
+							ntiaCompliant: build.sbom.ntiaCompliant,
+							missingNtiaFields: build.sbom.missingNtiaFields,
+						},
+			targets: build.targets.map((t) => ({
+				registry: t.registry,
+				status: t.status,
+				access: t.access,
+				provenance: t.provenance,
+			})),
+		})),
+	};
+};
+
+/**
  * Project a validation run into a {@link ValidationOutput}.
+ *
+ * @remarks
+ * This is the single curation seam between the internal build-centric
+ * validation results and the published, build-centric `ValidationOutput`
+ * contract — internal results in, schema struct out.
  *
  * @param input - The validation run facts to project.
  * @returns The phase-discriminated validation output struct.
  */
 export const toValidationOutput = (input: ValidationInput): ValidationOutput => {
 	const noop = input.packageCount === 0;
+	const publishOk = !input.findings.some((f) => f.severity === "error");
 	// The three flags are orthogonal by design — noop does not clamp hasFailures;
 	// deriveStatus precedence resolves the human-facing label.
 	const flags: ReleaseFlags = {
 		noop,
-		succeeded: !noop && input.buildsPassed && input.publishOk,
-		hasFailures: !input.buildsPassed || !input.publishOk,
+		succeeded: !noop && input.buildsPassed && publishOk,
+		hasFailures: !input.buildsPassed || !publishOk,
 	};
 	return {
 		$schema: SCHEMA_URL,
@@ -102,11 +200,20 @@ export const toValidationOutput = (input: ValidationInput): ValidationOutput => 
 		hasFailures: flags.hasFailures,
 		dryRun: input.dryRun,
 		validation: {
-			builds: { passed: input.buildsPassed, packageCount: input.packageCount },
+			buildValidation: { passed: input.buildsPassed, packageCount: input.packageCount },
+			checks: input.checks.map((c) => ({ name: c.name, status: c.status, outcome: c.outcome, url: c.url })),
+			findings: input.findings.map((f) => ({
+				severity: f.severity,
+				check: f.check,
+				scope: f.scope === null ? null : { package: f.scope.package, directory: f.scope.directory },
+				message: f.message,
+			})),
 			publish: {
 				npmReady: input.npmReady,
 				githubPackagesReady: input.githubPackagesReady,
-				packages: input.packages.map((p) => ({ name: p.name, version: p.version, ready: p.ready })),
+				totalTargets: input.totalTargets,
+				readyTargets: input.readyTargets,
+				packages: input.validationPackages.map(toValidationPublishPackage),
 			},
 			checkRun: input.checkRun,
 		},

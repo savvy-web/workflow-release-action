@@ -171,9 +171,9 @@
 				},
 				"validation": {
 					"type": "object",
-					"required": ["builds", "publish", "checkRun"],
+					"required": ["buildValidation", "checks", "findings", "publish", "checkRun"],
 					"properties": {
-						"builds": {
+						"buildValidation": {
 							"type": "object",
 							"required": ["passed", "packageCount"],
 							"properties": {
@@ -186,9 +186,93 @@
 							},
 							"additionalProperties": false
 						},
+						"checks": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"required": ["name", "status", "outcome", "url"],
+								"properties": {
+									"name": {
+										"type": "string"
+									},
+									"status": {
+										"type": "string",
+										"enum": ["pass", "warning", "error"]
+									},
+									"outcome": {
+										"type": "string"
+									},
+									"url": {
+										"anyOf": [
+											{
+												"type": "string"
+											},
+											{
+												"type": "null"
+											}
+										]
+									}
+								},
+								"additionalProperties": false
+							}
+						},
+						"findings": {
+							"type": "array",
+							"items": {
+								"type": "object",
+								"required": ["severity", "check", "scope", "message"],
+								"properties": {
+									"severity": {
+										"type": "string",
+										"enum": ["error", "warning"]
+									},
+									"check": {
+										"type": "string"
+									},
+									"scope": {
+										"anyOf": [
+											{
+												"type": "object",
+												"required": ["package", "directory"],
+												"properties": {
+													"package": {
+														"anyOf": [
+															{
+																"type": "string"
+															},
+															{
+																"type": "null"
+															}
+														]
+													},
+													"directory": {
+														"anyOf": [
+															{
+																"type": "string"
+															},
+															{
+																"type": "null"
+															}
+														]
+													}
+												},
+												"additionalProperties": false
+											},
+											{
+												"type": "null"
+											}
+										]
+									},
+									"message": {
+										"type": "string"
+									}
+								},
+								"additionalProperties": false
+							}
+						},
 						"publish": {
 							"type": "object",
-							"required": ["npmReady", "githubPackagesReady", "packages"],
+							"required": ["npmReady", "githubPackagesReady", "totalTargets", "readyTargets", "packages"],
 							"properties": {
 								"npmReady": {
 									"type": "boolean"
@@ -196,11 +280,26 @@
 								"githubPackagesReady": {
 									"type": "boolean"
 								},
+								"totalTargets": {
+									"type": "number"
+								},
+								"readyTargets": {
+									"type": "number"
+								},
 								"packages": {
 									"type": "array",
 									"items": {
 										"type": "object",
-										"required": ["name", "version", "ready"],
+										"required": [
+											"name",
+											"version",
+											"baseVersion",
+											"bumpType",
+											"changesetCount",
+											"ready",
+											"versionOnly",
+											"builds"
+										],
 										"properties": {
 											"name": {
 												"type": "string"
@@ -208,8 +307,128 @@
 											"version": {
 												"type": "string"
 											},
+											"baseVersion": {
+												"anyOf": [
+													{
+														"type": "string"
+													},
+													{
+														"type": "null"
+													}
+												]
+											},
+											"bumpType": {
+												"type": "string",
+												"enum": ["major", "minor", "patch", "new", "unknown"]
+											},
+											"changesetCount": {
+												"anyOf": [
+													{
+														"type": "number"
+													},
+													{
+														"type": "null"
+													}
+												]
+											},
 											"ready": {
 												"type": "boolean"
+											},
+											"versionOnly": {
+												"type": "boolean"
+											},
+											"builds": {
+												"type": "array",
+												"items": {
+													"type": "object",
+													"required": ["directory", "packedBytes", "unpackedBytes", "fileCount", "sbom", "targets"],
+													"properties": {
+														"directory": {
+															"type": "string"
+														},
+														"packedBytes": {
+															"anyOf": [
+																{
+																	"type": "number"
+																},
+																{
+																	"type": "null"
+																}
+															]
+														},
+														"unpackedBytes": {
+															"anyOf": [
+																{
+																	"type": "number"
+																},
+																{
+																	"type": "null"
+																}
+															]
+														},
+														"fileCount": {
+															"anyOf": [
+																{
+																	"type": "number"
+																},
+																{
+																	"type": "null"
+																}
+															]
+														},
+														"sbom": {
+															"anyOf": [
+																{
+																	"type": "object",
+																	"required": ["componentCount", "ntiaCompliant", "missingNtiaFields"],
+																	"properties": {
+																		"componentCount": {
+																			"type": "number"
+																		},
+																		"ntiaCompliant": {
+																			"type": "boolean"
+																		},
+																		"missingNtiaFields": {
+																			"type": "array",
+																			"items": {
+																				"type": "string"
+																			}
+																		}
+																	},
+																	"additionalProperties": false
+																},
+																{
+																	"type": "null"
+																}
+															]
+														},
+														"targets": {
+															"type": "array",
+															"items": {
+																"type": "object",
+																"required": ["registry", "status", "access", "provenance"],
+																"properties": {
+																	"registry": {
+																		"type": "string"
+																	},
+																	"status": {
+																		"type": "string",
+																		"enum": ["ready", "skipped", "failed"]
+																	},
+																	"access": {
+																		"type": "string",
+																		"enum": ["public", "restricted"]
+																	},
+																	"provenance": {
+																		"type": "boolean"
+																	}
+																},
+																"additionalProperties": false
+															}
+														}
+													},
+													"additionalProperties": false
+												}
 											}
 										},
 										"additionalProperties": false

@@ -90,11 +90,42 @@ describe("ReleaseOutput schema", () => {
 		hasFailures: false,
 		dryRun: false,
 		validation: {
-			builds: { passed: true, packageCount: 1 },
+			buildValidation: { passed: true, packageCount: 1 },
+			checks: [{ name: "Build Validation", status: "pass", outcome: "Build passed", url: null }],
+			findings: [],
 			publish: {
 				npmReady: true,
 				githubPackagesReady: true,
-				packages: [{ name: "@savvy-web/foo", version: "1.2.0", ready: true }],
+				totalTargets: 1,
+				readyTargets: 1,
+				packages: [
+					{
+						name: "@savvy-web/foo",
+						version: "1.2.0",
+						baseVersion: "1.1.0",
+						bumpType: "minor",
+						changesetCount: 1,
+						ready: true,
+						versionOnly: false,
+						builds: [
+							{
+								directory: "/repo/dist/npm",
+								packedBytes: 700,
+								unpackedBytes: 2300,
+								fileCount: 5,
+								sbom: { componentCount: 3, ntiaCompliant: true, missingNtiaFields: [] },
+								targets: [
+									{
+										registry: "https://registry.npmjs.org/",
+										status: "ready",
+										access: "public",
+										provenance: false,
+									},
+								],
+							},
+						],
+					},
+				],
 			},
 			checkRun: { url: "https://example.com/check/1", conclusion: "success" },
 		},

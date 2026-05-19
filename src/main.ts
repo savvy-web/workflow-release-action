@@ -52,7 +52,12 @@ import { detectReleases, runBuildAndSbom, runPublishTargets } from "./release/pu
 import { runReleases } from "./release/releases.js";
 import type { ChecksTableRow } from "./release/report.js";
 import { buildValidationComment } from "./release/report.js";
-import type { PublishPackagesResult, ReleaseInfo, ValidationFinding } from "./release/types.js";
+import type {
+	PublishPackagesResult,
+	ReleaseInfo,
+	ValidationFinding,
+	ValidationPackageResult,
+} from "./release/types.js";
 import { runValidation as runValidationEffect } from "./release/validation.js";
 import { toBranchManagementOutput, toPublishingOutput, toValidationOutput } from "./schema/projections.js";
 import { ReleaseOutput } from "./schema/release-output.js";
@@ -290,6 +295,9 @@ const runValidation = Effect.gen(function* () {
 		let npmReady = false;
 		let githubPackagesReady = false;
 		let reportPackages: ReadonlyArray<{ name: string; version: string; ready: boolean }> = [];
+		// Build-centric per-package validation results — the input to the
+		// build-centric ValidationOutput projection.
+		let validationPackages: ReadonlyArray<ValidationPackageResult> = [];
 		let sbomOk = true;
 		let sbomSummary = "SBOM Preview skipped";
 		// Structured findings produced by the publish dry-run + SBOM/NTIA checks
@@ -316,6 +324,7 @@ const runValidation = Effect.gen(function* () {
 				npmReady = report.npmReady;
 				githubPackagesReady = report.githubPackagesReady;
 				reportPackages = report.packages;
+				validationPackages = report.validationPackages;
 				sbomOk = report.sbomOk;
 				sbomSummary = report.sbomSummary;
 				reportFindings = report.findings;
@@ -508,15 +517,26 @@ const runValidation = Effect.gen(function* () {
 			yield* Effect.logInfo("Sticky comment update skipped — no open PR found for release branch");
 		}
 
-		// Emit structured result output for Phase 2.
+		// Emit structured result output for Phase 2. The build-centric
+		// ValidationOutput projects the per-package builds, the findings, and
+		// the checks table; the checks-table icon maps to a status literal.
+		const checkStatus = (icon: "✅" | "⚠️" | "❌"): "pass" | "warning" | "error" =>
+			icon === "❌" ? "error" : icon === "⚠️" ? "warning" : "pass";
 		const validationOutput = toValidationOutput({
 			buildsPassed: buildResult.success,
 			packageCount: reportPackages.length,
 			npmReady,
 			githubPackagesReady,
-			publishOk,
-			// Per-package ready comes directly from the ValidationReport.
-			packages: reportPackages.map((p) => ({ name: p.name, version: p.version, ready: p.ready })),
+			totalTargets: publishTotalTargets,
+			readyTargets: publishReadyTargets,
+			checks: checkRows.map((row) => ({
+				name: row.name,
+				status: checkStatus(row.icon),
+				outcome: row.outcome,
+				url: row.url ?? null,
+			})),
+			findings,
+			validationPackages,
 			checkRun: checkRunResult,
 			dryRun,
 		});
