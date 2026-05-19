@@ -25,8 +25,8 @@ import {
 	Attest,
 	CommandRunner,
 	ErrorAccumulator,
-	GitHubClient,
 	GitHubCommit,
+	GitHubContent,
 	NpmRegistry,
 	OidcTokenIssuer,
 	PackagePublish,
@@ -147,18 +147,16 @@ function isTargetPrivate(targetDir: string): boolean {
 /**
  * Detect released packages from the merged PR's file diff.
  *
- * Ports `detectReleasedPackagesFromPR` using `GitHubClient.rest` for all
- * Octokit calls.  Reads the current `package.json` from disk (it exists on
- * the filesystem after the merge) and fetches the base-branch version via the
- * GitHub Contents API.
+ * Ports `detectReleasedPackagesFromPR`. Reads the current `package.json` from
+ * disk (it exists on the filesystem after the merge) and fetches the
+ * base-branch version via the `GitHubContent` service.
  */
 const detectFromPR = (
 	prNumber: number,
-): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubClient | PullRequest> =>
+): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubContent | PullRequest> =>
 	Effect.gen(function* () {
-		const client = yield* GitHubClient;
 		const pr = yield* PullRequest;
-		const { owner, repo } = yield* client.repo;
+		const content = yield* GitHubContent;
 
 		// List files changed in the merged PR
 		const files = yield* pr.listFiles(prNumber).pipe(Effect.catchAll((_: PullRequestError) => Effect.succeed([])));
@@ -199,22 +197,12 @@ const detectFromPR = (
 			let oldVersion = "0.0.0";
 
 			if (baseSha) {
-				interface ContentData {
-					content?: string;
-				}
-				const oldContent = yield* client
-					.rest<ContentData>("repos.getContent", (octokit) => {
-						const ok = octokit as {
-							rest: { repos: { getContent: (p: Record<string, unknown>) => Promise<{ data: ContentData }> } };
-						};
-						return ok.rest.repos.getContent({ owner, repo, path: file.filename, ref: baseSha });
-					})
-					.pipe(Effect.catchAll(() => Effect.succeed({} as ContentData)));
-
-				if (oldContent.content) {
+				const oldContent = yield* content
+					.getFile(file.filename, baseSha)
+					.pipe(Effect.catchAll(() => Effect.succeed("")));
+				if (oldContent) {
 					try {
-						const decoded = Buffer.from(oldContent.content, "base64").toString("utf-8");
-						const oldPkg = JSON.parse(decoded) as { version?: string };
+						const oldPkg = JSON.parse(oldContent) as { version?: string };
 						oldVersion = oldPkg.version ?? "0.0.0";
 					} catch {
 						// keep oldVersion
@@ -244,13 +232,13 @@ const detectFromPR = (
  * Detect released packages by comparing HEAD with its first parent via the
  * GitHub compare API.
  *
- * Ports `detectReleasedPackagesFromCommit` using `GitHubClient.rest`.
+ * Ports `detectReleasedPackagesFromCommit` using `GitHubCommit` for the
+ * compare API and `GitHubContent` for the base-branch file read.
  */
-const detectFromCommit = (): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubClient | GitHubCommit> =>
+const detectFromCommit = (): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubCommit | GitHubContent> =>
 	Effect.gen(function* () {
-		const client = yield* GitHubClient;
 		const commits = yield* GitHubCommit;
-		const { owner, repo } = yield* client.repo;
+		const content = yield* GitHubContent;
 
 		const sha = process.env.GITHUB_SHA ?? "";
 		if (!sha) return [];
@@ -294,22 +282,10 @@ const detectFromCommit = (): Effect.Effect<ReadonlyArray<DetectedRelease>, never
 			const newVersion = currentContent.version ?? "0.0.0";
 			let oldVersion = "0.0.0";
 
-			interface ContentData {
-				content?: string;
-			}
-			const oldContent = yield* client
-				.rest<ContentData>("repos.getContent", (octokit) => {
-					const ok = octokit as {
-						rest: { repos: { getContent: (p: Record<string, unknown>) => Promise<{ data: ContentData }> } };
-					};
-					return ok.rest.repos.getContent({ owner, repo, path: file.filename, ref: baseSha });
-				})
-				.pipe(Effect.catchAll(() => Effect.succeed({} as ContentData)));
-
-			if (oldContent.content) {
+			const oldContent = yield* content.getFile(file.filename, baseSha).pipe(Effect.catchAll(() => Effect.succeed("")));
+			if (oldContent) {
 				try {
-					const decoded = Buffer.from(oldContent.content, "base64").toString("utf-8");
-					const oldPkg = JSON.parse(decoded) as { version?: string };
+					const oldPkg = JSON.parse(oldContent) as { version?: string };
 					oldVersion = oldPkg.version ?? "0.0.0";
 				} catch {
 					// keep oldVersion
@@ -574,7 +550,7 @@ const publishOneTarget = (
  */
 export const detectReleases = (
 	args: PublishInputArgs,
-): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubClient | GitHubCommit | PullRequest> =>
+): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubCommit | GitHubContent | PullRequest> =>
 	Effect.gen(function* () {
 		let detected: ReadonlyArray<DetectedRelease>;
 
