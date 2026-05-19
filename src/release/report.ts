@@ -282,8 +282,12 @@ export function buildPublishSummary(result: PublishPackagesResult, options?: Pub
 	const intro = "On merge, these packages publish:";
 	const summarySection = `${intro}\n\n${summaryTable}\n\n${legend}\n\n${totals}`;
 
-	// Per-package detail sections
+	// Per-package detail sections. Version-only packages (no publish targets)
+	// are excluded — a `<details>` block around a header-only, zero-row table
+	// is malformed output. They still appear in the summary table above with
+	// the `🏷️ Version only` cell.
 	const detailSections = result.packages
+		.filter((pkg) => pkg.targets.length > 0)
 		.map((pkg) => {
 			const pkgStatus = getPackageStatus(pkg);
 			const statusIcon = getPackageStatusIcon(pkgStatus);

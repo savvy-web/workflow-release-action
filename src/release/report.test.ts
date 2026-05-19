@@ -243,6 +243,9 @@ describe("buildPublishSummary", () => {
 
 		expect(markdown).toContain("Version only");
 		expect(markdown).toContain("@org/version-only");
+		// A version-only package has no publish targets, so it must not produce
+		// a `<details>` block — that would wrap a header-only, zero-row table.
+		expect(markdown).not.toContain("<details>");
 	});
 
 	it("includes the Legend line", () => {
