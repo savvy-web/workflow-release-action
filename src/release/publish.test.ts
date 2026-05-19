@@ -141,7 +141,7 @@ const makeTopologicalSorterLayer = (orderedNames: string[]): Layer.Layer<Topolog
  *
  * Returns both the combined layer and the temp `cwd` path.
  */
-const makeGitHubClientLayerForPR = (
+const makeLayerForPR = (
 	prNumber: number,
 	packages: Array<{ name: string; newVersion: string; oldVersion: string; filename: string }>,
 ): {
@@ -305,12 +305,49 @@ describe("detectReleases", () => {
 			expect(detected[0]?.version).toBe("3.0.0");
 			expect(detected[0]?.path.endsWith(join("packages", "commit-pkg"))).toBe(true);
 		});
+
+		it("does not detect a package when old and new versions are identical", async () => {
+			// Arrange: seed the base `package.json` version EQUAL to the on-disk
+			// current version. This is the only scenario that proves the
+			// `GitHubContentTest` base-version seed is consulted — an empty seed
+			// would fall back to "0.0.0" and (wrongly) detect a release.
+			const sha = "headsha-commit-noop";
+			const baseSha = "parentsha-commit-noop";
+			const { layer: ghLayer, tmpCwd } = makeLayerForCommit(sha, baseSha, {
+				name: "@test/commit-pkg",
+				newVersion: "3.0.0",
+				oldVersion: "3.0.0",
+				filename: "packages/commit-pkg/package.json",
+			});
+
+			const args: PublishInputArgs = {
+				packageManager: "pnpm",
+				targetBranch: "main",
+				dryRun: false,
+				mergedReleasePRNumber: undefined,
+			};
+
+			const savedSha = process.env.GITHUB_SHA;
+			process.env.GITHUB_SHA = sha;
+
+			// Act
+			let detected: ReadonlyArray<DetectedRelease>;
+			try {
+				detected = await runInCwd(tmpCwd, () => Effect.runPromise(detectReleases(args).pipe(Effect.provide(ghLayer))));
+			} finally {
+				if (savedSha === undefined) delete process.env.GITHUB_SHA;
+				else process.env.GITHUB_SHA = savedSha;
+			}
+
+			// Assert: old version == new version → no release detected.
+			expect(detected).toHaveLength(0);
+		});
 	});
 
 	describe("detection via GitHubContentTest (detectFromPR)", () => {
 		it("detects packages from a merged PR", async () => {
 			// Arrange: write a real package.json on disk so detectFromPR can read it
-			const { layer: ghLayer, tmpCwd } = makeGitHubClientLayerForPR(42, [
+			const { layer: ghLayer, tmpCwd } = makeLayerForPR(42, [
 				{
 					name: "@test/detected-pkg",
 					newVersion: "2.0.0",
@@ -338,6 +375,36 @@ describe("detectReleases", () => {
 			// `path` is derived from `process.cwd()`, which resolves the macOS
 			// `/private` tmpdir symlink — assert on the trailing package dir only.
 			expect(detected[0]?.path.endsWith(join("packages", "detected-pkg"))).toBe(true);
+		});
+
+		it("does not detect a package when old and new versions are identical", async () => {
+			// Arrange: seed the base `package.json` version EQUAL to the on-disk
+			// current version. This is the only scenario that proves the
+			// `GitHubContentTest` base-version seed is consulted — an empty seed
+			// would fall back to "0.0.0" and (wrongly) detect a release.
+			const { layer: ghLayer, tmpCwd } = makeLayerForPR(43, [
+				{
+					name: "@test/detected-pkg",
+					newVersion: "2.0.0",
+					oldVersion: "2.0.0",
+					filename: "packages/detected-pkg/package.json",
+				},
+			]);
+
+			const args: PublishInputArgs = {
+				packageManager: "pnpm",
+				targetBranch: "main",
+				dryRun: false,
+				mergedReleasePRNumber: 43,
+			};
+
+			// Act
+			const detected: ReadonlyArray<DetectedRelease> = await runInCwd(tmpCwd, () =>
+				Effect.runPromise(detectReleases(args).pipe(Effect.provide(ghLayer))),
+			);
+
+			// Assert: old version == new version → no release detected.
+			expect(detected).toHaveLength(0);
 		});
 	});
 });
