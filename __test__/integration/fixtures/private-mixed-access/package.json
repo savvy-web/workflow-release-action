@@ -1,0 +1,17 @@
+{
+	"name": "@fixture/private-mixed-access",
+	"version": "1.0.0",
+	"private": true,
+	"publishConfig": {
+		"targets": [
+			{
+				"access": "public",
+				"directory": "dist/npm"
+			},
+			{
+				"registry": "https://npm.pkg.github.com/",
+				"directory": "dist/npm"
+			}
+		]
+	}
+}

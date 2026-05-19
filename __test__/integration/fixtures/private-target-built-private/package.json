@@ -1,0 +1,14 @@
+{
+	"name": "@fixture/private-target-built-private",
+	"version": "1.0.0",
+	"private": true,
+	"publishConfig": {
+		"targets": [
+			{
+				"registry": "https://npm.pkg.github.com/",
+				"directory": "dist/npm",
+				"access": "public"
+			}
+		]
+	}
+}

@@ -1,0 +1,4 @@
+{
+	"changelog": ["@savvy-web/changesets/changelog", {}],
+	"privatePackages": { "version": false, "tag": true }
+}
