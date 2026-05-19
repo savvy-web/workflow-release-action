@@ -3,8 +3,8 @@
  * when the workflow fails or is interrupted.
  */
 
-import type { ActionEnvironmentError, ActionOutputError, GitHubClientError } from "@savvy-web/github-action-effects";
-import { ActionEnvironment, ActionOutputs, GitHubClient } from "@savvy-web/github-action-effects";
+import type { ActionOutputError } from "@savvy-web/github-action-effects";
+import { ActionOutputs, CheckRun } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
 import { summaryWriter } from "./summary-writer.js";
 
@@ -12,12 +12,6 @@ export interface CleanupResult {
 	cleanedUp: number;
 	failed: number;
 	errors: string[];
-}
-
-interface CheckGetResponse {
-	status: string;
-	conclusion: string | null;
-	name: string;
 }
 
 /**
@@ -29,18 +23,10 @@ export const cleanupValidationChecks = (
 	checkIds: ReadonlyArray<number>,
 	reason: string,
 	dryRun: boolean,
-): Effect.Effect<
-	CleanupResult,
-	ActionEnvironmentError | ActionOutputError | GitHubClientError,
-	ActionEnvironment | ActionOutputs | GitHubClient
-> =>
+): Effect.Effect<CleanupResult, ActionOutputError, ActionOutputs | CheckRun> =>
 	Effect.gen(function* () {
-		const env = yield* ActionEnvironment;
 		const outputs = yield* ActionOutputs;
-		const client = yield* GitHubClient;
-
-		const { repository } = yield* env.github;
-		const [owner, repo] = repository.split("/");
+		const checks = yield* CheckRun;
 
 		yield* Effect.logInfo(`Cleaning up ${checkIds.length} validation check(s)`);
 
@@ -54,21 +40,7 @@ export const cleanupValidationChecks = (
 				continue;
 			}
 
-			const current = yield* Effect.either(
-				client.rest<CheckGetResponse>("checks.get", (octokit) =>
-					(
-						octokit as {
-							rest: {
-								checks: {
-									get: (params: { owner: string; repo: string; check_run_id: number }) => Promise<{
-										data: CheckGetResponse;
-									}>;
-								};
-							};
-						}
-					).rest.checks.get({ owner, repo, check_run_id: checkId }),
-				),
-			);
+			const current = yield* Effect.either(checks.get(checkId));
 
 			if (current._tag === "Left") {
 				yield* Effect.logWarning(`Failed to fetch check ${checkId}: ${current.left.reason}`);
@@ -85,34 +57,10 @@ export const cleanupValidationChecks = (
 			}
 
 			const update = yield* Effect.either(
-				client.rest<undefined>("checks.update.cancel", (octokit) =>
-					(
-						octokit as {
-							rest: {
-								checks: {
-									update: (params: {
-										owner: string;
-										repo: string;
-										check_run_id: number;
-										status: "completed";
-										conclusion: "cancelled";
-										output: { title: string; summary: string };
-									}) => Promise<{ data: undefined }>;
-								};
-							};
-						}
-					).rest.checks.update({
-						owner,
-						repo,
-						check_run_id: checkId,
-						status: "completed",
-						conclusion: "cancelled",
-						output: {
-							title: "Workflow Cancelled",
-							summary: `This check was cancelled due to workflow interruption.\n\n**Reason**: ${reason}`,
-						},
-					}),
-				),
+				checks.complete(checkId, "cancelled", {
+					title: "Workflow Cancelled",
+					summary: `This check was cancelled due to workflow interruption.\n\n**Reason**: ${reason}`,
+				}),
 			);
 
 			if (update._tag === "Right") {
