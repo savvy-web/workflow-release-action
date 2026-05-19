@@ -15,6 +15,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { GitHubClient } from "@savvy-web/github-action-effects/testing";
 import {
 	ActionLoggerTest,
 	ActionStateTest,
@@ -23,6 +24,7 @@ import {
 	NpmRegistryTest,
 	OidcTokenIssuerTest,
 	PackagePublishTest,
+	PullRequestTest,
 	SbomLive,
 	SbomTest,
 	SigstoreSignerTest,
@@ -120,22 +122,22 @@ const makeTopologicalSorterLayer = (orderedNames: string[]): Layer.Layer<Topolog
 	});
 
 /**
- * Build a `GitHubClientTest` layer that simulates `detectFromPR` responses.
+ * Build test layers that simulate `detectFromPR` responses.
  *
- * `GitHubClientTest` looks up `restResponses` by **operation name only**
- * (e.g. `"pulls.listFiles"`), so we register one response per operation.
+ * - `PullRequestTest` seeds `files` (for `pr.listFiles`) and a PR record with
+ *   `baseSha` (for `pr.get`).
+ * - `GitHubClientTest` seeds `repos.getContent` (still a raw call — B7).
  *
- * The test also writes real `package.json` files to a temp directory under
- * `cwd` so `detectFromPR`'s `readFileSync` calls find current content.
+ * The helper also writes real `package.json` files to a temp directory so
+ * `detectFromPR`'s `readFileSync` calls resolve correctly.
  *
- * Returns both the layer and the temp `cwd` path so callers can change
- * directory before running the effect.
+ * Returns both the combined layer and the temp `cwd` path.
  */
 const makeGitHubClientLayerForPR = (
 	prNumber: number,
 	packages: Array<{ name: string; newVersion: string; oldVersion: string; filename: string }>,
 ): {
-	layer: Layer.Layer<import("@savvy-web/github-action-effects/testing").GitHubClient>;
+	layer: Layer.Layer<GitHubClient | import("@savvy-web/github-action-effects").PullRequest>;
 	tmpCwd: string;
 } => {
 	// Create a temp directory structure that mirrors the repo on disk
@@ -158,19 +160,39 @@ const makeGitHubClientLayerForPR = (
 		? Buffer.from(JSON.stringify({ name: firstPkg.name, version: firstPkg.oldVersion })).toString("base64")
 		: "";
 
-	const state = {
-		restResponses: new Map([
-			["pulls.listFiles", { data: files }],
-			["pulls.get", { data: { base: { sha: "base-sha-abc" } } }],
-			["repos.getContent", { data: { content: oldContent } }],
-		]),
+	// Seed PullRequestTest: files map and a PR record with baseSha
+	const prState = PullRequestTest.empty();
+	prState.files.set(prNumber, files);
+	prState.prs.push({
+		number: prNumber,
+		nodeId: `PR_node_${prNumber}`,
+		url: `https://github.com/test-owner/test-repo/pull/${prNumber}`,
+		title: `Release PR #${prNumber}`,
+		state: "closed",
+		head: "changeset-release/main",
+		base: "main",
+		draft: false,
+		merged: true,
+		mergedAt: "2026-01-01T00:00:00Z",
+		mergeCommitSha: "merge-sha",
+		baseSha: "base-sha-abc",
+		labels: [],
+		reviewers: [],
+		teamReviewers: [],
+		autoMerge: undefined,
+		body: null,
+	});
+
+	// GitHubClientTest still handles repos.getContent (B7 — not yet rewired)
+	const clientState = {
+		restResponses: new Map([["repos.getContent", { data: { content: oldContent } }]]),
 		graphqlResponses: new Map<string, unknown>(),
 		paginateResponses: new Map<string, Array<unknown[]>>(),
 		repo: { owner: "test-owner", repo: "test-repo" },
 	};
 
 	return {
-		layer: GitHubClientTest.layer(state) as never,
+		layer: Layer.merge(GitHubClientTest.layer(clientState), PullRequestTest.layer(prState)) as never,
 		tmpCwd,
 	};
 };

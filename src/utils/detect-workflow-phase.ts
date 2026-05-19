@@ -16,8 +16,8 @@
  */
 
 import { FileSystem } from "@effect/platform";
-import type { ActionEnvironmentError, GitHubClientError, PullRequestError } from "@savvy-web/github-action-effects";
-import { ActionEnvironment, GitHubClient, PullRequest } from "@savvy-web/github-action-effects";
+import type { ActionEnvironmentError, PullRequestError } from "@savvy-web/github-action-effects";
+import { ActionEnvironment, PullRequest } from "@savvy-web/github-action-effects";
 import { Duration, Effect, Option } from "effect";
 
 /**
@@ -87,17 +87,10 @@ const readEventPayload = Effect.gen(function* () {
 	}
 });
 
-interface AssociatedPR {
-	number: number;
-	merged_at: string | null;
-	head: { ref: string };
-	base: { ref: string };
-}
-
 /**
  * One attempt at detecting a release commit. Tries two strategies:
  *
- * 1. `listPullRequestsAssociatedWithCommit` — fast and accurate when the
+ * 1. `listAssociatedWithCommit` — fast and accurate when the
  *    branch still exists.
  * 2. List recent closed PRs from the release branch and match
  *    `merge_commit_sha` — works after the branch is auto-deleted.
@@ -110,37 +103,20 @@ const attemptReleaseCommitDetection = (
 ): Effect.Effect<
 	{ isReleaseCommit: boolean; mergedPR?: { number: number } },
 	ActionEnvironmentError | PullRequestError,
-	ActionEnvironment | GitHubClient | PullRequest
+	ActionEnvironment | PullRequest
 > =>
 	Effect.gen(function* () {
 		const env = yield* ActionEnvironment;
-		const client = yield* GitHubClient;
 		const pr = yield* PullRequest;
 		const { sha, repository } = yield* env.github;
-		const [owner, repo] = repository.split("/");
+		const [owner] = repository.split("/");
 
 		// Strategy 1: associated PRs.
-		const associated = yield* Effect.either(
-			client.rest<ReadonlyArray<AssociatedPR>>("listPullRequestsAssociatedWithCommit", (octokit) =>
-				(
-					octokit as {
-						rest: {
-							repos: {
-								listPullRequestsAssociatedWithCommit: (params: {
-									owner: string;
-									repo: string;
-									commit_sha: string;
-								}) => Promise<{ data: ReadonlyArray<AssociatedPR> }>;
-							};
-						};
-					}
-				).rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: sha }),
-			),
-		);
+		const associated = yield* Effect.either(pr.listAssociatedWithCommit(sha));
 
 		if (associated._tag === "Right") {
 			const match = associated.right.find(
-				(pr) => pr.merged_at !== null && pr.head.ref === releaseBranch && pr.base.ref === targetBranch,
+				(p) => (p.mergedAt ?? null) !== null && p.head === releaseBranch && p.base === targetBranch,
 			);
 			if (match) {
 				yield* Effect.logInfo(
@@ -186,7 +162,7 @@ const detectReleaseCommit = (
 ): Effect.Effect<
 	{ isReleaseCommit: boolean; mergedPR?: { number: number } },
 	ActionEnvironmentError | PullRequestError,
-	ActionEnvironment | GitHubClient | PullRequest
+	ActionEnvironment | PullRequest
 > =>
 	Effect.gen(function* () {
 		const maxRetries = 3;
@@ -216,8 +192,8 @@ export const detectWorkflowPhase = (
 	options: PhaseDetectionOptions,
 ): Effect.Effect<
 	PhaseDetectionResult,
-	ActionEnvironmentError | GitHubClientError | PullRequestError,
-	ActionEnvironment | FileSystem.FileSystem | GitHubClient | PullRequest
+	ActionEnvironmentError | PullRequestError,
+	ActionEnvironment | FileSystem.FileSystem | PullRequest
 > =>
 	Effect.gen(function* () {
 		const env = yield* ActionEnvironment;

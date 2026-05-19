@@ -23,6 +23,7 @@ import type {
 	GitHubClientError,
 	GitHubIssueError,
 	IssueData,
+	PullRequestError,
 } from "@savvy-web/github-action-effects";
 import {
 	ActionEnvironment,
@@ -36,6 +37,7 @@ import {
 	GitHubIssueLive,
 	GitTag,
 	GitTagLive,
+	PullRequest,
 	SemverResolver,
 } from "@savvy-web/github-action-effects";
 import type { ConfigError } from "effect";
@@ -475,32 +477,17 @@ export const getLinkedIssuesFromCommits = (
  */
 const linkIssuesToPR = (
 	linkedIssues: ReadonlyArray<LinkedIssue>,
-): Effect.Effect<void, ActionEnvironmentError, ActionEnvironment | GitHubClient> =>
+): Effect.Effect<void, ActionEnvironmentError | PullRequestError, ActionEnvironment | GitHubClient | PullRequest> =>
 	Effect.gen(function* () {
 		const env = yield* ActionEnvironment;
 		const client = yield* GitHubClient;
+		const prSvc = yield* PullRequest;
 		const { sha, repository } = yield* env.github;
 		const [owner, repo] = repository.split("/");
 
 		yield* Effect.logInfo(`Looking for PR associated with commit ${sha}`);
 
-		const prsResult = yield* Effect.either(
-			client.rest<ReadonlyArray<{ number: number; title: string }>>("listPullRequestsAssociatedWithCommit", (octokit) =>
-				(
-					octokit as {
-						rest: {
-							repos: {
-								listPullRequestsAssociatedWithCommit: (params: {
-									owner: string;
-									repo: string;
-									commit_sha: string;
-								}) => Promise<{ data: ReadonlyArray<{ number: number; title: string }> }>;
-							};
-						};
-					}
-				).rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: sha }),
-			),
-		);
+		const prsResult = yield* Effect.either(prSvc.listAssociatedWithCommit(sha));
 
 		if (prsResult._tag === "Left") {
 			yield* Effect.logWarning(`Failed to look up PR for commit: ${prsResult.left.reason}`);
@@ -603,8 +590,9 @@ export const linkIssuesFromCommits: Effect.Effect<
 	| CheckRunError
 	| ConfigError.ConfigError
 	| GitHubClientError
-	| GitHubIssueError,
-	ActionEnvironment | ActionOutputs | CheckRun | GitHubClient | GitHubIssue | GitTag
+	| GitHubIssueError
+	| PullRequestError,
+	ActionEnvironment | ActionOutputs | CheckRun | GitHubClient | GitHubIssue | GitTag | PullRequest
 > = Effect.gen(function* () {
 	const env = yield* ActionEnvironment;
 	const outputs = yield* ActionOutputs;

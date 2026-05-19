@@ -15,6 +15,7 @@ import type {
 	AttestError,
 	CommandRunnerError,
 	PackagePublishError,
+	PullRequestError,
 	ResolvedDependency,
 	SbomError,
 } from "@savvy-web/github-action-effects";
@@ -28,6 +29,7 @@ import {
 	NpmRegistry,
 	OidcTokenIssuer,
 	PackagePublish,
+	PullRequest,
 	Sbom,
 	buildSLSAProvenancePredicate,
 	decodeJwtClaims,
@@ -149,28 +151,16 @@ function isTargetPrivate(targetDir: string): boolean {
  * the filesystem after the merge) and fetches the base-branch version via the
  * GitHub Contents API.
  */
-const detectFromPR = (prNumber: number): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubClient> =>
+const detectFromPR = (
+	prNumber: number,
+): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubClient | PullRequest> =>
 	Effect.gen(function* () {
 		const client = yield* GitHubClient;
+		const pr = yield* PullRequest;
 		const { owner, repo } = yield* client.repo;
 
 		// List files changed in the merged PR
-		interface PrFile {
-			filename: string;
-			status: string;
-		}
-		const files = yield* client
-			.rest<PrFile[]>("pulls.listFiles", (octokit) => {
-				const ok = octokit as {
-					rest: {
-						pulls: {
-							listFiles: (p: Record<string, unknown>) => Promise<{ data: PrFile[] }>;
-						};
-					};
-				};
-				return ok.rest.pulls.listFiles({ owner, repo, pull_number: prNumber, per_page: 100 });
-			})
-			.pipe(Effect.catchAll(() => Effect.succeed([] as PrFile[])));
+		const files = yield* pr.listFiles(prNumber).pipe(Effect.catchAll((_: PullRequestError) => Effect.succeed([])));
 
 		// Filter to package.json files that were modified
 		const modifiedPkgJsonFiles = files.filter(
@@ -186,19 +176,11 @@ const detectFromPR = (prNumber: number): Effect.Effect<ReadonlyArray<DetectedRel
 		if (allPkgJsonFiles.length === 0) return [];
 
 		// Get the base SHA from the PR
-		interface PrData {
-			base: { sha: string };
-		}
-		const prData = yield* client
-			.rest<PrData>("pulls.get", (octokit) => {
-				const ok = octokit as {
-					rest: { pulls: { get: (p: Record<string, unknown>) => Promise<{ data: PrData }> } };
-				};
-				return ok.rest.pulls.get({ owner, repo, pull_number: prNumber });
-			})
-			.pipe(Effect.catchAll(() => Effect.succeed({ base: { sha: "" } } as PrData)));
+		const prData = yield* pr
+			.get(prNumber)
+			.pipe(Effect.catchAll((_: PullRequestError) => Effect.succeed({ baseSha: "" } as { baseSha?: string })));
 
-		const baseSha = prData.base.sha;
+		const baseSha = prData.baseSha ?? "";
 		const releases: DetectedRelease[] = [];
 
 		for (const file of allPkgJsonFiles) {
@@ -602,7 +584,7 @@ const publishOneTarget = (
  */
 export const detectReleases = (
 	args: PublishInputArgs,
-): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubClient> =>
+): Effect.Effect<ReadonlyArray<DetectedRelease>, never, GitHubClient | PullRequest> =>
 	Effect.gen(function* () {
 		let detected: ReadonlyArray<DetectedRelease>;
 
