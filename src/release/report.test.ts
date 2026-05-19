@@ -833,4 +833,50 @@ describe("buildSbomPreviewSummary", () => {
 		);
 		expect(md).toContain("_SBOM not generated for this build._");
 	});
+
+	it("renders the Config source line with the location when source is 'input'", () => {
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([pkg()]) }),
+			new Map([["@savvy-web/linked-1:dist/npm", sampleResolved]]),
+			{ source: "input", location: "sbom-config" },
+		);
+		expect(md).toContain("**Config source:** `input` (sbom-config)");
+	});
+
+	it("renders the Config source line with the file path when source is 'local'", () => {
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([pkg()]) }),
+			new Map([["@savvy-web/linked-1:dist/npm", sampleResolved]]),
+			{ source: "local", location: ".github/silk-release.json" },
+		);
+		expect(md).toContain("**Config source:** `local` (.github/silk-release.json)");
+	});
+
+	it("treats source 'none' as authoritative even when the resolved map is non-empty", () => {
+		// The map can carry inferred-only resolutions for every build (the
+		// `resolveSBOMMetadata` fallback). Source `"none"` is the one signal
+		// that no template reached the action, so the hint must fire.
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([pkg()]) }),
+			new Map([["@savvy-web/linked-1:dist/npm", sampleResolved]]),
+			{ source: "none" },
+		);
+		expect(md).toContain("**Config source:** `none` — no config supplied");
+		expect(md).toContain(
+			"_No `sbom-config` resolved — supply via the `sbom-config` action input or `vars.SILK_RELEASE_SBOM_TEMPLATE`._",
+		);
+	});
+
+	it("suppresses the empty-config hint when source is non-'none', even with a sparse map", () => {
+		// `source: "input"` means a template was supplied; the hint would
+		// mislead the reader into thinking no template arrived.
+		const md = buildSbomPreviewSummary(
+			validationOf({ publish: publishOf([pkg()]) }),
+			new Map<string, ResolvedSBOMMetadata>(),
+			{ source: "input", location: "sbom-config" },
+		);
+		expect(md).not.toContain(
+			"_No `sbom-config` resolved — supply via the `sbom-config` action input or `vars.SILK_RELEASE_SBOM_TEMPLATE`._",
+		);
+	});
 });

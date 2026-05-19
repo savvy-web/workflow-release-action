@@ -79,6 +79,7 @@ import { detectWorkflowPhase } from "./utils/detect-workflow-phase.js";
 import type { TagInfo } from "./utils/determine-tag-strategy.js";
 import { determineTagStrategy } from "./utils/determine-tag-strategy.js";
 import { linkIssuesFromCommits } from "./utils/link-issues-from-commits.js";
+import type { ConfigSource } from "./utils/load-release-config.js";
 import { updateReleaseBranch } from "./utils/update-release-branch.js";
 import { updateStickyComment } from "./utils/update-sticky-comment.js";
 import { validateBuilds } from "./utils/validate-builds.js";
@@ -319,6 +320,10 @@ const runValidation = Effect.gen(function* () {
 		// check-run summary so config-or-mapping bugs are immediately visible.
 		// `null` indicates `runValidationEffect` was not reached (build failure).
 		let resolvedSbomConfig: ReadonlyMap<string, ResolvedSBOMMetadata> | null = null;
+		// The source the `sbom-config` was loaded from this run (`input` /
+		// `local` / `variable` / `none`). Surfaced on the SBOM Preview
+		// check-run summary; `null` until `runValidationEffect` reports it.
+		let sbomConfigSource: ConfigSource | null = null;
 
 		if (buildResult.success) {
 			yield* Effect.logInfo("Validate publishing");
@@ -344,6 +349,7 @@ const runValidation = Effect.gen(function* () {
 				sbomSummary = report.sbomSummary;
 				reportFindings = report.findings;
 				resolvedSbomConfig = report.resolvedSbomConfig;
+				sbomConfigSource = report.sbomConfigSource;
 			}
 			yield* Effect.logInfo(
 				publishOk
@@ -543,7 +549,7 @@ const runValidation = Effect.gen(function* () {
 
 		const publishSummary = buildPublishValidationSummary(summaryDraftOutput.validation);
 		const releaseNotesSummary = buildReleaseNotesPreviewSummary(summaryDraftOutput.validation);
-		const sbomSummaryMd = buildSbomPreviewSummary(summaryDraftOutput.validation, resolvedSbomConfig);
+		const sbomSummaryMd = buildSbomPreviewSummary(summaryDraftOutput.validation, resolvedSbomConfig, sbomConfigSource);
 
 		const publishTitle = dryRun ? "🧪 Publish Validation (Dry Run)" : "📦 Publish Validation";
 		const releaseNotesTitle = dryRun ? "🧪 Release Notes Preview (Dry Run)" : "📋 Release Notes Preview";

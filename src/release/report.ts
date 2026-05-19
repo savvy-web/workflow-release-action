@@ -7,6 +7,7 @@ import {
 } from "@savvy-web/github-action-effects";
 import type { ValidationOutput } from "../schema/release-output.js";
 import type { ResolvedSBOMMetadata } from "../types/sbom-config.js";
+import type { ConfigSource } from "../utils/load-release-config.js";
 
 /**
  * The `validation` payload of a {@link ValidationOutput} — the single
@@ -610,6 +611,29 @@ export function buildReleaseNotesPreviewSummary(validation: ValidationPayload): 
 }
 
 /**
+ * Format a `ConfigSource` for the SBOM Preview "Config source" line.
+ *
+ * @remarks
+ * `"input"` is the most common (and most invisible) source — printing the
+ * input name beside it makes the source explicit. `"local"` carries the
+ * matched file path. `"variable"` carries the env-var name. `"none"` prints
+ * just the label.
+ */
+function formatSbomConfigSource(source: ConfigSource): string {
+	const location = source.location ?? "";
+	switch (source.source) {
+		case "input":
+			return location ? `\`input\` (${location})` : "`input`";
+		case "local":
+			return location ? `\`local\` (${location})` : "`local`";
+		case "variable":
+			return location ? `\`variable\` (${location})` : "`variable`";
+		case "none":
+			return "`none` — no config supplied";
+	}
+}
+
+/**
  * Build the SBOM Preview check-run markdown summary from the canonical
  * {@link ValidationOutput} validation payload, plus the per-build resolved
  * `sbom-config` metadata threaded through `runValidation`.
@@ -617,9 +641,13 @@ export function buildReleaseNotesPreviewSummary(validation: ValidationPayload): 
  * @remarks
  * Pure function — no I/O. Per build: component count, NTIA pass/fail, the
  * missing NTIA fields, and the resolved `sbom-config` metadata used (rendered
- * as a fenced JSON block). When `resolvedSbomConfig` is `null` or its lookup
- * is empty for every build, surfaces a hint so config-or-mapping bugs are
- * immediately visible.
+ * as a fenced JSON block). When the config source is `"none"` (or no source
+ * info is provided and the resolved map is empty), surfaces a hint so
+ * config-or-mapping bugs are immediately visible.
+ *
+ * The first line of the summary identifies which source the action chose
+ * (`input` / `local` / `variable` / `none`) — invaluable when NTIA still warns
+ * despite a caller-supplied template.
  *
  * The map is keyed by `${pkg.name}:${build.directory}` (the same key
  * `runValidation` writes).
@@ -627,6 +655,8 @@ export function buildReleaseNotesPreviewSummary(validation: ValidationPayload): 
  * @param validation - The canonical build-centric validation payload.
  * @param resolvedSbomConfig - Per-build resolved sbom-config metadata, or
  *   `null` when no map was produced.
+ * @param sbomConfigSource - Where the `sbom-config` was loaded from, or
+ *   `null` when `runValidation` did not reach the config-load step.
  * @returns Markdown string for the check-run summary.
  *
  * @public
@@ -634,9 +664,13 @@ export function buildReleaseNotesPreviewSummary(validation: ValidationPayload): 
 export function buildSbomPreviewSummary(
 	validation: ValidationPayload,
 	resolvedSbomConfig: ReadonlyMap<string, ResolvedSBOMMetadata> | null,
+	sbomConfigSource: ConfigSource | null = null,
 ): string {
 	const header = `## \u{1F50F} SBOM Preview`;
 	const packages = validation.publish.packages;
+
+	const sourceLine =
+		sbomConfigSource !== null ? `**Config source:** ${formatSbomConfigSource(sbomConfigSource)}` : null;
 
 	const hint =
 		"> _No `sbom-config` resolved — supply via the `sbom-config` action input or `vars.SILK_RELEASE_SBOM_TEMPLATE`._";
@@ -646,18 +680,30 @@ export function buildSbomPreviewSummary(
 		// caller that did supply a config (non-null, non-empty map) just sees
 		// the "no packages" line.
 		const hasConfig = resolvedSbomConfig !== null && resolvedSbomConfig.size > 0;
-		return hasConfig
-			? `${header}\n\n_No packages require an SBOM._`
-			: `${header}\n\n_No packages require an SBOM._\n\n${hint}`;
+		const parts: string[] = [header];
+		if (sourceLine !== null) parts.push(sourceLine);
+		parts.push("_No packages require an SBOM._");
+		if (!hasConfig && (sbomConfigSource === null || sbomConfigSource.source === "none")) {
+			parts.push(hint);
+		}
+		return parts.join("\n\n");
 	}
 
-	// True when at least one build had its sbom-config metadata resolved.
-	const hasAnyResolved =
-		resolvedSbomConfig !== null && Array.from(resolvedSbomConfig.values()).some((v) => v !== undefined);
+	// Source field is authoritative when supplied — every processed build
+	// records a `ResolvedSBOMMetadata` from `resolveSBOMMetadata` (which falls
+	// back to inferred-only when no template), so the map alone can't tell us
+	// "no template supplied." When the caller did not provide `sbomConfigSource`
+	// (e.g. legacy callers, or tests), fall back to "map is null or empty" as
+	// the best available approximation.
+	const noTemplateSupplied =
+		sbomConfigSource !== null
+			? sbomConfigSource.source === "none"
+			: resolvedSbomConfig === null || resolvedSbomConfig.size === 0;
 
 	const sections: string[] = [header];
+	if (sourceLine !== null) sections.push(sourceLine);
 
-	if (!hasAnyResolved) {
+	if (noTemplateSupplied) {
 		sections.push(hint);
 	}
 

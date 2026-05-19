@@ -35,6 +35,7 @@ import { GithubPackagesTokenState, STATE_KEYS } from "../state.js";
 import type { EnhancedCycloneDXDocument, ResolvedSBOMMetadata, SBOMMetadataConfig } from "../types/sbom-config.js";
 import { countChangesetsPerPackage } from "../utils/count-changesets.js";
 import { inferSBOMMetadata, resolveSBOMMetadata } from "../utils/infer-sbom-metadata.js";
+import type { ConfigSource } from "../utils/load-release-config.js";
 import { loadSBOMConfig } from "../utils/load-release-config.js";
 import { validateNTIACompliance } from "../utils/validate-ntia-compliance.js";
 import { ValidationError } from "./errors.js";
@@ -103,6 +104,22 @@ export interface ValidationReport {
 	 * was version-only).
 	 */
 	readonly resolvedSbomConfig: ReadonlyMap<string, ResolvedSBOMMetadata>;
+	/**
+	 * Debug-only — where the `sbom-config` was loaded from this run.
+	 *
+	 * `"input"` = the `sbom-config` action input was non-empty;
+	 * `"local"` = `.github/silk-release.json[c]` matched;
+	 * `"variable"` = the `SILK_RELEASE_SBOM_TEMPLATE` env var was set;
+	 * `"none"` = no source supplied a config.
+	 *
+	 * Surfaced on the SBOM Preview check-run summary so a reader can see at a
+	 * glance which source the action chose — invaluable when the NTIA warning
+	 * fires despite a template being passed in by the caller.
+	 *
+	 * `null` only for the early-return path (no released packages), where the
+	 * config is never consulted.
+	 */
+	readonly sbomConfigSource: ConfigSource | null;
 }
 
 // ─── Internal types ───────────────────────────────────────────────────────────
@@ -487,6 +504,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 				sbomSummary: "No packages require SBOM",
 				findings: sbomConfigFindings,
 				resolvedSbomConfig: new Map<string, ResolvedSBOMMetadata>(),
+				sbomConfigSource: sbomConfigResult.source,
 			} satisfies ValidationReport;
 		}
 
@@ -801,5 +819,6 @@ export const runValidation = (args: ValidationInputArgs) =>
 			sbomSummary,
 			findings,
 			resolvedSbomConfig,
+			sbomConfigSource: sbomConfigResult.source,
 		} satisfies ValidationReport;
 	});
