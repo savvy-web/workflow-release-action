@@ -17,10 +17,18 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { AttestError, GitHubReleaseError, GitTagError, SigstoreSigner } from "@savvy-web/github-action-effects";
+import type {
+	AttestError,
+	GitHubArtifactMetadataError,
+	GitHubClientError,
+	GitHubReleaseError,
+	GitTagError,
+	SigstoreSigner,
+} from "@savvy-web/github-action-effects";
 import {
 	ActionLogger,
 	Attest,
+	GitHubArtifactMetadata,
 	GitHubClient,
 	GitHubRelease,
 	GitTag,
@@ -263,7 +271,8 @@ const buildProvenancePredicate = (): Effect.Effect<Record<string, unknown> | nul
  * GitHub Packages artifact.
  *
  * Ports `runCreateStorageRecord` from `attest-runner.ts` as a pure Effect using
- * `GitHubClient.rest`.  Non-fatal — failures are logged as warnings.
+ * the `GitHubArtifactMetadata` service.  Non-fatal — failures are logged as
+ * warnings.
  *
  * Only called for GitHub Packages targets.
  */
@@ -271,39 +280,28 @@ const createStorageRecord = (
 	packageName: string,
 	version: string,
 	digest: string,
-): Effect.Effect<readonly number[] | undefined, never, GitHubClient> =>
+): Effect.Effect<readonly number[] | undefined, never, GitHubClient | GitHubArtifactMetadata> =>
 	Effect.gen(function* () {
 		const client = yield* GitHubClient;
+		const artifactMetadata = yield* GitHubArtifactMetadata;
 		const { owner } = yield* client.repo;
 
 		const purlName = `pkg:npm/${packageName}@${version}`;
 		const unscopedName = getUnscopedName(packageName);
 		const artifactUrl = `https://github.com/${owner}/pkgs/npm/${unscopedName}`;
 
-		const body = {
+		const ids = yield* artifactMetadata.createStorageRecord({
 			name: purlName,
 			digest,
 			version,
-			registry_url: "https://npm.pkg.github.com/",
-			artifact_url: artifactUrl,
+			registryUrl: "https://npm.pkg.github.com/",
+			artifactUrl,
 			repo: unscopedName,
-		};
-
-		const ids = yield* client.rest("orgs.createArtifactStorageRecord", async (octokit) => {
-			const ok = octokit as {
-				request: (route: string, params: Record<string, unknown>) => Promise<{ data: unknown }>;
-			};
-			const response = await ok.request("POST /orgs/{owner}/artifacts/metadata/storage-record", { owner, ...body });
-			const data = typeof response.data === "string" ? (JSON.parse(response.data) as unknown) : response.data;
-			const storageIds = (data as { storage_records?: Array<{ id: number }> } | null)?.storage_records?.map(
-				(r) => r.id,
-			);
-			return { data: storageIds };
 		});
 
-		return ids ?? undefined;
+		return ids;
 	}).pipe(
-		Effect.catchAll((e: unknown) =>
+		Effect.catchAll((e: GitHubArtifactMetadataError | GitHubClientError) =>
 			Effect.gen(function* () {
 				yield* Effect.logWarning(
 					`runReleases: failed to create storage record for ${packageName}@${version}: ${e instanceof Error ? e.message : String(e)}`,
@@ -378,7 +376,14 @@ const processOneTag = (
 ): Effect.Effect<
 	readonly [ReleaseInfo | null, string | null],
 	never,
-	GitTag | GitHubRelease | Attest | OidcTokenIssuer | GitHubClient | SigstoreSigner | WorkspaceDiscovery
+	| GitTag
+	| GitHubRelease
+	| GitHubArtifactMetadata
+	| Attest
+	| OidcTokenIssuer
+	| GitHubClient
+	| SigstoreSigner
+	| WorkspaceDiscovery
 > =>
 	Effect.gen(function* () {
 		yield* Effect.logDebug(`runReleases: processing ${tag.name}`);
@@ -441,44 +446,21 @@ const processOneTag = (
 
 		// ── Step 4: Upload assets and attest ──────────────────────────────────────
 
-		// The `GitHubRelease` service does not expose `updateRelease` or
-		// `listReleaseAssets` — use `GitHubClient.rest` for those two calls
-		// (mirrors the pattern used in `createStorageRecord` above).
-		const client = yield* GitHubClient;
-
 		// Pre-fetch existing release assets for idempotency: if a re-run
 		// encounters an asset name already attached to this release, skip the
 		// upload and reuse the existing URL (ports `uploadAssetIdempotent` +
 		// the `existingAssetsByName` pre-fetch from `create-github-releases.ts`).
-		const existingAssetsByName = yield* client
-			.rest("repos.listReleaseAssets", async (octokit) => {
-				const ok = octokit as {
-					rest: {
-						repos: {
-							listReleaseAssets: (params: {
-								owner: string;
-								repo: string;
-								release_id: number;
-								per_page: number;
-							}) => Promise<{ data: Array<{ name: string; browser_download_url: string; size: number }> }>;
-						};
-					};
-				};
-				return ok.rest.repos.listReleaseAssets({ owner, repo, release_id: releaseData.id, per_page: 100 });
-			})
-			.pipe(
-				Effect.map(
-					(assets) => new Map(assets.map((a) => [a.name, { url: a.browser_download_url, size: a.size }] as const)),
-				),
-				Effect.catchAll((e: unknown) =>
-					Effect.gen(function* () {
-						yield* Effect.logWarning(
-							`runReleases: failed to list existing assets for ${tag.name}: ${e instanceof Error ? e.message : String(e)}`,
-						);
-						return new Map<string, { url: string; size: number }>();
-					}),
-				),
-			);
+		const existingAssetsByName = yield* releaseSvc.listReleaseAssets(releaseData.id).pipe(
+			Effect.map((assets) => new Map(assets.map((a) => [a.name, { url: a.url, size: a.size }] as const))),
+			Effect.catchAll((e) =>
+				Effect.gen(function* () {
+					yield* Effect.logWarning(
+						`runReleases: failed to list existing assets for ${tag.name}: ${e instanceof Error ? e.message : String(e)}`,
+					);
+					return new Map<string, { url: string; size: number }>();
+				}),
+			),
+		);
 
 		const releaseInfo: ReleaseInfo = {
 			tag: tag.name,
@@ -673,30 +655,10 @@ const processOneTag = (
 
 		// ── Step 5: Refresh release body with real asset links ────────────────────
 		if (releaseInfo.assets.length > 0) {
-			yield* client
-				.rest("repos.updateRelease", async (octokit) => {
-					const ok = octokit as {
-						rest: {
-							repos: {
-								updateRelease: (params: {
-									owner: string;
-									repo: string;
-									release_id: number;
-									body: string;
-								}) => Promise<{ data: unknown }>;
-							};
-						};
-					};
-					return ok.rest.repos.updateRelease({
-						owner,
-						repo,
-						release_id: releaseData.id,
-						body: releaseNotes.trim(),
-					});
-				})
+			yield* releaseSvc
+				.updateRelease(releaseData.id, { body: releaseNotes.trim() })
 				.pipe(
-					Effect.flatMap(() => Effect.void),
-					Effect.catchAll((e: unknown) =>
+					Effect.catchAll((e) =>
 						Effect.logWarning(
 							`runReleases: failed to update release body for ${tag.name}: ${e instanceof Error ? e.message : String(e)}`,
 						),
@@ -732,8 +694,8 @@ const processOneTag = (
  *
  * The effect never fails (all errors are captured into `ReleasesReport`).
  * Providing the Effect is the caller's responsibility (use
- * `GitTagLive`, `GitHubReleaseLive`, `AttestLive`, `GitHubClientLive`, and
- * `OidcTokenIssuerLive` in production).
+ * `GitTagLive`, `GitHubReleaseLive`, `GitHubArtifactMetadataLive`,
+ * `AttestLive`, `GitHubClientLive`, and `OidcTokenIssuerLive` in production).
  *
  * @public
  */
@@ -742,7 +704,15 @@ export const runReleases = (
 ): Effect.Effect<
 	ReleasesReport,
 	ReleasesError,
-	GitTag | GitHubRelease | Attest | OidcTokenIssuer | GitHubClient | SigstoreSigner | ActionLogger | WorkspaceDiscovery
+	| GitTag
+	| GitHubRelease
+	| GitHubArtifactMetadata
+	| Attest
+	| OidcTokenIssuer
+	| GitHubClient
+	| SigstoreSigner
+	| ActionLogger
+	| WorkspaceDiscovery
 > =>
 	Effect.gen(function* () {
 		if (args.tags.length === 0) {

@@ -18,6 +18,7 @@ import { join } from "node:path";
 import {
 	ActionLoggerTest,
 	AttestTest,
+	GitHubArtifactMetadataTest,
 	GitHubClientTest,
 	GitHubReleaseTest,
 	GitTagTest,
@@ -98,17 +99,17 @@ const workspaceDiscoveryLayer = Layer.succeed(WorkspaceDiscovery, {
 	importerMap: (_cwd?: string) => Effect.succeed(new Map()),
 });
 
-/** Build a GitHubClientTest layer answering the REST calls runReleases makes. */
+/**
+ * Build a GitHubClientTest layer for runReleases.
+ *
+ * runReleases no longer makes raw REST calls — release / storage-record
+ * traffic now goes through the `GitHubRelease` and `GitHubArtifactMetadata`
+ * services. The only thing read off `GitHubClient` is the `repo` slug
+ * (in `runReleases` itself and `createStorageRecord`).
+ */
 const makeGhClientLayer = () => {
 	const state: import("@savvy-web/github-action-effects").GitHubClientTestState = {
-		restResponses: new Map([
-			// Storage-record endpoint
-			["orgs.createArtifactStorageRecord", { data: { storage_records: [{ id: 42 }] } }],
-			// Idempotency: no pre-existing assets
-			["repos.listReleaseAssets", { data: [] }],
-			// Post-upload body refresh
-			["repos.updateRelease", { data: {} }],
-		]),
+		restResponses: new Map(),
 		graphqlResponses: new Map<string, unknown>(),
 		paginateResponses: new Map<string, Array<unknown[]>>(),
 		repo: { owner: "test-owner", repo: "test-repo" },
@@ -147,6 +148,7 @@ describe("runReleases", () => {
 				oidcLayer,
 				sigstoreLayer,
 				makeGhClientLayer(),
+				GitHubArtifactMetadataTest.empty().layer,
 				workspaceDiscoveryLayer,
 			);
 
@@ -187,6 +189,7 @@ describe("runReleases", () => {
 				releases: new Map(),
 				createCalls: [],
 				uploadCalls: [],
+				assets: new Map(),
 			};
 
 			const failingReleaseLayer = Layer.succeed((await import("@savvy-web/github-action-effects")).GitHubRelease, {
@@ -225,6 +228,9 @@ describe("runReleases", () => {
 						url: `https://github.com/test-owner/test-repo/releases/assets/1`,
 						size: 1024,
 					};
+					const existing = customReleaseState.assets.get(releaseId) ?? [];
+					existing.push(asset);
+					customReleaseState.assets.set(releaseId, existing);
 					return Effect.succeed(asset);
 				},
 				getByTag: (tag: string) => {
@@ -235,6 +241,21 @@ describe("runReleases", () => {
 					);
 				},
 				list: () => Effect.succeed([...customReleaseState.releases.values()]),
+				updateRelease: (releaseId: number, options: { body?: string; name?: string }) => {
+					const existing = [...customReleaseState.releases.values()].find((r) => r.id === releaseId);
+					const updated: import("@savvy-web/github-action-effects").ReleaseData = {
+						id: releaseId,
+						tag: existing?.tag ?? "",
+						name: options.name ?? existing?.name ?? "",
+						body: options.body ?? existing?.body ?? "",
+						draft: existing?.draft ?? false,
+						prerelease: existing?.prerelease ?? false,
+						uploadUrl: existing?.uploadUrl ?? "",
+					};
+					if (existing) customReleaseState.releases.set(existing.tag, updated);
+					return Effect.succeed(updated);
+				},
+				listReleaseAssets: (releaseId: number) => Effect.succeed(customReleaseState.assets.get(releaseId) ?? []),
 			});
 
 			const attestLayer = AttestTest.empty();
@@ -260,6 +281,7 @@ describe("runReleases", () => {
 				oidcLayer,
 				sigstoreLayer,
 				makeGhClientLayer(),
+				GitHubArtifactMetadataTest.empty().layer,
 				workspaceDiscoveryLayer,
 			);
 
@@ -310,6 +332,7 @@ describe("runReleases", () => {
 				oidcLayer,
 				sigstoreLayer,
 				makeGhClientLayer(),
+				GitHubArtifactMetadataTest.empty().layer,
 				workspaceDiscoveryLayer,
 			);
 
@@ -385,6 +408,7 @@ describe("runReleases", () => {
 				oidcLayer,
 				sigstoreLayer,
 				makeGhClientLayer(),
+				GitHubArtifactMetadataTest.empty().layer,
 				workspaceDiscoveryLayer,
 			);
 
@@ -416,6 +440,165 @@ describe("runReleases", () => {
 			expect(assetNames).toContain("pkg.tgz");
 			expect(assetNames.some((n) => n.endsWith(".sbom.json"))).toBe(true);
 			expect(assetNames.some((n) => n.endsWith(".api.json"))).toBe(true);
+		});
+	});
+
+	describe("GitHub Packages storage record", () => {
+		let tmpDir: string;
+
+		beforeEach(() => {
+			tmpDir = mkdtempSync(join(tmpdir(), "releases-test-"));
+		});
+
+		afterEach(() => {
+			rmSync(tmpDir, { recursive: true, force: true });
+		});
+
+		it("creates an artifact-metadata storage record for a GitHub Packages target", async () => {
+			// Arrange: a real tarball published to a GitHub Packages registry.
+			const tarballPath = join(tmpDir, "pkg.tgz");
+			writeFileSync(tarballPath, Buffer.from("fake tarball"));
+
+			const { state: tagState, layer: tagLayer } = GitTagTest.empty();
+			const { state: releaseState, layer: releaseLayer } = GitHubReleaseTest.empty();
+			const attestLayer = AttestTest.empty();
+			const { state: artifactState, layer: artifactLayer } = GitHubArtifactMetadataTest.empty();
+
+			// A package whose only target is GitHub Packages — triggers the
+			// createStorageRecord path.
+			const publishResult = makePublishPackagesResult([
+				{
+					name: "@test/pkg-gh",
+					version: "5.0.0",
+					targets: [
+						{
+							target: {
+								protocol: "npm" as const,
+								registry: "https://npm.pkg.github.com/",
+								directory: tmpDir,
+								access: "public" as const,
+								provenance: true,
+								tag: "latest" as const,
+								tokenEnv: null,
+							},
+							success: true,
+							tarballPath,
+							tarballDigest: "sha256:deadbeef",
+						},
+					],
+				},
+			]);
+
+			const tags: TagInfo[] = [makeTag("v5.0.0", "@test/pkg-gh", "5.0.0")];
+
+			const args: ReleasesInputArgs = {
+				tags,
+				publishResult,
+				packageManager: "pnpm",
+				dryRun: false,
+			};
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				tagLayer,
+				releaseLayer,
+				attestLayer,
+				oidcLayer,
+				sigstoreLayer,
+				makeGhClientLayer(),
+				artifactLayer,
+				workspaceDiscoveryLayer,
+			);
+
+			// Act
+			const result: ReleasesReport = await Effect.runPromise(
+				runReleases(args).pipe(Effect.provide(layers)) as Effect.Effect<ReleasesReport>,
+			);
+
+			// Assert: release succeeded and the tarball was uploaded
+			expect(result.success).toBe(true);
+			expect(tagState.createCalls).toHaveLength(1);
+			expect(releaseState.createCalls).toHaveLength(1);
+			expect(releaseState.uploadCalls.map((c) => c.name)).toContain("pkg.tgz");
+
+			// Assert: a storage record was created via GitHubArtifactMetadata
+			expect(artifactState.calls).toHaveLength(1);
+			const call = artifactState.calls[0];
+			expect(call).toBeDefined();
+			if (!call) return;
+			expect(call.name).toBe("pkg:npm/@test/pkg-gh@5.0.0");
+			expect(call.version).toBe("5.0.0");
+			expect(call.digest).toBe("sha256:deadbeef");
+			expect(call.repo).toBe("pkg-gh");
+			expect(call.registryUrl).toBe("https://npm.pkg.github.com/");
+			expect(call.artifactUrl).toBe("https://github.com/test-owner/pkgs/npm/pkg-gh");
+		});
+
+		it("reuses a pre-existing release asset instead of re-uploading", async () => {
+			// Arrange: a real tarball, and a release asset already attached so
+			// listReleaseAssets returns it.
+			const tarballPath = join(tmpDir, "pkg.tgz");
+			writeFileSync(tarballPath, Buffer.from("fake tarball"));
+
+			const { layer: tagLayer } = GitTagTest.empty();
+			const { state: releaseState, layer: releaseLayer } = GitHubReleaseTest.empty();
+			const attestLayer = AttestTest.empty();
+			const { layer: artifactLayer } = GitHubArtifactMetadataTest.empty();
+
+			// GitHubReleaseTest.create assigns the first release id 1 (size + 1
+			// over an empty map). Pre-seed an asset named "pkg.tgz" under that
+			// id so the idempotent-reuse path in processOneTag is taken.
+			releaseState.assets.set(1, [
+				{
+					id: 9,
+					name: "pkg.tgz",
+					url: "https://github.com/test-owner/test-repo/releases/assets/9",
+					size: 4096,
+				},
+			]);
+
+			const publishResult = makePublishPackagesResult([makePublishResult("@test/pkg-e", "6.0.0", tarballPath)]);
+			const tags: TagInfo[] = [makeTag("v6.0.0", "@test/pkg-e", "6.0.0")];
+
+			const args: ReleasesInputArgs = {
+				tags,
+				publishResult,
+				packageManager: "pnpm",
+				dryRun: false,
+			};
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				tagLayer,
+				releaseLayer,
+				attestLayer,
+				oidcLayer,
+				sigstoreLayer,
+				makeGhClientLayer(),
+				artifactLayer,
+				workspaceDiscoveryLayer,
+			);
+
+			// Act
+			const result: ReleasesReport = await Effect.runPromise(
+				runReleases(args).pipe(Effect.provide(layers)) as Effect.Effect<ReleasesReport>,
+			);
+
+			// Assert: release succeeded
+			expect(result.success).toBe(true);
+			expect(result.releases).toHaveLength(1);
+
+			// Assert: the pre-existing asset was reused — no upload recorded
+			expect(releaseState.uploadCalls).toHaveLength(0);
+
+			// Assert: the released AssetInfo carries the pre-existing asset's URL/size
+			const release = result.releases[0];
+			expect(release).toBeDefined();
+			if (!release) return;
+			const tarballAsset = release.assets.find((a) => a.name === "pkg.tgz");
+			expect(tarballAsset).toBeDefined();
+			expect(tarballAsset?.downloadUrl).toBe("https://github.com/test-owner/test-repo/releases/assets/9");
+			expect(tarballAsset?.size).toBe(4096);
 		});
 	});
 });
