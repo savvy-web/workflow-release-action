@@ -2,9 +2,9 @@
  * Unit tests for `extractReleaseNotes`.
  *
  * Covers the four discriminated outcomes (`found`, `no-changelog`,
- * `version-not-found`, `error`) plus the heading-shape matrix the original
- * imperative module's regex was tuned for (bracketed, plain, with trailing
- * date, varying `#` levels).
+ * `version-not-found`, `error`) and the "first-H2-to-second-H2" rule across
+ * both heading formats: `## 5.0.13` (fixed-release) and
+ * `## @scope/pkg@5.0.13` (multi-package tagged).
  */
 
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -26,71 +26,71 @@ const writeChangelog = (body: string): void => {
 };
 
 describe("extractReleaseNotes - found", () => {
-	it("extracts a bracketed version heading with a trailing date", () => {
-		writeChangelog(
-			"# Changelog\n\n## [1.2.3] - 2026-05-19\n\n### Patch Changes\n\n- Fix a bug\n\n## [1.2.2] - 2026-04-01\n\n- previous\n",
-		);
-		const result = extractReleaseNotes(pkgPath, "1.2.3");
+	it("extracts the body between the first H2 and the second H2 (fixed-release heading)", () => {
+		writeChangelog("# Changelog\n\n## 5.0.13\n\n### Patch Changes\n\n- Fix a bug\n\n## 5.0.12\n\n- previous\n");
+		const result = extractReleaseNotes(pkgPath);
 		expect(result.status).toBe("found");
 		if (result.status !== "found") return;
 		expect(result.content).toContain("### Patch Changes");
 		expect(result.content).toContain("- Fix a bug");
-		expect(result.content).not.toContain("previous");
+		expect(result.content).not.toContain("## 5.0.13"); // heading itself excluded
+		expect(result.content).not.toContain("previous"); // second section excluded
 	});
 
-	it("extracts a plain version heading without brackets", () => {
-		writeChangelog("# Changelog\n\n## 1.2.3\n\n### Minor Changes\n\n- Add feature\n\n## 1.2.2\n\n- old\n");
-		const result = extractReleaseNotes(pkgPath, "1.2.3");
-		expect(result.status).toBe("found");
-		if (result.status !== "found") return;
-		expect(result.content).toContain("Add feature");
-		expect(result.content).not.toContain("old");
-	});
-
-	it("respects the heading level — a deeper sibling does not terminate the section", () => {
+	it("extracts the body when the first H2 is the multi-package tagged shape", () => {
 		writeChangelog(
-			"# Changelog\n\n## 1.2.3\n\n### Patch Changes\n\n- Fix\n\n#### Inner\n\nDeep detail.\n\n## 1.2.2\n\n- old\n",
+			"# Changelog\n\n## @savvy-web/standalone-package@0.9.5\n\n- New feature\n\n## @savvy-web/standalone-package@0.9.4\n\n- old\n",
 		);
-		const result = extractReleaseNotes(pkgPath, "1.2.3");
+		const result = extractReleaseNotes(pkgPath);
 		expect(result.status).toBe("found");
 		if (result.status !== "found") return;
-		expect(result.content).toContain("Inner");
-		expect(result.content).toContain("Deep detail.");
+		expect(result.content).toContain("- New feature");
 		expect(result.content).not.toContain("old");
 	});
 
-	it("handles a version with a regex metacharacter via escapeRegex", () => {
-		writeChangelog("# Changelog\n\n## 1.2.3-rc.1\n\n- prerelease note\n\n## 1.2.2\n\n- old\n");
-		const result = extractReleaseNotes(pkgPath, "1.2.3-rc.1");
+	it("includes H3 sub-headings and runs to end-of-file when only one H2 exists", () => {
+		// First-release CHANGELOG — no prior version section to terminate at.
+		writeChangelog("# Changelog\n\n## 0.1.0\n\n### Minor Changes\n\n- Initial release.\n");
+		const result = extractReleaseNotes(pkgPath);
 		expect(result.status).toBe("found");
 		if (result.status !== "found") return;
-		expect(result.content).toContain("prerelease note");
+		expect(result.content).toContain("### Minor Changes");
+		expect(result.content).toContain("- Initial release.");
+	});
+
+	it("includes nested H3 sub-sections — only H2 terminates a release section", () => {
+		writeChangelog(
+			"# Changelog\n\n## 1.2.3\n\n### Patch Changes\n\n- Fix\n\n### Other\n\n- [`abc`] Tetsing flow\n\n## 1.2.2\n\n- old\n",
+		);
+		const result = extractReleaseNotes(pkgPath);
+		expect(result.status).toBe("found");
+		if (result.status !== "found") return;
+		expect(result.content).toContain("### Patch Changes");
+		expect(result.content).toContain("### Other");
+		expect(result.content).toContain("Tetsing flow");
+		expect(result.content).not.toContain("old");
 	});
 });
 
 describe("extractReleaseNotes - failure paths", () => {
 	it("returns no-changelog when CHANGELOG.md does not exist", () => {
-		const result = extractReleaseNotes(pkgPath, "1.2.3");
+		const result = extractReleaseNotes(pkgPath);
 		expect(result.status).toBe("no-changelog");
 	});
 
-	it("returns version-not-found when the version's heading is missing", () => {
-		writeChangelog("# Changelog\n\n## 1.2.2\n\n- old\n");
-		const result = extractReleaseNotes(pkgPath, "9.9.9");
+	it("returns version-not-found when the file has no H2 sections", () => {
+		writeChangelog("# Changelog\n\nNo releases yet.\n");
+		const result = extractReleaseNotes(pkgPath);
 		expect(result.status).toBe("version-not-found");
 		if (result.status !== "version-not-found") return;
-		expect(result.reason).toMatch(/Could not find/);
+		expect(result.reason).toMatch(/no H2 section/);
 	});
 
-	it("returns version-not-found when the heading matches but the section is empty", () => {
-		// A heading with no body content between it and the next sibling heading
-		// is a malformed CHANGELOG — surface as `version-not-found` so the
-		// renderer shows a ⚠️ rather than an empty block masquerading as
-		// extracted notes.
+	it("returns version-not-found when the first H2's section is empty", () => {
 		writeChangelog("# Changelog\n\n## 1.2.3\n\n## 1.2.2\n\n- old\n");
-		const result = extractReleaseNotes(pkgPath, "1.2.3");
+		const result = extractReleaseNotes(pkgPath);
 		expect(result.status).toBe("version-not-found");
 		if (result.status !== "version-not-found") return;
-		expect(result.reason).toMatch(/heading present but section is empty/);
+		expect(result.reason).toMatch(/no content/);
 	});
 });

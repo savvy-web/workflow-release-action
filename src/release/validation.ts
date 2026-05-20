@@ -545,9 +545,10 @@ export const runValidation = (args: ValidationInputArgs) =>
 			const targets = yield* resolvePublishableTargets(pkg, workspaceRoot);
 
 			// Read the CHANGELOG.md `changeset version` already wrote — the
-			// release branch carries the per-version section. A version-only
-			// package still has a CHANGELOG; the same extractor applies.
-			const releaseNotes = extractReleaseNotes(pkg.path, pkg.version);
+			// release branch carries the per-version section. The extractor
+			// takes the body of the first H2 (always the newest entry); a
+			// version-only package still has a CHANGELOG, same rule applies.
+			const releaseNotes = extractReleaseNotes(pkg.path);
 
 			if (targets.length === 0) {
 				yield* Effect.logDebug(`${pkg.name}: no publish targets (version-only)`);

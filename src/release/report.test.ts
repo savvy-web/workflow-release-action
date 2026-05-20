@@ -557,9 +557,11 @@ describe("buildValidationComment", () => {
 });
 
 describe("buildPublishValidationSummary", () => {
-	it("renders the Publish Validation header and totals line", () => {
+	it("renders the totals line — the body does not repeat the check-run title", () => {
 		const md = buildPublishValidationSummary(validationOf({ publish: publishOf([pkg()]) }));
-		expect(md).toContain("## 📦 Publish Validation");
+		// The check-run page already shows "📦 Publish Validation"; the body
+		// must not duplicate it as a `## ...` heading.
+		expect(md).not.toContain("## 📦 Publish Validation");
 		expect(md).toContain("**Targets ready:** 1/1");
 		expect(md).toContain("**npm:** ✅");
 		expect(md).toContain("**GitHub Packages:** ✅");
@@ -658,7 +660,9 @@ describe("buildReleaseNotesPreviewSummary", () => {
 				publish: publishOf([pkg({ changesetCount: 2 })]),
 			}),
 		);
-		expect(md).toContain("## 📋 Release Notes Preview");
+		// The check-run page already shows "📋 Release Notes Preview"; the
+		// body must not duplicate it as a `## ...` heading.
+		expect(md).not.toContain("## 📋 Release Notes Preview");
 		expect(md).toContain("**1 package(s) ready for release on merge.**");
 		expect(md).toContain("@savvy-web/linked-1");
 		expect(md).toContain("5.0.12 → 5.0.13");
@@ -673,7 +677,7 @@ describe("buildReleaseNotesPreviewSummary", () => {
 
 	it("renders an empty-state when no packages are being released", () => {
 		const md = buildReleaseNotesPreviewSummary(validationOf({ publish: publishOf([]) }));
-		expect(md).toContain("## 📋 Release Notes Preview");
+		expect(md).not.toContain("## 📋 Release Notes Preview");
 		expect(md).toContain("_No packages are being released._");
 	});
 
@@ -790,7 +794,9 @@ describe("buildSbomPreviewSummary", () => {
 			validationOf({ publish: publishOf([pkg()]) }),
 			new Map([["@savvy-web/linked-1:dist/npm", sampleResolved]]),
 		);
-		expect(md).toContain("## 🔏 SBOM Preview");
+		// The check-run page already shows "🔏 SBOM Preview"; the body must
+		// not duplicate it as a `## ...` heading.
+		expect(md).not.toContain("## 🔏 SBOM Preview");
 		expect(md).toContain("`dist/npm`");
 		expect(md).toContain("SBOM: 3 components · NTIA ✅");
 	});
@@ -846,7 +852,7 @@ describe("buildSbomPreviewSummary", () => {
 
 	it("renders an empty-state when no packages require an SBOM", () => {
 		const md = buildSbomPreviewSummary(validationOf({ publish: publishOf([]) }), new Map());
-		expect(md).toContain("## 🔏 SBOM Preview");
+		expect(md).not.toContain("## 🔏 SBOM Preview");
 		expect(md).toContain("_No packages require an SBOM._");
 	});
 

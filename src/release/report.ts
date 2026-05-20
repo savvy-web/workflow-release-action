@@ -543,17 +543,18 @@ export { getBumpTypeIcon };
 export function buildPublishValidationSummary(validation: ValidationPayload): string {
 	const publish = validation.publish;
 
-	const header = `## \u{1F4E6} Publish Validation`;
+	// The check-run page already renders the title; the body must not repeat
+	// a `## Publish Validation` heading underneath it.
 	const totals =
 		`**Targets ready:** ${publish.readyTargets}/${publish.totalTargets} · ` +
 		`**npm:** ${publish.npmReady ? "✅" : "❌"} · ` +
 		`**GitHub Packages:** ${publish.githubPackagesReady ? "✅" : "❌"}`;
 
 	if (publish.packages.length === 0) {
-		return `${header}\n\n${totals}\n\n_No packages with publish targets._`;
+		return `${totals}\n\n_No packages with publish targets._`;
 	}
 
-	const sections: string[] = [header, totals];
+	const sections: string[] = [totals];
 
 	for (const pkg of publish.packages) {
 		const pkgStatus = getPackageStatus(pkg);
@@ -628,11 +629,12 @@ function renderReleaseNotesSection(pkg: ValidationPayload["publish"]["packages"]
  * @public
  */
 export function buildReleaseNotesPreviewSummary(validation: ValidationPayload): string {
-	const header = `## \u{1F4CB} Release Notes Preview`;
+	// The check-run page already renders the title; the body must not repeat
+	// a `## Release Notes Preview` heading underneath it.
 	const packages = validation.publish.packages;
 
 	if (packages.length === 0) {
-		return `${header}\n\n_No packages are being released._`;
+		return "_No packages are being released._";
 	}
 
 	const notesIcon = (notes: ValidationPayload["publish"]["packages"][number]["releaseNotes"]): string =>
@@ -648,7 +650,7 @@ export function buildReleaseNotesPreviewSummary(validation: ValidationPayload): 
 
 	const sections = packages.map(renderReleaseNotesSection);
 
-	return [header, intro, table, "---", ...sections].join("\n\n");
+	return [intro, table, "---", ...sections].join("\n\n");
 }
 
 /**
@@ -707,7 +709,8 @@ export function buildSbomPreviewSummary(
 	resolvedSbomConfig: ReadonlyMap<string, ResolvedSBOMMetadata> | null,
 	sbomConfigSource: ConfigSource | null = null,
 ): string {
-	const header = `## \u{1F50F} SBOM Preview`;
+	// The check-run page already renders the title; the body must not repeat
+	// a `## SBOM Preview` heading underneath it.
 	const packages = validation.publish.packages;
 
 	const sourceLine =
@@ -721,7 +724,7 @@ export function buildSbomPreviewSummary(
 		// caller that did supply a config (non-null, non-empty map) just sees
 		// the "no packages" line.
 		const hasConfig = resolvedSbomConfig !== null && resolvedSbomConfig.size > 0;
-		const parts: string[] = [header];
+		const parts: string[] = [];
 		if (sourceLine !== null) parts.push(sourceLine);
 		parts.push("_No packages require an SBOM._");
 		if (!hasConfig && (sbomConfigSource === null || sbomConfigSource.source === "none")) {
@@ -741,7 +744,7 @@ export function buildSbomPreviewSummary(
 			? sbomConfigSource.source === "none"
 			: resolvedSbomConfig === null || resolvedSbomConfig.size === 0;
 
-	const sections: string[] = [header];
+	const sections: string[] = [];
 	if (sourceLine !== null) sections.push(sourceLine);
 
 	if (noTemplateSupplied) {
