@@ -400,15 +400,18 @@ describe("runReleases", () => {
 			const savedSha = process.env.GITHUB_SHA;
 			process.env.GITHUB_SHA = headSha;
 
-			// Capture every log line via a custom Effect logger so we can
-			// inspect levels and messages.
-			const capturedLogs: Array<{ level: string; message: string }> = [];
-			const captureLogger = Logger.make(({ logLevel, message }) => {
-				capturedLogs.push({
-					level: logLevel.label.toLowerCase(),
-					message: Array.isArray(message) ? message.join(" ") : String(message),
-				});
-			});
+			// `Step.withStep` installs a buffering logger that intercepts the
+			// Effect logger pipeline; warnings emit directly via
+			// `WorkflowCommand.issue("warning", ...)` as `::warning::…` lines
+			// on stdout. Capture stdout for the duration of the run instead of
+			// the Effect logger.
+			const stdoutChunks: string[] = [];
+			const origStdoutWrite = process.stdout.write.bind(process.stdout);
+			// biome-ignore lint/suspicious/noExplicitAny: monkey-patch for test capture
+			(process.stdout.write as any) = (chunk: unknown, ...rest: unknown[]) => {
+				stdoutChunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8"));
+				return origStdoutWrite(chunk as string, ...(rest as []));
+			};
 
 			const divergentTagLayer = Layer.succeed(GitTagSvc, {
 				create: (tag: string, _sha: string) =>
@@ -449,30 +452,31 @@ describe("runReleases", () => {
 				workspaceDiscoveryLayer,
 			);
 
-			// Act — replace the default logger so logWarning / logInfo land in
-			// `capturedLogs`.
 			let result: ReleasesReport;
 			try {
 				result = await Effect.runPromise(
 					runReleases(args).pipe(
 						Effect.provide(layers),
 						Logger.withMinimumLogLevel(LogLevel.All),
-						Effect.provide(Logger.replace(Logger.defaultLogger, captureLogger)),
 					) as Effect.Effect<ReleasesReport>,
 				);
 			} finally {
+				process.stdout.write = origStdoutWrite;
 				if (savedSha === undefined) delete process.env.GITHUB_SHA;
 				else process.env.GITHUB_SHA = savedSha;
 			}
 
 			// Assert — the run proceeded and the warning logged both SHAs so
-			// a reader can see what diverged.
+			// a reader can see what diverged. Warnings from inside a Step
+			// envelope reach stdout as `::warning::…` workflow-command lines.
 			expect(result.success).toBe(true);
-			const warnings = capturedLogs.filter((l) => l.level === "warn");
-			const divergenceWarning = warnings.find((w) => w.message.includes("v8.0.0"));
+			const captured = stdoutChunks.join("");
+			const warningLines = captured.split("\n").filter((l) => l.includes("::warning::") && l.includes("v8.0.0"));
+			expect(warningLines.length).toBeGreaterThan(0);
+			const divergenceWarning = warningLines.find((w) => w.includes(headSha) && w.includes(existingSha));
 			expect(divergenceWarning).toBeDefined();
-			expect(divergenceWarning?.message).toContain(headSha);
-			expect(divergenceWarning?.message).toContain(existingSha);
+			expect(divergenceWarning).toContain(headSha);
+			expect(divergenceWarning).toContain(existingSha);
 		});
 	});
 

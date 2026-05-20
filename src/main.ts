@@ -46,6 +46,7 @@ import {
 	PullRequestLive,
 	SbomLive,
 	SigstoreSignerLive,
+	Step,
 } from "@savvy-web/github-action-effects";
 import { Config, Effect, Layer, Option } from "effect";
 import { ReleaseLive } from "./release/layers.js";
@@ -165,10 +166,9 @@ const emitReleaseOutput = (
 	});
 
 const runBranchManagement = Effect.gen(function* () {
-	const logger = yield* ActionLogger;
 	const packageManager = yield* detectPackageManager;
 
-	yield* logger.group(
+	yield* Step.groupStep(
 		"Phase 1: Release Branch Management",
 		Effect.gen(function* () {
 			const releaseBranch = yield* Config.string("release-branch").pipe(Config.withDefault("changeset-release/main"));
@@ -270,457 +270,470 @@ const runValidation = Effect.gen(function* () {
 	const { repository, sha } = yield* env.github;
 	const [owner, repo] = repository.split("/");
 
-	yield* Effect.gen(function* () {
-		yield* Effect.logDebug(`Detected package manager: ${packageManager}`);
+	yield* Step.groupStep(
+		"Phase 2: Validation",
+		Effect.gen(function* () {
+			yield* Effect.logDebug(`Detected package manager: ${packageManager}`);
 
-		// Changesets needs full history + a LOCAL ref for the target branch
-		// to compute the diff between the release branch and main. The
-		// checkout step in the wrapping workflow may only have shallow
-		// history of changesets-release/main and an origin/main remote
-		// ref; fetch+set up a local ref before any changeset-aware step
-		// runs.
-		yield* Effect.logDebug("Fetching git history for changeset comparison");
-		const runner = yield* CommandRunner;
-		const shallow = yield* runner
-			.execCapture("git", ["rev-parse", "--is-shallow-repository"])
-			.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "false\n", stderr: "", exitCode: 0 })));
-		if (shallow.stdout.trim() === "true") {
-			yield* Effect.logDebug("Repository is shallow, fetching full history");
-			yield* Effect.either(runner.exec("git", ["fetch", "--unshallow", "origin"]));
-		}
-		yield* Effect.either(runner.exec("git", ["fetch", "origin", `${targetBranch}:${targetBranch}`]));
-		yield* Effect.logDebug(`Fetched ${targetBranch} as a local ref`);
-
-		// Step 1 — link issues from commits (migrated).
-		const issuesResult = yield* logger.group(
-			"Link issues from commits",
-			linkIssuesFromCommits.pipe(
-				Effect.catchAll((e) =>
-					Effect.gen(function* () {
-						yield* Effect.logWarning(`linkIssuesFromCommits failed: ${String(e)}`);
-						return {
-							linkedIssues: [] as Array<{ number: number; title: string }>,
-							commits: [],
-							checkId: 0,
-							htmlUrl: "",
-						};
-					}),
-				),
-			),
-		);
-		yield* Effect.logInfo(`✅ Link issues — ${issuesResult.linkedIssues.length} issue(s) linked`);
-
-		// Step 2 — validate builds (migrated).
-		const buildResult = yield* logger.group(
-			"Validate builds",
-			validateBuilds(packageManager).pipe(
-				Effect.catchAll((e) =>
-					Effect.gen(function* () {
-						yield* Effect.logError(`validateBuilds failed: ${String(e)}`);
-						return { success: false, errors: String(e), checkId: 0, htmlUrl: "" };
-					}),
-				),
-			),
-		);
-		yield* Effect.logInfo(buildResult.success ? "✅ Build validation — passed" : "❌ Build validation — failed");
-
-		// Steps 3-5 — publish / release-notes / SBOM validation via Effect.
-		const publishCheckId = 0;
-		let publishReadyTargets = 0;
-		let publishTotalTargets = 0;
-		let publishOk = true;
-		let npmReady = false;
-		let githubPackagesReady = false;
-		let reportPackages: ReadonlyArray<{ name: string; version: string; ready: boolean }> = [];
-		// Build-centric per-package validation results — the input to the
-		// build-centric ValidationOutput projection.
-		let validationPackages: ReadonlyArray<ValidationPackageResult> = [];
-		let sbomOk = true;
-		let sbomSummary = "SBOM Preview skipped";
-		// Structured findings produced by the publish dry-run + SBOM/NTIA checks
-		// inside `runValidationEffect`; the build finding is appended below.
-		let reportFindings: ReadonlyArray<ValidationFinding> = [];
-		// Per-build resolved sbom-config metadata, keyed by
-		// `${pkg.name}:${build.directory}`. Debug-only; fed into the SBOM Preview
-		// check-run summary so config-or-mapping bugs are immediately visible.
-		// `null` indicates `runValidationEffect` was not reached (build failure).
-		let resolvedSbomConfig: ReadonlyMap<string, ResolvedSBOMMetadata> | null = null;
-		// The source the `sbom-config` was loaded from this run (`input` /
-		// `local` / `variable` / `none`). Surfaced on the SBOM Preview
-		// check-run summary; `null` until `runValidationEffect` reports it.
-		let sbomConfigSource: ConfigSource | null = null;
-
-		if (buildResult.success) {
-			yield* Effect.logInfo("Validate publishing");
-			const report = yield* runValidationEffect({ packageManager, targetBranch, dryRun }).pipe(
-				Effect.catchAll((e) =>
-					Effect.gen(function* () {
-						const message =
-							e instanceof Error ? `${e.message}\n${String((e as Error & { stack?: string }).stack ?? "")}` : String(e);
-						yield* Effect.logWarning(`runValidation failed: ${message}`);
-						return null;
-					}),
-				),
-			);
-			if (report !== null) {
-				publishReadyTargets = report.readyTargets;
-				publishTotalTargets = report.totalTargets;
-				publishOk = report.publishOk;
-				npmReady = report.npmReady;
-				githubPackagesReady = report.githubPackagesReady;
-				reportPackages = report.packages;
-				validationPackages = report.validationPackages;
-				sbomOk = report.sbomOk;
-				sbomSummary = report.sbomSummary;
-				reportFindings = report.findings;
-				resolvedSbomConfig = report.resolvedSbomConfig;
-				sbomConfigSource = report.sbomConfigSource;
+			// Changesets needs full history + a LOCAL ref for the target branch
+			// to compute the diff between the release branch and main. The
+			// checkout step in the wrapping workflow may only have shallow
+			// history of changesets-release/main and an origin/main remote
+			// ref; fetch+set up a local ref before any changeset-aware step
+			// runs.
+			yield* Effect.logDebug("Fetching git history for changeset comparison");
+			const runner = yield* CommandRunner;
+			const shallow = yield* runner
+				.execCapture("git", ["rev-parse", "--is-shallow-repository"])
+				.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "false\n", stderr: "", exitCode: 0 })));
+			if (shallow.stdout.trim() === "true") {
+				yield* Effect.logDebug("Repository is shallow, fetching full history");
+				yield* Effect.either(runner.exec("git", ["fetch", "--unshallow", "origin"]));
 			}
-			yield* Effect.logInfo(
-				publishOk
-					? `✅ Publish validation — ${publishReadyTargets}/${publishTotalTargets} target(s) ready`
-					: `❌ Publish validation — ${publishReadyTargets}/${publishTotalTargets} target(s) ready`,
-			);
-			yield* Effect.logInfo(`✅ Release notes — ${reportPackages.length} package(s) ready`);
-			yield* Effect.logInfo(sbomOk ? `✅ SBOM preview — ${sbomSummary}` : `❌ SBOM preview — ${sbomSummary}`);
-		} else {
-			yield* Effect.logWarning("Builds failed, skipping publish validation");
-		}
+			yield* Effect.either(runner.exec("git", ["fetch", "origin", `${targetBranch}:${targetBranch}`]));
+			yield* Effect.logDebug(`Fetched ${targetBranch} as a local ref`);
 
-		// Step 6 — unified validation check (migrated).
-		// Aggregate the structured findings across every Phase-2 check. The
-		// publish dry-run + SBOM/NTIA findings come from `runValidationEffect`;
-		// the build finding is derived here from `buildResult`.
-		//
-		// Honesty note: Link-Issues and Release-Notes contribute no findings.
-		// `LinkIssuesResult` exposes no failure signal (the step always
-		// completes its check as `success` and `main.ts` degrades any thrown
-		// error to an empty result), and there is no rich release-notes module
-		// on `dev` — no missing-CHANGELOG / notes-extraction signal exists.
-		const findings: ValidationFinding[] = [];
-		if (!buildResult.success) {
-			findings.push({
-				severity: "error",
-				check: "Build Validation",
-				scope: null,
-				message: buildResult.errors.trim() || "Build failed",
-			});
-		}
-		findings.push(...reportFindings);
-
-		// Conclusion-per-check rule used for the three new per-step check runs
-		// AND propagated into the unified Release Validation Summary check's
-		// per-row `success` field below — so the unified conclusion and the
-		// per-step conclusions agree on strict-warnings escalation.
-		//
-		// Build-failed cascade — when Build Validation fails, `runValidation`
-		// is skipped so the downstream Publish / Release Notes / SBOM checks
-		// emit no findings. The helper reports `failure` for those rows so
-		// the conclusion does not lie about steps that never ran.
-		const conclusionFor = (checkName: string): "success" | "failure" | "neutral" =>
-			deriveCheckConclusion(checkName, findings, buildResult.success, strictWarnings);
-
-		// Translate a conclusion into the boolean shape the unified check
-		// run consumes. `neutral` (warning, non-strict) counts as success for
-		// the unified table — preserves the prior "warnings are advisory"
-		// semantics. `failure` (errors, or warnings under strict mode) flips
-		// the row to failed.
-		const successFor = (checkName: string): boolean => conclusionFor(checkName) !== "failure";
-
-		const checkResults = [
-			{
-				name: "Link Issues from Commits",
-				success: successFor("Link Issues from Commits"),
-				checkId: 0,
-				message: `${issuesResult.linkedIssues.length} issue(s) linked`,
-			},
-			{
-				name: "Build Validation",
-				success: buildResult.success,
-				checkId: buildResult.checkId,
-				message: buildResult.success ? "Build passed" : "Build failed",
-			},
-			{
-				name: "Publish Validation",
-				success: buildResult.success && publishOk && successFor("Publish Validation"),
-				checkId: publishCheckId,
-				message:
-					publishTotalTargets === 0 ? "No targets" : `${publishReadyTargets}/${publishTotalTargets} target(s) ready`,
-			},
-			{
-				name: "Release Notes Preview",
-				success: successFor("Release Notes Preview"),
-				checkId: 0,
-				message: `${reportPackages.length} package(s) ready`,
-			},
-			{
-				name: "SBOM Preview",
-				success: sbomOk && successFor("SBOM Preview"),
-				checkId: 0,
-				message: sbomSummary,
-			},
-		];
-
-		// Derive the 3-state checks-table icon per row from the findings the
-		// check produced: any error → ❌, else any warning → ⚠️, else ✅. The
-		// `hardFailed` flag covers checks whose failure is not also a finding
-		// (e.g. a publish failure when the build itself passed).
-		const statusFor = (checkName: string, hardFailed: boolean): "pass" | "warning" | "error" => {
-			const own = findings.filter((f) => f.check === checkName);
-			if (hardFailed || own.some((f) => f.severity === "error")) return "error";
-			if (own.some((f) => f.severity === "warning")) return "warning";
-			return "pass";
-		};
-		const buildUrl = buildResult.htmlUrl !== "" ? buildResult.htmlUrl : null;
-		const linkIssuesUrl = issuesResult.htmlUrl !== "" ? issuesResult.htmlUrl : null;
-
-		// Project the canonical ValidationOutput. The unified Release Validation
-		// Summary check is created at the end (after the per-step checks and the
-		// final `validationOutput`) so its body can carry the full structured
-		// `result` JSON in a collapsed block. `checkRun` is `null` here — the
-		// unified URL is not yet known, and the body JSON should not self-
-		// reference the very page it lives on. The emitted `result` is shallow-
-		// patched below once the unified check exists, so consumers see the
-		// real `{url, conclusion}` in the action output.
-		const projectValidation = (
-			checks: ReadonlyArray<ValidationOutput["validation"]["checks"][number]>,
-		): ValidationOutput =>
-			toValidationOutput({
-				buildsPassed: buildResult.success,
-				packageCount: reportPackages.length,
-				npmReady,
-				githubPackagesReady,
-				totalTargets: publishTotalTargets,
-				readyTargets: publishReadyTargets,
-				checks,
-				findings,
-				validationPackages,
-				checkRun: null,
-				dryRun,
-			});
-
-		// Placeholder checks — `Link Issues from Commits` and `Build Validation`
-		// carry their own per-step check URLs (or `null` when unavailable); the
-		// remaining three rows are filled in once their per-step check runs
-		// exist.
-		const placeholderChecks: ReadonlyArray<ValidationOutput["validation"]["checks"][number]> = [
-			{
-				name: "Link Issues from Commits",
-				status: statusFor("Link Issues from Commits", false),
-				outcome: `${issuesResult.linkedIssues.length} issue(s) linked`,
-				url: linkIssuesUrl,
-			},
-			{
-				name: "Build Validation",
-				status: statusFor("Build Validation", !buildResult.success),
-				outcome: buildResult.success ? "Build passed" : "Build failed",
-				url: buildUrl,
-			},
-			{
-				name: "Publish Validation",
-				status: statusFor("Publish Validation", !buildResult.success || !publishOk),
-				outcome:
-					publishTotalTargets === 0 ? "No targets" : `${publishReadyTargets}/${publishTotalTargets} target(s) ready`,
-				url: null,
-			},
-			{
-				name: "Release Notes Preview",
-				status: statusFor("Release Notes Preview", false),
-				outcome: `${reportPackages.length} package(s) ready`,
-				url: null,
-			},
-			{
-				name: "SBOM Preview",
-				status: statusFor("SBOM Preview", !buildResult.success || !sbomOk),
-				outcome: sbomSummary,
-				url: null,
-			},
-		];
-
-		// Draft projection over the placeholder rows — feeds the per-step
-		// summary builders below. The per-step URLs for Publish / Release
-		// Notes / SBOM are filled in further down.
-		const summaryDraftOutput = projectValidation(placeholderChecks);
-
-		// Create the three per-step check runs after the canonical object is
-		// known — each summary is rendered from `summaryDraftOutput.validation`.
-		const checksSvc = yield* CheckRun;
-
-		const createPerStepCheck = (
-			title: string,
-			conclusion: "success" | "failure" | "neutral",
-			summary: string,
-		): Effect.Effect<string> =>
-			Effect.gen(function* () {
-				const created = yield* checksSvc.create(title, sha).pipe(
+			// Step 1 — link issues from commits (migrated).
+			const issuesResult = yield* logger.group(
+				"Link issues from commits",
+				linkIssuesFromCommits.pipe(
 					Effect.catchAll((e) =>
 						Effect.gen(function* () {
-							yield* Effect.logWarning(`Failed to create check run "${title}": ${e.message}`);
+							yield* Effect.logWarning(`linkIssuesFromCommits failed: ${String(e)}`);
+							return {
+								linkedIssues: [] as Array<{ number: number; title: string }>,
+								commits: [],
+								checkId: 0,
+								htmlUrl: "",
+							};
+						}),
+					),
+				),
+			);
+			yield* Effect.logInfo(`✅ Link issues — ${issuesResult.linkedIssues.length} issue(s) linked`);
+
+			// Step 2 — validate builds (migrated).
+			const buildResult = yield* logger.group(
+				"Validate builds",
+				validateBuilds(packageManager).pipe(
+					Effect.catchAll((e) =>
+						Effect.gen(function* () {
+							yield* Effect.logError(`validateBuilds failed: ${String(e)}`);
+							return { success: false, errors: String(e), checkId: 0, htmlUrl: "" };
+						}),
+					),
+				),
+			);
+			yield* Effect.logInfo(buildResult.success ? "✅ Build validation — passed" : "❌ Build validation — failed");
+
+			// Steps 3-5 — publish / release-notes / SBOM validation via Effect.
+			const publishCheckId = 0;
+			let publishReadyTargets = 0;
+			let publishTotalTargets = 0;
+			let publishOk = true;
+			let npmReady = false;
+			let githubPackagesReady = false;
+			let reportPackages: ReadonlyArray<{ name: string; version: string; ready: boolean }> = [];
+			// Build-centric per-package validation results — the input to the
+			// build-centric ValidationOutput projection.
+			let validationPackages: ReadonlyArray<ValidationPackageResult> = [];
+			let sbomOk = true;
+			let sbomSummary = "SBOM Preview skipped";
+			// Structured findings produced by the publish dry-run + SBOM/NTIA checks
+			// inside `runValidationEffect`; the build finding is appended below.
+			let reportFindings: ReadonlyArray<ValidationFinding> = [];
+			// Per-build resolved sbom-config metadata, keyed by
+			// `${pkg.name}:${build.directory}`. Debug-only; fed into the SBOM Preview
+			// check-run summary so config-or-mapping bugs are immediately visible.
+			// `null` indicates `runValidationEffect` was not reached (build failure).
+			let resolvedSbomConfig: ReadonlyMap<string, ResolvedSBOMMetadata> | null = null;
+			// The source the `sbom-config` was loaded from this run (`input` /
+			// `local` / `variable` / `none`). Surfaced on the SBOM Preview
+			// check-run summary; `null` until `runValidationEffect` reports it.
+			let sbomConfigSource: ConfigSource | null = null;
+
+			if (buildResult.success) {
+				yield* Effect.logInfo("Validate publishing");
+				const report = yield* runValidationEffect({ packageManager, targetBranch, dryRun }).pipe(
+					Effect.catchAll((e) =>
+						Effect.gen(function* () {
+							const message =
+								e instanceof Error
+									? `${e.message}\n${String((e as Error & { stack?: string }).stack ?? "")}`
+									: String(e);
+							yield* Effect.logWarning(`runValidation failed: ${message}`);
 							return null;
 						}),
 					),
 				);
-				if (created === null) {
-					return "";
+				if (report !== null) {
+					publishReadyTargets = report.readyTargets;
+					publishTotalTargets = report.totalTargets;
+					publishOk = report.publishOk;
+					npmReady = report.npmReady;
+					githubPackagesReady = report.githubPackagesReady;
+					reportPackages = report.packages;
+					validationPackages = report.validationPackages;
+					sbomOk = report.sbomOk;
+					sbomSummary = report.sbomSummary;
+					reportFindings = report.findings;
+					resolvedSbomConfig = report.resolvedSbomConfig;
+					sbomConfigSource = report.sbomConfigSource;
 				}
-				yield* checksSvc
-					.complete(created.id, conclusion, { title, summary })
-					.pipe(Effect.catchAll((e) => Effect.logWarning(`Failed to complete check run "${title}": ${e.message}`)));
-				return created.htmlUrl;
-			});
+				yield* Effect.logInfo(
+					publishOk
+						? `✅ Publish validation — ${publishReadyTargets}/${publishTotalTargets} target(s) ready`
+						: `❌ Publish validation — ${publishReadyTargets}/${publishTotalTargets} target(s) ready`,
+				);
+				yield* Effect.logInfo(`✅ Release notes — ${reportPackages.length} package(s) ready`);
+				yield* Effect.logInfo(sbomOk ? `✅ SBOM preview — ${sbomSummary}` : `❌ SBOM preview — ${sbomSummary}`);
+			} else {
+				yield* Effect.logWarning("Builds failed, skipping publish validation");
+			}
 
-		const publishSummary = buildPublishValidationSummary(summaryDraftOutput.validation);
-		const releaseNotesSummary = buildReleaseNotesPreviewSummary(summaryDraftOutput.validation);
-		const sbomSummaryMd = buildSbomPreviewSummary(summaryDraftOutput.validation, resolvedSbomConfig, sbomConfigSource);
+			// Step 6 — unified validation check (migrated).
+			// Aggregate the structured findings across every Phase-2 check. The
+			// publish dry-run + SBOM/NTIA findings come from `runValidationEffect`;
+			// the build finding is derived here from `buildResult`.
+			//
+			// Honesty note: Link-Issues and Release-Notes contribute no findings.
+			// `LinkIssuesResult` exposes no failure signal (the step always
+			// completes its check as `success` and `main.ts` degrades any thrown
+			// error to an empty result), and there is no rich release-notes module
+			// on `dev` — no missing-CHANGELOG / notes-extraction signal exists.
+			const findings: ValidationFinding[] = [];
+			if (!buildResult.success) {
+				findings.push({
+					severity: "error",
+					check: "Build Validation",
+					scope: null,
+					message: buildResult.errors.trim() || "Build failed",
+				});
+			}
+			findings.push(...reportFindings);
 
-		const publishTitle = dryRun ? "🧪 Publish Validation (Dry Run)" : "📦 Publish Validation";
-		const releaseNotesTitle = dryRun ? "🧪 Release Notes Preview (Dry Run)" : "📋 Release Notes Preview";
-		const sbomTitle = dryRun ? "🧪 SBOM Preview (Dry Run)" : "🔏 SBOM Preview";
+			// Conclusion-per-check rule used for the three new per-step check runs
+			// AND propagated into the unified Release Validation Summary check's
+			// per-row `success` field below — so the unified conclusion and the
+			// per-step conclusions agree on strict-warnings escalation.
+			//
+			// Build-failed cascade — when Build Validation fails, `runValidation`
+			// is skipped so the downstream Publish / Release Notes / SBOM checks
+			// emit no findings. The helper reports `failure` for those rows so
+			// the conclusion does not lie about steps that never ran.
+			const conclusionFor = (checkName: string): "success" | "failure" | "neutral" =>
+				deriveCheckConclusion(checkName, findings, buildResult.success, strictWarnings);
 
-		const publishCheckUrl = yield* createPerStepCheck(
-			publishTitle,
-			conclusionFor("Publish Validation"),
-			publishSummary,
-		);
-		const releaseNotesCheckUrl = yield* createPerStepCheck(
-			releaseNotesTitle,
-			conclusionFor("Release Notes Preview"),
-			releaseNotesSummary,
-		);
-		const sbomCheckUrl = yield* createPerStepCheck(sbomTitle, conclusionFor("SBOM Preview"), sbomSummaryMd);
+			// Translate a conclusion into the boolean shape the unified check
+			// run consumes. `neutral` (warning, non-strict) counts as success for
+			// the unified table — preserves the prior "warnings are advisory"
+			// semantics. `failure` (errors, or warnings under strict mode) flips
+			// the row to failed.
+			const successFor = (checkName: string): boolean => conclusionFor(checkName) !== "failure";
 
-		// Fill in the Publish / Release Notes / SBOM rows with each check's
-		// real htmlUrl. Build / Link rows keep their existing values (own
-		// per-step URL or `null`).
-		const urlFor = (placeholder: string | null, real: string): string | null => (real !== "" ? real : placeholder);
-		const checkRows: ReadonlyArray<ValidationOutput["validation"]["checks"][number]> = placeholderChecks.map((row) => {
-			if (row.name === "Publish Validation") return { ...row, url: urlFor(row.url, publishCheckUrl) };
-			if (row.name === "Release Notes Preview") return { ...row, url: urlFor(row.url, releaseNotesCheckUrl) };
-			if (row.name === "SBOM Preview") return { ...row, url: urlFor(row.url, sbomCheckUrl) };
-			return row;
-		});
+			const checkResults = [
+				{
+					name: "Link Issues from Commits",
+					success: successFor("Link Issues from Commits"),
+					checkId: 0,
+					message: `${issuesResult.linkedIssues.length} issue(s) linked`,
+				},
+				{
+					name: "Build Validation",
+					success: buildResult.success,
+					checkId: buildResult.checkId,
+					message: buildResult.success ? "Build passed" : "Build failed",
+				},
+				{
+					name: "Publish Validation",
+					success: buildResult.success && publishOk && successFor("Publish Validation"),
+					checkId: publishCheckId,
+					message:
+						publishTotalTargets === 0 ? "No targets" : `${publishReadyTargets}/${publishTotalTargets} target(s) ready`,
+				},
+				{
+					name: "Release Notes Preview",
+					success: successFor("Release Notes Preview"),
+					checkId: 0,
+					message: `${reportPackages.length} package(s) ready`,
+				},
+				{
+					name: "SBOM Preview",
+					success: sbomOk && successFor("SBOM Preview"),
+					checkId: 0,
+					message: sbomSummary,
+				},
+			];
 
-		// Final summary line.
-		const passedCount = checkResults.filter((r) => r.success).length;
-		yield* Effect.logInfo(
-			passedCount === checkResults.length
-				? `Release validation: ✅ ${passedCount}/${checkResults.length} checks passed`
-				: `Release validation: ❌ ${passedCount}/${checkResults.length} checks passed — failed: ${checkResults
-						.filter((r) => !r.success)
-						.map((r) => r.name)
-						.join(", ")}`,
-		);
+			// Derive the 3-state checks-table icon per row from the findings the
+			// check produced: any error → ❌, else any warning → ⚠️, else ✅. The
+			// `hardFailed` flag covers checks whose failure is not also a finding
+			// (e.g. a publish failure when the build itself passed).
+			const statusFor = (checkName: string, hardFailed: boolean): "pass" | "warning" | "error" => {
+				const own = findings.filter((f) => f.check === checkName);
+				if (hardFailed || own.some((f) => f.severity === "error")) return "error";
+				if (own.some((f) => f.severity === "warning")) return "warning";
+				return "pass";
+			};
+			const buildUrl = buildResult.htmlUrl !== "" ? buildResult.htmlUrl : null;
+			const linkIssuesUrl = issuesResult.htmlUrl !== "" ? issuesResult.htmlUrl : null;
 
-		// Provisional projection over the final per-step URLs — used to build
-		// the JSON block in the check-run body. `checkRun` is `null` here so
-		// the body JSON does not self-reference the very page it lives on; the
-		// emitted `result` is patched below with the now-known unified URL.
-		const provisionalOutput = projectValidation(checkRows);
+			// Project the canonical ValidationOutput. The unified Release Validation
+			// Summary check is created at the end (after the per-step checks and the
+			// final `validationOutput`) so its body can carry the full structured
+			// `result` JSON in a collapsed block. `checkRun` is `null` here — the
+			// unified URL is not yet known, and the body JSON should not self-
+			// reference the very page it lives on. The emitted `result` is shallow-
+			// patched below once the unified check exists, so consumers see the
+			// real `{url, conclusion}` in the action output.
+			const projectValidation = (
+				checks: ReadonlyArray<ValidationOutput["validation"]["checks"][number]>,
+			): ValidationOutput =>
+				toValidationOutput({
+					buildsPassed: buildResult.success,
+					packageCount: reportPackages.length,
+					npmReady,
+					githubPackagesReady,
+					totalTargets: publishTotalTargets,
+					readyTargets: publishReadyTargets,
+					checks,
+					findings,
+					validationPackages,
+					checkRun: null,
+					dryRun,
+				});
 
-		// Build the collapsed JSON block surfacing the full structured `result`
-		// action output inside the unified check-run page — the downstream-
-		// consumer artifact is no longer hidden behind the action's outputs.
-		const jsonBlock = [
-			"",
-			"<details>",
-			"<summary>📦 Full structured output (<code>result</code> action output)</summary>",
-			"",
-			"```json",
-			JSON.stringify(provisionalOutput, null, 2),
-			"```",
-			"",
-			"</details>",
-		].join("\n");
+			// Placeholder checks — `Link Issues from Commits` and `Build Validation`
+			// carry their own per-step check URLs (or `null` when unavailable); the
+			// remaining three rows are filled in once their per-step check runs
+			// exist.
+			const placeholderChecks: ReadonlyArray<ValidationOutput["validation"]["checks"][number]> = [
+				{
+					name: "Link Issues from Commits",
+					status: statusFor("Link Issues from Commits", false),
+					outcome: `${issuesResult.linkedIssues.length} issue(s) linked`,
+					url: linkIssuesUrl,
+				},
+				{
+					name: "Build Validation",
+					status: statusFor("Build Validation", !buildResult.success),
+					outcome: buildResult.success ? "Build passed" : "Build failed",
+					url: buildUrl,
+				},
+				{
+					name: "Publish Validation",
+					status: statusFor("Publish Validation", !buildResult.success || !publishOk),
+					outcome:
+						publishTotalTargets === 0 ? "No targets" : `${publishReadyTargets}/${publishTotalTargets} target(s) ready`,
+					url: null,
+				},
+				{
+					name: "Release Notes Preview",
+					status: statusFor("Release Notes Preview", false),
+					outcome: `${reportPackages.length} package(s) ready`,
+					url: null,
+				},
+				{
+					name: "SBOM Preview",
+					status: statusFor("SBOM Preview", !buildResult.success || !sbomOk),
+					outcome: sbomSummary,
+					url: null,
+				},
+			];
 
-		const unified = yield* logger.group("Validation check", createValidationCheck(checkResults, dryRun, jsonBlock));
-		yield* Effect.logInfo(`✅ Validation check — conclusion: ${unified.success ? "success" : "failure"}`);
-		const unifiedUrl = unified.htmlUrl !== "" ? unified.htmlUrl : undefined;
+			// Draft projection over the placeholder rows — feeds the per-step
+			// summary builders below. The per-step URLs for Publish / Release
+			// Notes / SBOM are filled in further down.
+			const summaryDraftOutput = projectValidation(placeholderChecks);
 
-		// Patch the emitted result with the now-known unified check URL /
-		// conclusion. The one-line divergence between the body JSON
-		// (`checkRun: null`) and the emitted `result` (`checkRun: { url,
-		// conclusion }`) is intentional — the body JSON should not self-
-		// reference the very page it lives on, but the `result` action output
-		// must carry the unified check URL for downstream consumers.
-		const validationOutput: ValidationOutput = {
-			...provisionalOutput,
-			validation: {
-				...provisionalOutput.validation,
-				checkRun:
-					unified.htmlUrl !== "" ? { url: unified.htmlUrl, conclusion: unified.success ? "success" : "failure" } : null,
-			},
-		};
+			// Create the three per-step check runs after the canonical object is
+			// known — each summary is rendered from `summaryDraftOutput.validation`.
+			const checksSvc = yield* CheckRun;
 
-		// Step 7 — sticky comment on the release PR (migrated).
-		const prsResult = yield* Effect.either(
-			client.rest<ReadonlyArray<{ number: number }>>("pulls.list.validation", (octokit) =>
-				(
-					octokit as {
-						rest: {
-							pulls: {
-								list: (params: {
-									owner: string;
-									repo: string;
-									state: "open";
-									head: string;
-									base: string;
-								}) => Promise<{ data: ReadonlyArray<{ number: number }> }>;
-							};
-						};
+			const createPerStepCheck = (
+				title: string,
+				conclusion: "success" | "failure" | "neutral",
+				summary: string,
+			): Effect.Effect<string> =>
+				Effect.gen(function* () {
+					const created = yield* checksSvc.create(title, sha).pipe(
+						Effect.catchAll((e) =>
+							Effect.gen(function* () {
+								yield* Effect.logWarning(`Failed to create check run "${title}": ${e.message}`);
+								return null;
+							}),
+						),
+					);
+					if (created === null) {
+						return "";
 					}
-				).rest.pulls.list({
-					owner,
-					repo,
-					state: "open",
-					head: `${owner}:${releaseBranch}`,
-					base: targetBranch,
-				}),
-			),
-		);
-		if (prsResult._tag === "Right" && prsResult.right.length > 0) {
-			const pr = prsResult.right[0];
-			// Redesigned Phase-2 comment: a worst-state header icon, the 3-state
-			// checks table, the findings table (rendered only when non-empty),
-			// the build-grouped "What will be released" forecast, and a
-			// release-notes link. Rendered straight from the canonical
-			// ValidationOutput's `validation` payload — no parallel comment input.
-			const commentBody = buildValidationComment(validationOutput.validation, {
-				...(unifiedUrl !== undefined && { releaseNotesUrl: unifiedUrl }),
-				dryRun,
-			});
-			yield* logger.group(
-				"Update PR comment",
-				updateStickyComment(pr.number, commentBody, "release-validation").pipe(
-					Effect.catchAll((e) =>
-						Effect.gen(function* () {
-							yield* Effect.logWarning(`Failed to update sticky comment: ${String(e)}`);
-							return { commentId: 0 };
-						}),
-					),
+					yield* checksSvc
+						.complete(created.id, conclusion, { title, summary })
+						.pipe(Effect.catchAll((e) => Effect.logWarning(`Failed to complete check run "${title}": ${e.message}`)));
+					return created.htmlUrl;
+				});
+
+			const publishSummary = buildPublishValidationSummary(summaryDraftOutput.validation);
+			const releaseNotesSummary = buildReleaseNotesPreviewSummary(summaryDraftOutput.validation);
+			const sbomSummaryMd = buildSbomPreviewSummary(
+				summaryDraftOutput.validation,
+				resolvedSbomConfig,
+				sbomConfigSource,
+			);
+
+			const publishTitle = dryRun ? "🧪 Publish Validation (Dry Run)" : "📦 Publish Validation";
+			const releaseNotesTitle = dryRun ? "🧪 Release Notes Preview (Dry Run)" : "📋 Release Notes Preview";
+			const sbomTitle = dryRun ? "🧪 SBOM Preview (Dry Run)" : "🔏 SBOM Preview";
+
+			const publishCheckUrl = yield* createPerStepCheck(
+				publishTitle,
+				conclusionFor("Publish Validation"),
+				publishSummary,
+			);
+			const releaseNotesCheckUrl = yield* createPerStepCheck(
+				releaseNotesTitle,
+				conclusionFor("Release Notes Preview"),
+				releaseNotesSummary,
+			);
+			const sbomCheckUrl = yield* createPerStepCheck(sbomTitle, conclusionFor("SBOM Preview"), sbomSummaryMd);
+
+			// Fill in the Publish / Release Notes / SBOM rows with each check's
+			// real htmlUrl. Build / Link rows keep their existing values (own
+			// per-step URL or `null`).
+			const urlFor = (placeholder: string | null, real: string): string | null => (real !== "" ? real : placeholder);
+			const checkRows: ReadonlyArray<ValidationOutput["validation"]["checks"][number]> = placeholderChecks.map(
+				(row) => {
+					if (row.name === "Publish Validation") return { ...row, url: urlFor(row.url, publishCheckUrl) };
+					if (row.name === "Release Notes Preview") return { ...row, url: urlFor(row.url, releaseNotesCheckUrl) };
+					if (row.name === "SBOM Preview") return { ...row, url: urlFor(row.url, sbomCheckUrl) };
+					return row;
+				},
+			);
+
+			// Final summary line.
+			const passedCount = checkResults.filter((r) => r.success).length;
+			yield* Effect.logInfo(
+				passedCount === checkResults.length
+					? `Release validation: ✅ ${passedCount}/${checkResults.length} checks passed`
+					: `Release validation: ❌ ${passedCount}/${checkResults.length} checks passed — failed: ${checkResults
+							.filter((r) => !r.success)
+							.map((r) => r.name)
+							.join(", ")}`,
+			);
+
+			// Provisional projection over the final per-step URLs — used to build
+			// the JSON block in the check-run body. `checkRun` is `null` here so
+			// the body JSON does not self-reference the very page it lives on; the
+			// emitted `result` is patched below with the now-known unified URL.
+			const provisionalOutput = projectValidation(checkRows);
+
+			// Build the collapsed JSON block surfacing the full structured `result`
+			// action output inside the unified check-run page — the downstream-
+			// consumer artifact is no longer hidden behind the action's outputs.
+			const jsonBlock = [
+				"",
+				"<details>",
+				"<summary>📦 Full structured output (<code>result</code> action output)</summary>",
+				"",
+				"```json",
+				JSON.stringify(provisionalOutput, null, 2),
+				"```",
+				"",
+				"</details>",
+			].join("\n");
+
+			const unified = yield* logger.group("Validation check", createValidationCheck(checkResults, dryRun, jsonBlock));
+			yield* Effect.logInfo(`✅ Validation check — conclusion: ${unified.success ? "success" : "failure"}`);
+			const unifiedUrl = unified.htmlUrl !== "" ? unified.htmlUrl : undefined;
+
+			// Patch the emitted result with the now-known unified check URL /
+			// conclusion. The one-line divergence between the body JSON
+			// (`checkRun: null`) and the emitted `result` (`checkRun: { url,
+			// conclusion }`) is intentional — the body JSON should not self-
+			// reference the very page it lives on, but the `result` action output
+			// must carry the unified check URL for downstream consumers.
+			const validationOutput: ValidationOutput = {
+				...provisionalOutput,
+				validation: {
+					...provisionalOutput.validation,
+					checkRun:
+						unified.htmlUrl !== ""
+							? { url: unified.htmlUrl, conclusion: unified.success ? "success" : "failure" }
+							: null,
+				},
+			};
+
+			// Step 7 — sticky comment on the release PR (migrated).
+			const prsResult = yield* Effect.either(
+				client.rest<ReadonlyArray<{ number: number }>>("pulls.list.validation", (octokit) =>
+					(
+						octokit as {
+							rest: {
+								pulls: {
+									list: (params: {
+										owner: string;
+										repo: string;
+										state: "open";
+										head: string;
+										base: string;
+									}) => Promise<{ data: ReadonlyArray<{ number: number }> }>;
+								};
+							};
+						}
+					).rest.pulls.list({
+						owner,
+						repo,
+						state: "open",
+						head: `${owner}:${releaseBranch}`,
+						base: targetBranch,
+					}),
 				),
 			);
-			yield* Effect.logInfo(`✅ Sticky comment updated on PR #${pr.number}`);
-		} else {
-			yield* Effect.logInfo("Sticky comment update skipped — no open PR found for release branch");
-		}
-
-		// Emit the structured `result` action output for Phase 2.
-		yield* emitReleaseOutput(outputs, validationOutput, {
-			packageCount: reportPackages.length,
-			// Phase 2 runs on a push to the release branch; the release PR number is not
-			// in the event payload and resolving it would need an extra API lookup, so
-			// the release-pr-number scalar is left empty for the validation phase.
-			releasePrNumber: null,
-		});
-	}).pipe(
-		Effect.catchAll((e) =>
-			Effect.gen(function* () {
-				yield* Effect.logError(`Phase 2 failed: ${String(e)}`);
-				yield* cleanupValidationChecks([], `Phase 2 failed: ${String(e)}`, dryRun).pipe(
-					Effect.catchAll(() => Effect.succeed({ cleanedUp: 0, failed: 0, errors: [] })),
+			if (prsResult._tag === "Right" && prsResult.right.length > 0) {
+				const pr = prsResult.right[0];
+				// Redesigned Phase-2 comment: a worst-state header icon, the 3-state
+				// checks table, the findings table (rendered only when non-empty),
+				// the build-grouped "What will be released" forecast, and a
+				// release-notes link. Rendered straight from the canonical
+				// ValidationOutput's `validation` payload — no parallel comment input.
+				const commentBody = buildValidationComment(validationOutput.validation, {
+					...(unifiedUrl !== undefined && { releaseNotesUrl: unifiedUrl }),
+					dryRun,
+				});
+				yield* logger.group(
+					"Update PR comment",
+					updateStickyComment(pr.number, commentBody, "release-validation").pipe(
+						Effect.catchAll((e) =>
+							Effect.gen(function* () {
+								yield* Effect.logWarning(`Failed to update sticky comment: ${String(e)}`);
+								return { commentId: 0 };
+							}),
+						),
+					),
 				);
-				return yield* Effect.fail(e);
-			}),
+				yield* Effect.logInfo(`✅ Sticky comment updated on PR #${pr.number}`);
+			} else {
+				yield* Effect.logInfo("Sticky comment update skipped — no open PR found for release branch");
+			}
+
+			// Emit the structured `result` action output for Phase 2.
+			yield* emitReleaseOutput(outputs, validationOutput, {
+				packageCount: reportPackages.length,
+				// Phase 2 runs on a push to the release branch; the release PR number is not
+				// in the event payload and resolving it would need an extra API lookup, so
+				// the release-pr-number scalar is left empty for the validation phase.
+				releasePrNumber: null,
+			});
+		}).pipe(
+			Effect.catchAll((e) =>
+				Effect.gen(function* () {
+					yield* Effect.logError(`Phase 2 failed: ${String(e)}`);
+					yield* cleanupValidationChecks([], `Phase 2 failed: ${String(e)}`, dryRun).pipe(
+						Effect.catchAll(() => Effect.succeed({ cleanedUp: 0, failed: 0, errors: [] })),
+					);
+					return yield* Effect.fail(e);
+				}),
+			),
 		),
 	);
 });
@@ -732,166 +745,171 @@ const runValidation = Effect.gen(function* () {
  * from `src/release/releases.ts`.
  */
 const runPublishing = (mergedReleasePRNumber: number | undefined) =>
-	Effect.gen(function* () {
-		const logger = yield* ActionLogger;
-		const outputs = yield* ActionOutputs;
-		const runner = yield* CommandRunner;
+	Step.groupStep(
+		"Phase 3: Publishing",
+		Effect.gen(function* () {
+			const logger = yield* ActionLogger;
+			const outputs = yield* ActionOutputs;
+			const runner = yield* CommandRunner;
 
-		const targetBranch = yield* Config.string("target-branch").pipe(Config.withDefault("main"));
-		const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
-		const packageManager = yield* detectPackageManager;
+			const targetBranch = yield* Config.string("target-branch").pipe(Config.withDefault("main"));
+			const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
+			const packageManager = yield* detectPackageManager;
 
-		const emitPublishing = (
-			publishResult: PublishPackagesResult,
-			tags: ReadonlyArray<TagInfo>,
-			releases: ReadonlyArray<ReleaseInfo>,
-			tagShas: Record<string, string>,
-		) =>
-			emitReleaseOutput(outputs, toPublishingOutput({ publishResult, tags, releases, tagShas, dryRun }), {
-				packageCount: publishResult.totalPackages,
-				releasePrNumber: mergedReleasePRNumber !== undefined ? mergedReleasePRNumber : null,
-			});
+			const emitPublishing = (
+				publishResult: PublishPackagesResult,
+				tags: ReadonlyArray<TagInfo>,
+				releases: ReadonlyArray<ReleaseInfo>,
+				tagShas: Record<string, string>,
+			) =>
+				emitReleaseOutput(outputs, toPublishingOutput({ publishResult, tags, releases, tagShas, dryRun }), {
+					packageCount: publishResult.totalPackages,
+					releasePrNumber: mergedReleasePRNumber !== undefined ? mergedReleasePRNumber : null,
+				});
 
-		// ── Prelude (detail) ───────────────────────────────────────────────────
-		yield* Effect.logDebug(`Detected package manager: ${packageManager}`);
-		const shallow = yield* runner
-			.execCapture("git", ["rev-parse", "--is-shallow-repository"])
-			.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "false\n", stderr: "", exitCode: 0 })));
-		if (shallow.stdout.trim() === "true") {
-			yield* Effect.either(runner.exec("git", ["fetch", "--unshallow", "origin"]));
-		}
-		yield* Effect.either(runner.exec("git", ["fetch", "origin", `${targetBranch}:${targetBranch}`]));
+			// ── Prelude (detail) ───────────────────────────────────────────────────
+			yield* Effect.logDebug(`Detected package manager: ${packageManager}`);
+			const shallow = yield* runner
+				.execCapture("git", ["rev-parse", "--is-shallow-repository"])
+				.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "false\n", stderr: "", exitCode: 0 })));
+			if (shallow.stdout.trim() === "true") {
+				yield* Effect.either(runner.exec("git", ["fetch", "--unshallow", "origin"]));
+			}
+			yield* Effect.either(runner.exec("git", ["fetch", "origin", `${targetBranch}:${targetBranch}`]));
 
-		const args = { packageManager, targetBranch, dryRun, mergedReleasePRNumber };
+			const args = { packageManager, targetBranch, dryRun, mergedReleasePRNumber };
 
-		// ── Step 1: Detect released packages ───────────────────────────────────
-		const detected = yield* logger.group("Detect released packages", detectReleases(args));
-		yield* Effect.logInfo(`✅ ${detected.length} package(s) in scope`);
+			// ── Step 1: Detect released packages ───────────────────────────────────
+			// `detectReleases` wraps itself in Step.withStep, which emits its own
+			// success line on completion. No extra info line here.
+			const detected = yield* detectReleases(args);
 
-		if (detected.length === 0) {
-			const empty: PublishPackagesResult = {
-				success: true,
-				packages: [],
-				totalPackages: 0,
-				successfulPackages: 0,
-				totalTargets: 0,
-				successfulTargets: 0,
-			};
-			yield* emitPublishing(empty, [], [], {});
-			yield* Effect.logInfo("Release publishing: ✅ nothing to publish");
-			return;
-		}
+			if (detected.length === 0) {
+				const empty: PublishPackagesResult = {
+					success: true,
+					packages: [],
+					totalPackages: 0,
+					successfulPackages: 0,
+					totalTargets: 0,
+					successfulTargets: 0,
+				};
+				yield* emitPublishing(empty, [], [], {});
+				yield* Effect.logInfo("Release publishing: ✅ nothing to publish");
+				return;
+			}
 
-		// ── Step 2: Determine tag strategy ─────────────────────────────────────
-		const tagStrategy = yield* logger.group(
-			"Tag strategy",
-			Effect.gen(function* () {
-				// `DetectedRelease` carries no `targets`, and `determineTagStrategy`
-				// only reads `name`/`version` — so the empty `targets` array is safe.
-				// Tag strategy (Step 2) runs on the full detected set before any
-				// publishing, making every detected package a tag candidate; that is
-				// correct because a publish failure (Step 4) aborts releases (Step 5)
-				// before a single tag is ever created.
-				const strategy = determineTagStrategy(detected.map((d) => ({ name: d.name, version: d.version, targets: [] })));
-				yield* Effect.logDebug(`tag strategy: ${strategy.strategy}, ${strategy.tags.length} tag(s)`);
-				return strategy;
-			}),
-		);
-		const tagStrategyLabel = tagStrategy.strategy === "multiple" ? "per-package tags" : "single shared tag";
-		yield* Effect.logInfo(`✅ ${tagStrategy.tags.length} tag(s) to create — ${tagStrategyLabel}`);
-
-		// ── Step 3: Build & SBOM (fail-fast gate) ──────────────────────────────
-		yield* Effect.logInfo("Build & SBOM");
-		const buildSbom = yield* runBuildAndSbom(detected, args);
-		if (!buildSbom.ok) {
-			const detail =
-				buildSbom.buildError !== undefined
-					? `build failed — ${buildSbom.buildError}`
-					: `SBOM generation failed for ${buildSbom.sbomFailures.join(", ")}`;
-			yield* Effect.logError(`❌ Build & SBOM — ${detail}; aborting before publish`);
-			const failed: PublishPackagesResult = {
-				success: false,
-				packages: [],
-				totalPackages: detected.length,
-				successfulPackages: 0,
-				totalTargets: 0,
-				successfulTargets: 0,
-				...(buildSbom.buildError !== undefined ? { buildError: buildSbom.buildError } : {}),
-			};
-			yield* emitPublishing(failed, [], [], {});
-			yield* Effect.logInfo("Release publishing: ❌ aborted at Build & SBOM — nothing published");
-			yield* outputs.setFailed("Phase 3 aborted at Build & SBOM");
-			return;
-		}
-		yield* Effect.logInfo(`✅ Build & SBOM — ${buildSbom.packageCount} package(s) ready`);
-
-		// ── Step 4: Publish to registries ──────────────────────────────────────
-		yield* Effect.logInfo("Publish");
-		const publishResult = yield* runPublishTargets(detected, args, buildSbom.sbomPaths);
-		if (!publishResult.success) {
-			yield* Effect.logError(
-				`❌ Published ${publishResult.successfulTargets}/${publishResult.totalTargets} target(s) — aborting before releases`,
-			);
-			yield* emitPublishing(publishResult, [], [], {});
-			yield* Effect.logInfo("Release publishing: ❌ failed at Publish");
-			yield* outputs.setFailed("Publishing failed");
-			return;
-		}
-		yield* Effect.logInfo(`✅ Published ${publishResult.successfulTargets}/${publishResult.totalTargets} target(s)`);
-
-		// ── Step 5: Create releases ────────────────────────────────────────────
-		yield* Effect.logInfo("Create releases");
-		const releasesResult = yield* runReleases({
-			tags: tagStrategy.tags,
-			publishResult,
-			packageManager,
-			dryRun,
-		}).pipe(
-			Effect.catchAll((e) =>
+			// ── Step 2: Determine tag strategy ─────────────────────────────────────
+			const tagStrategy = yield* logger.group(
+				"Tag strategy",
 				Effect.gen(function* () {
-					yield* Effect.logWarning(`runReleases failed: ${String(e)}`);
-					return { success: false, releases: [] as ReleaseInfo[], errors: [String(e)] };
+					// `DetectedRelease` carries no `targets`, and `determineTagStrategy`
+					// only reads `name`/`version` — so the empty `targets` array is safe.
+					// Tag strategy (Step 2) runs on the full detected set before any
+					// publishing, making every detected package a tag candidate; that is
+					// correct because a publish failure (Step 4) aborts releases (Step 5)
+					// before a single tag is ever created.
+					const strategy = determineTagStrategy(
+						detected.map((d) => ({ name: d.name, version: d.version, targets: [] })),
+					);
+					yield* Effect.logDebug(`tag strategy: ${strategy.strategy}, ${strategy.tags.length} tag(s)`);
+					return strategy;
 				}),
-			),
-		);
-		yield* Effect.logInfo(
-			releasesResult.success
-				? `✅ Created ${releasesResult.releases.length} release(s)`
-				: `❌ Created ${releasesResult.releases.length} release(s) — ${releasesResult.errors.length} error(s)`,
-		);
+			);
+			const tagStrategyLabel = tagStrategy.strategy === "multiple" ? "per-package tags" : "single shared tag";
+			yield* Effect.logInfo(`✅ ${tagStrategy.tags.length} tag(s) to create — ${tagStrategyLabel}`);
 
-		// ── Follow-on: close linked issues ─────────────────────────────────────
-		if (mergedReleasePRNumber !== undefined) {
-			const closeResult = yield* logger.group(
-				"Close linked issues",
-				closeLinkedIssues(mergedReleasePRNumber, dryRun).pipe(
-					Effect.catchAll((e) =>
-						Effect.gen(function* () {
-							yield* Effect.logWarning(`closeLinkedIssues failed: ${String(e)}`);
-							return null;
-						}),
-					),
+			// ── Step 3: Build & SBOM (fail-fast gate) ──────────────────────────────
+			// `runBuildAndSbom` wraps itself in Step.withStep; its success line emits
+			// from the step on completion.
+			const buildSbom = yield* runBuildAndSbom(detected, args);
+			if (!buildSbom.ok) {
+				const detail =
+					buildSbom.buildError !== undefined
+						? `build failed — ${buildSbom.buildError}`
+						: `SBOM generation failed for ${buildSbom.sbomFailures.join(", ")}`;
+				yield* Effect.logError(`❌ Build & SBOM — ${detail}; aborting before publish`);
+				const failed: PublishPackagesResult = {
+					success: false,
+					packages: [],
+					totalPackages: detected.length,
+					successfulPackages: 0,
+					totalTargets: 0,
+					successfulTargets: 0,
+					...(buildSbom.buildError !== undefined ? { buildError: buildSbom.buildError } : {}),
+				};
+				yield* emitPublishing(failed, [], [], {});
+				yield* Effect.logInfo("Release publishing: ❌ aborted at Build & SBOM — nothing published");
+				yield* outputs.setFailed("Phase 3 aborted at Build & SBOM");
+				return;
+			}
+
+			// ── Step 4: Publish to registries ──────────────────────────────────────
+			const publishResult = yield* runPublishTargets(detected, args, buildSbom.sbomPaths);
+			if (!publishResult.success) {
+				yield* Effect.logError(
+					`❌ Published ${publishResult.successfulTargets}/${publishResult.totalTargets} target(s) — aborting before releases`,
+				);
+				yield* emitPublishing(publishResult, [], [], {});
+				yield* Effect.logInfo("Release publishing: ❌ failed at Publish");
+				yield* outputs.setFailed("Publishing failed");
+				return;
+			}
+			yield* Effect.logInfo(`✅ Published ${publishResult.successfulTargets}/${publishResult.totalTargets} target(s)`);
+
+			// ── Step 5: Create releases ────────────────────────────────────────────
+			// `runReleases` wraps itself in Step.withStep.
+			const releasesResult = yield* runReleases({
+				tags: tagStrategy.tags,
+				publishResult,
+				packageManager,
+				dryRun,
+			}).pipe(
+				Effect.catchAll((e) =>
+					Effect.gen(function* () {
+						yield* Effect.logWarning(`runReleases failed: ${String(e)}`);
+						return { success: false, releases: [] as ReleaseInfo[], errors: [String(e)] };
+					}),
 				),
 			);
 			yield* Effect.logInfo(
-				closeResult === null ? "❌ Close linked issues — failed" : `✅ ${closeResult.closedCount} issue(s) closed`,
+				releasesResult.success
+					? `✅ Created ${releasesResult.releases.length} release(s)`
+					: `❌ Created ${releasesResult.releases.length} release(s) — ${releasesResult.errors.length} error(s)`,
 			);
-		}
 
-		// ── Emit outputs + final summary ───────────────────────────────────────
-		const tagShas: Record<string, string> = {};
-		for (const tag of tagStrategy.tags) {
-			const rev = yield* runner
-				.execCapture("git", ["rev-parse", tag.name])
-				.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "", stderr: "", exitCode: 1 })));
-			tagShas[tag.name] = rev.stdout.trim();
-		}
-		yield* emitPublishing(publishResult, tagStrategy.tags, releasesResult.releases, tagShas);
+			// ── Follow-on: close linked issues ─────────────────────────────────────
+			if (mergedReleasePRNumber !== undefined) {
+				const closeResult = yield* logger.group(
+					"Close linked issues",
+					closeLinkedIssues(mergedReleasePRNumber, dryRun).pipe(
+						Effect.catchAll((e) =>
+							Effect.gen(function* () {
+								yield* Effect.logWarning(`closeLinkedIssues failed: ${String(e)}`);
+								return null;
+							}),
+						),
+					),
+				);
+				yield* Effect.logInfo(
+					closeResult === null ? "❌ Close linked issues — failed" : `✅ ${closeResult.closedCount} issue(s) closed`,
+				);
+			}
 
-		yield* Effect.logInfo(
-			`Release publishing: ✅ ${publishResult.successfulPackages} package(s), ${releasesResult.releases.length} release(s)`,
-		);
-	});
+			// ── Emit outputs + final summary ───────────────────────────────────────
+			const tagShas: Record<string, string> = {};
+			for (const tag of tagStrategy.tags) {
+				const rev = yield* runner
+					.execCapture("git", ["rev-parse", tag.name])
+					.pipe(Effect.catchAll(() => Effect.succeed({ stdout: "", stderr: "", exitCode: 1 })));
+				tagShas[tag.name] = rev.stdout.trim();
+			}
+			yield* emitPublishing(publishResult, tagStrategy.tags, releasesResult.releases, tagShas);
+
+			yield* Effect.logInfo(
+				`Release publishing: ✅ ${publishResult.successfulPackages} package(s), ${releasesResult.releases.length} release(s)`,
+			);
+		}),
+	);
 
 /**
  * Read the merged-PR number from the GitHub event payload.

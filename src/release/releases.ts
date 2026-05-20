@@ -33,6 +33,7 @@ import {
 	GitHubRelease,
 	GitTag,
 	OidcTokenIssuer,
+	Step,
 	buildSLSAProvenancePredicate,
 	decodeJwtClaims,
 	getRegistryDisplayName,
@@ -411,25 +412,40 @@ const processOneTag = (
 		// ── Step 1: Create git tag ────────────────────────────────────────────────
 		const gitTagSvc = yield* GitTag;
 
-		yield* gitTagSvc.create(tag.name, headSha).pipe(
-			Effect.catchAll((createErr: GitTagError) =>
-				// Distinguish the idempotent "tag already exists at the right SHA"
-				// case from a true divergence. Resolve the existing tag's SHA and
-				// compare against the head we tried to point at: equal → info-level
-				// recovery (no GitHub Actions warning annotation), different →
-				// warning that names both SHAs so the divergence is forensically
-				// auditable, resolve-failure → preserve prior best-effort warning.
-				gitTagSvc.resolve(tag.name).pipe(
-					Effect.flatMap((existingSha) =>
-						existingSha === headSha
-							? Effect.logInfo(`runReleases: tag ${tag.name} already at ${headSha} — idempotent recovery, proceeding`)
-							: Effect.logWarning(
-									`runReleases: tag ${tag.name} create failed (${createErr.reason}); existing tag points at ${existingSha} but head is ${headSha} — proceeding`,
-								),
-					),
-					Effect.catchAll((resolveErr: GitTagError) =>
-						Effect.logWarning(
-							`runReleases: tag ${tag.name} create failed (${createErr.reason}) and resolve failed (${resolveErr.reason}) — proceeding`,
+		yield* Step.withStep(
+			`tag ${tag.name}`,
+			gitTagSvc.create(tag.name, headSha).pipe(
+				Effect.tap(() => Step.success(`created at ${headSha}`)),
+				Effect.catchAll((createErr: GitTagError) =>
+					// Distinguish the idempotent "tag already exists at the right SHA"
+					// case from a true divergence. Resolve the existing tag's SHA and
+					// compare against the head we tried to point at: equal → info-level
+					// recovery (no GitHub Actions warning annotation), different →
+					// warning that names both SHAs so the divergence is forensically
+					// auditable, resolve-failure → preserve prior best-effort warning.
+					gitTagSvc.resolve(tag.name).pipe(
+						Effect.flatMap((existingSha) =>
+							existingSha === headSha
+								? Effect.gen(function* () {
+										yield* Effect.logDebug(
+											`runReleases: tag ${tag.name} already at ${headSha} — idempotent recovery, proceeding`,
+										);
+										yield* Step.success(`already at ${headSha} — idempotent recovery`);
+									})
+								: Effect.gen(function* () {
+										yield* Effect.logWarning(
+											`runReleases: tag ${tag.name} create failed (${createErr.reason}); existing tag points at ${existingSha} but head is ${headSha} — proceeding`,
+										);
+										yield* Step.success(`diverged — existing ${existingSha} ≠ head ${headSha} (proceeding)`);
+									}),
+						),
+						Effect.catchAll((resolveErr: GitTagError) =>
+							Effect.gen(function* () {
+								yield* Effect.logWarning(
+									`runReleases: tag ${tag.name} create failed (${createErr.reason}) and resolve failed (${resolveErr.reason}) — proceeding`,
+								);
+								yield* Step.success(`create+resolve failed — proceeding`);
+							}),
 						),
 					),
 				),
@@ -700,7 +716,10 @@ const processOneTag = (
 			yield* Effect.logDebug(`runReleases: updated release body with asset links for ${tag.name}`);
 		}
 
-		yield* Effect.logInfo(`✅ release created — ${releaseData.id}`);
+		const releaseAssetCount = releaseInfo.assets.length;
+		yield* Step.success(
+			`release created — ${releaseData.id} (${associatedPackages.length} package(s), ${releaseAssetCount} asset(s))`,
+		);
 		return [releaseInfo, null] as const;
 	}).pipe(
 		Effect.catchAll((e: unknown) => {
@@ -747,60 +766,74 @@ export const runReleases = (
 	| ActionLogger
 	| WorkspaceDiscovery
 > =>
-	Effect.gen(function* () {
-		if (args.tags.length === 0) {
-			yield* Effect.logDebug("runReleases: no tags to process");
-			return {
-				success: true,
-				releases: [],
-				errors: [],
-			} satisfies ReleasesReport;
-		}
+	Step.withStep(
+		"Create releases",
+		Effect.gen(function* () {
+			if (args.tags.length === 0) {
+				yield* Effect.logDebug("runReleases: no tags to process");
+				yield* Step.success("0 release(s) created — no tags");
+				return {
+					success: true,
+					releases: [],
+					errors: [],
+				} satisfies ReleasesReport;
+			}
 
-		// Resolve owner/repo from GitHub client
-		const client = yield* GitHubClient;
-		const logger = yield* ActionLogger;
-		const { owner, repo } = yield* client.repo;
+			// Resolve owner/repo from GitHub client
+			const client = yield* GitHubClient;
+			const logger = yield* ActionLogger;
+			const { owner, repo } = yield* client.repo;
 
-		// Resolve HEAD SHA — used for git tag creation.
-		// `GITHUB_SHA` is always set in GitHub Actions; fall back to empty string
-		// so the Test layer can exercise the code path in tests.
-		const headSha = process.env.GITHUB_SHA ?? "";
+			// Resolve HEAD SHA — used for git tag creation.
+			// `GITHUB_SHA` is always set in GitHub Actions; fall back to empty string
+			// so the Test layer can exercise the code path in tests.
+			const headSha = process.env.GITHUB_SHA ?? "";
 
-		yield* Effect.logDebug(`runReleases: processing ${args.tags.length} tag(s)`);
+			yield* Effect.logDebug(`runReleases: processing ${args.tags.length} tag(s)`);
 
-		const releases: ReleaseInfo[] = [];
-		const errors: string[] = [];
+			const releases: ReleaseInfo[] = [];
+			const errors: string[] = [];
 
-		for (const tag of args.tags) {
-			// Find packages associated with this tag (mirrors the original logic)
-			const associatedPackages = args.publishResult.packages.filter((pkg) => {
-				if (tag.packageName.includes(", ")) {
-					return tag.packageName.includes(pkg.name);
+			for (const tag of args.tags) {
+				// Find packages associated with this tag (mirrors the original logic)
+				const associatedPackages = args.publishResult.packages.filter((pkg) => {
+					if (tag.packageName.includes(", ")) {
+						return tag.packageName.includes(pkg.name);
+					}
+					return pkg.name === tag.packageName;
+				});
+
+				const [releaseInfo, error] = yield* logger.group(
+					`Release · ${tag.packageName}@${tag.version}`,
+					Step.withStep(
+						`Release · ${tag.packageName}@${tag.version}`,
+						processOneTag(tag, associatedPackages, owner, repo, headSha, args.dryRun),
+					),
+				);
+
+				if (error !== null) {
+					errors.push(error);
+				} else if (releaseInfo !== null) {
+					releases.push(releaseInfo);
 				}
-				return pkg.name === tag.packageName;
-			});
+			}
 
-			const [releaseInfo, error] = yield* logger.group(
-				`Release · ${tag.packageName}@${tag.version}`,
-				processOneTag(tag, associatedPackages, owner, repo, headSha, args.dryRun),
+			yield* Effect.logDebug(
+				`runReleases: complete — ${releases.length} release(s) created, ${errors.length} error(s)`,
+			);
+			yield* Step.success(
+				errors.length === 0
+					? `${releases.length} release(s) created`
+					: `${releases.length} release(s) created, ${errors.length} error(s)`,
 			);
 
-			if (error !== null) {
-				errors.push(error);
-			} else if (releaseInfo !== null) {
-				releases.push(releaseInfo);
-			}
-		}
-
-		yield* Effect.logDebug(`runReleases: complete — ${releases.length} release(s) created, ${errors.length} error(s)`);
-
-		return {
-			success: errors.length === 0,
-			releases,
-			errors,
-		} satisfies ReleasesReport;
-	}).pipe(
+			return {
+				success: errors.length === 0,
+				releases,
+				errors,
+			} satisfies ReleasesReport;
+		}),
+	).pipe(
 		Effect.catchAll((e: unknown) =>
 			Effect.fail(
 				new ReleasesError({

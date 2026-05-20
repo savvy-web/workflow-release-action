@@ -127,7 +127,7 @@ function getBumpTypeIcon(type: string): string {
  * @param bytes - Raw byte count.
  * @returns Human-readable size string.
  */
-function humanizeSize(bytes: number): string {
+export function humanizeSize(bytes: number): string {
 	if (bytes === 0) {
 		return "0 B";
 	}
