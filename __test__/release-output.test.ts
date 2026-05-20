@@ -78,6 +78,8 @@ describe("ReleaseOutput schema", () => {
 							recovery: null,
 							registryUrl: null,
 							error: null,
+							attestationRecovered: null,
+							sbomAttestationRecovered: null,
 						},
 					],
 					attestations: { provenanceUrl: null, sbomUrl: null, githubAttestationUrl: null },

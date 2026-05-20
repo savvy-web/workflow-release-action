@@ -814,6 +814,16 @@ const PublishTarget = Schema.Struct({
 			description: "Error message when `status` is `failed`. Null on `published` or `skipped`.",
 		}),
 	),
+	attestationRecovered: Schema.NullOr(Schema.Boolean).annotations({
+		title: "Provenance attestation recovered",
+		description:
+			"True when the provenance attestation already existed for this tarball's sha256 and the orchestrator reused the existing URL instead of writing a new one. False when a new attestation was written this run. Null when no attestation step was attempted (provenance: false on every target in the group, or the target itself was not in a successful state).",
+	}),
+	sbomAttestationRecovered: Schema.NullOr(Schema.Boolean).annotations({
+		title: "SBOM attestation recovered",
+		description:
+			"True when the SBOM attestation already existed for this tarball's sha256 and the orchestrator reused the existing URL instead of writing a new one. False when a new attestation was written this run. Null when no SBOM attestation was attempted.",
+	}),
 }).annotations({
 	identifier: "PublishTarget",
 	title: "Published target",
@@ -1010,6 +1020,8 @@ export const PublishingOutput = Schema.Struct({
 								recovery: null,
 								registryUrl: "https://www.npmjs.com/package/@savvy-web/example/v/1.2.0",
 								error: null,
+								attestationRecovered: false,
+								sbomAttestationRecovered: false,
 							},
 							{
 								registry: "https://npm.pkg.github.com/",
@@ -1018,6 +1030,8 @@ export const PublishingOutput = Schema.Struct({
 								recovery: null,
 								registryUrl: "https://github.com/savvy-web/example-repo/packages/12345",
 								error: null,
+								attestationRecovered: false,
+								sbomAttestationRecovered: false,
 							},
 						],
 						attestations: {

@@ -970,6 +970,259 @@ describe("runPublishTargets", () => {
 		});
 	});
 
+	// ─── Idempotent attestation reuse (Round 2: skip-on-presence) ────────────
+	describe("attestation idempotency — skip when already attested", () => {
+		// CYCLONEDX_BOM and SLSA_PROVENANCE_V1 are reused from the library
+		// constants; copying them here keeps the test self-contained without
+		// re-importing the schema module.
+		const SLSA_PROVENANCE_V1 = "https://slsa.dev/provenance/v1";
+		const CYCLONEDX_BOM = "https://cyclonedx.org/bom";
+		// The pack-result fixture above carries this hex; every test that
+		// triggers an attestation probes the subject under this digest.
+		const SUBJECT_SHA = "abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123abc1";
+
+		it("reuses existing provenance + SBOM attestations and writes neither", async () => {
+			// Arrange — seed the AttestTest layer with both a provenance
+			// and an SBOM attestation under the same subject digest.
+			const { makeAttestTestState } = await import("@savvy-web/github-action-effects/testing");
+			const attestState = makeAttestTestState();
+			attestState.seedAttestations.set(SUBJECT_SHA, [
+				{
+					attestationUrl: "https://github.com/owner/repo/attestations/100",
+					predicateType: SLSA_PROVENANCE_V1,
+				},
+				{
+					attestationUrl: "https://github.com/owner/repo/attestations/101",
+					predicateType: CYCLONEDX_BOM,
+				},
+			]);
+
+			const SHARED_DIR = `/tmp/test/${PACK_NAME}`;
+			const npmLayer = NpmRegistryTest.empty();
+			const { layer: pubLayer } = PackagePublishTest.layer({ packResult: makePackResult() });
+
+			const wsPkg = makeWsPkg(PACK_NAME, PACK_VERSION, SHARED_DIR);
+			const target = new PublishTarget({
+				name: PACK_NAME,
+				registry: "https://registry.npmjs.org/",
+				directory: SHARED_DIR,
+				access: "public",
+				provenance: true,
+			});
+			const detected: DetectedRelease[] = [makeDetected(PACK_NAME, PACK_VERSION, wsPkg.path)];
+
+			const { AttestTest: AttestTestNs } = await import("@savvy-web/github-action-effects/testing");
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				configProviderLayer,
+				pubLayer,
+				npmLayer,
+				sbomLayer,
+				AttestTestNs.layer(attestState),
+				oidcTokenIssuerLayer,
+				sigstoreSignerLayer,
+				GitHubClientTest.empty(),
+				makeWorkspaceDiscoveryLayer([wsPkg]),
+				makePublishabilityLayer(new Map([[wsPkg.name, [target]]])),
+				makeTopologicalSorterLayer([wsPkg.name]),
+			);
+
+			// Act
+			const result: PublishPackagesResult = await Effect.runPromise(
+				runPublishTargets(detected, args).pipe(Effect.provide(layers)),
+			);
+
+			// Assert — neither provenance nor SBOM was written; both
+			// existing URLs were reused on the target's result.
+			expect(attestState.provenanceCalls).toHaveLength(0);
+			expect(attestState.sbomCalls).toHaveLength(0);
+			expect(attestState.listForSubjectCalls.length).toBeGreaterThanOrEqual(2);
+
+			const targetResult = result.packages[0]?.targets[0];
+			expect(targetResult?.attestationUrl).toBe("https://github.com/owner/repo/attestations/100");
+			expect(targetResult?.sbomAttestationUrl).toBe("https://github.com/owner/repo/attestations/101");
+			expect(targetResult?.recovered).toEqual({ provenance: true, sbom: true });
+		});
+
+		it("writes fresh provenance + SBOM when no existing attestations match", async () => {
+			// Arrange — empty seed; the orchestrator must hit listForSubject
+			// twice (provenance + SBOM), find nothing, and write both fresh.
+			const { makeAttestTestState } = await import("@savvy-web/github-action-effects/testing");
+			const attestState = makeAttestTestState();
+
+			const SHARED_DIR = `/tmp/test/${PACK_NAME}`;
+			const npmLayer = NpmRegistryTest.empty();
+			const { layer: pubLayer } = PackagePublishTest.layer({ packResult: makePackResult() });
+
+			const wsPkg = makeWsPkg(PACK_NAME, PACK_VERSION, SHARED_DIR);
+			const target = new PublishTarget({
+				name: PACK_NAME,
+				registry: "https://registry.npmjs.org/",
+				directory: SHARED_DIR,
+				access: "public",
+				provenance: true,
+			});
+			const detected: DetectedRelease[] = [makeDetected(PACK_NAME, PACK_VERSION, wsPkg.path)];
+
+			const { AttestTest: AttestTestNs } = await import("@savvy-web/github-action-effects/testing");
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				configProviderLayer,
+				pubLayer,
+				npmLayer,
+				sbomLayer,
+				AttestTestNs.layer(attestState),
+				oidcTokenIssuerLayer,
+				sigstoreSignerLayer,
+				GitHubClientTest.empty(),
+				makeWorkspaceDiscoveryLayer([wsPkg]),
+				makePublishabilityLayer(new Map([[wsPkg.name, [target]]])),
+				makeTopologicalSorterLayer([wsPkg.name]),
+			);
+
+			// Act
+			const result: PublishPackagesResult = await Effect.runPromise(
+				runPublishTargets(detected, args).pipe(Effect.provide(layers)),
+			);
+
+			// Assert — listForSubject was probed twice (one per predicate
+			// type), SBOM was written (provenance path is gated by OIDC
+			// decode that the test layer can't satisfy → recovered: false
+			// stays on both legs since the OIDC fallback writes nothing).
+			expect(attestState.listForSubjectCalls.length).toBeGreaterThanOrEqual(2);
+			expect(attestState.sbomCalls).toHaveLength(1);
+
+			const targetResult = result.packages[0]?.targets[0];
+			// SBOM was newly written; provenance probe ran but the OIDC
+			// decode failed in test, so attestationUrl remains undefined.
+			expect(targetResult?.recovered).toEqual({ provenance: false, sbom: false });
+		});
+
+		it("mixed: provenance exists, SBOM does not — skip provenance, write SBOM", async () => {
+			// Arrange — seed only a provenance attestation; the SBOM
+			// branch must still fire because no SBOM is on file.
+			const { makeAttestTestState } = await import("@savvy-web/github-action-effects/testing");
+			const attestState = makeAttestTestState();
+			attestState.seedAttestations.set(SUBJECT_SHA, [
+				{
+					attestationUrl: "https://github.com/owner/repo/attestations/200",
+					predicateType: SLSA_PROVENANCE_V1,
+				},
+			]);
+
+			const SHARED_DIR = `/tmp/test/${PACK_NAME}`;
+			const npmLayer = NpmRegistryTest.empty();
+			const { layer: pubLayer } = PackagePublishTest.layer({ packResult: makePackResult() });
+
+			const wsPkg = makeWsPkg(PACK_NAME, PACK_VERSION, SHARED_DIR);
+			const target = new PublishTarget({
+				name: PACK_NAME,
+				registry: "https://registry.npmjs.org/",
+				directory: SHARED_DIR,
+				access: "public",
+				provenance: true,
+			});
+			const detected: DetectedRelease[] = [makeDetected(PACK_NAME, PACK_VERSION, wsPkg.path)];
+
+			const { AttestTest: AttestTestNs } = await import("@savvy-web/github-action-effects/testing");
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				configProviderLayer,
+				pubLayer,
+				npmLayer,
+				sbomLayer,
+				AttestTestNs.layer(attestState),
+				oidcTokenIssuerLayer,
+				sigstoreSignerLayer,
+				GitHubClientTest.empty(),
+				makeWorkspaceDiscoveryLayer([wsPkg]),
+				makePublishabilityLayer(new Map([[wsPkg.name, [target]]])),
+				makeTopologicalSorterLayer([wsPkg.name]),
+			);
+
+			// Act
+			const result: PublishPackagesResult = await Effect.runPromise(
+				runPublishTargets(detected, args).pipe(Effect.provide(layers)),
+			);
+
+			// Assert — provenance was reused, SBOM was newly written.
+			expect(attestState.provenanceCalls).toHaveLength(0);
+			expect(attestState.sbomCalls).toHaveLength(1);
+
+			const targetResult = result.packages[0]?.targets[0];
+			expect(targetResult?.attestationUrl).toBe("https://github.com/owner/repo/attestations/200");
+			expect(targetResult?.recovered).toEqual({ provenance: true, sbom: false });
+		});
+
+		it("passes the on-disk SBOM document as bomDocument when sbomPath exists", async () => {
+			// Arrange — write a CycloneDX BOM to disk; the orchestrator
+			// should hand it to Attest.sbom verbatim as `bomDocument`
+			// rather than calling with `dependencies: []`.
+			const { makeAttestTestState } = await import("@savvy-web/github-action-effects/testing");
+			const attestState = makeAttestTestState();
+
+			const tmpDir = join(tmpdir(), `silk-sbom-attest-test-${Date.now()}`);
+			mkdirSync(tmpDir, { recursive: true });
+			const sbomPath = join(tmpDir, "pkg.sbom.json");
+			const bomFixture = {
+				bomFormat: "CycloneDX" as const,
+				specVersion: "1.5" as const,
+				version: 1,
+				metadata: {
+					component: { name: PACK_NAME, version: PACK_VERSION, type: "library" },
+					supplier: { name: "Test Supplier" },
+				},
+				components: [{ type: "library", name: "lodash", version: "4.17.21" }],
+			};
+			writeFileSync(sbomPath, JSON.stringify(bomFixture));
+
+			const SHARED_DIR = `/tmp/test/${PACK_NAME}`;
+			const npmLayer = NpmRegistryTest.empty();
+			const { layer: pubLayer } = PackagePublishTest.layer({ packResult: makePackResult() });
+
+			const wsPkg = makeWsPkg(PACK_NAME, PACK_VERSION, SHARED_DIR);
+			const target = new PublishTarget({
+				name: PACK_NAME,
+				registry: "https://registry.npmjs.org/",
+				directory: SHARED_DIR,
+				access: "public",
+				provenance: true,
+			});
+			const detected: DetectedRelease[] = [makeDetected(PACK_NAME, PACK_VERSION, wsPkg.path)];
+			const sbomPaths = new Map<string, string>([[PACK_NAME, sbomPath]]);
+
+			const { AttestTest: AttestTestNs } = await import("@savvy-web/github-action-effects/testing");
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				configProviderLayer,
+				pubLayer,
+				npmLayer,
+				sbomLayer,
+				AttestTestNs.layer(attestState),
+				oidcTokenIssuerLayer,
+				sigstoreSignerLayer,
+				GitHubClientTest.empty(),
+				makeWorkspaceDiscoveryLayer([wsPkg]),
+				makePublishabilityLayer(new Map([[wsPkg.name, [target]]])),
+				makeTopologicalSorterLayer([wsPkg.name]),
+			);
+
+			// Act
+			await Effect.runPromise(runPublishTargets(detected, args, sbomPaths).pipe(Effect.provide(layers)));
+
+			// Assert — the sbom() call carries the on-disk BOM document,
+			// NOT the legacy `dependencies: []` shape.
+			expect(attestState.sbomCalls).toHaveLength(1);
+			const sbomCall = attestState.sbomCalls[0];
+			expect(sbomCall?.bomDocument).toEqual(bomFixture);
+			expect(sbomCall?.dependencies).toBeUndefined();
+		});
+	});
+
 	describe("mixed: one published, one skipped-identical", () => {
 		it("publishes the missing-registry target, recovers the matching one, and counts both as 'Published 2/2'", async () => {
 			// Arrange — two targets at different registries. Registry A has no

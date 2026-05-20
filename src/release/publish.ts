@@ -358,7 +358,47 @@ const toLegacyTarget = (target: TargetSpec, protocol: "npm" | "jsr" = "npm") => 
 interface AttestationsOutcome {
 	readonly attestationUrl: string | undefined;
 	readonly sbomAttestationUrl: string | undefined;
+	/**
+	 * `true` when the provenance attestation already existed for the
+	 * tarball's `sha256` and the orchestrator reused the URL instead
+	 * of writing a fresh one. `false` when a new attestation was
+	 * written this run.
+	 */
+	readonly provenanceRecovered: boolean;
+	/** Same as {@link provenanceRecovered}, but for the SBOM attestation. */
+	readonly sbomRecovered: boolean;
 }
+
+/** Predicate URIs used by the artifact-attestation list filter. */
+const SLSA_PROVENANCE_V1 = "https://slsa.dev/provenance/v1";
+const CYCLONEDX_BOM = "https://cyclonedx.org/bom";
+
+/**
+ * Read the on-disk SBOM document for the per-package sbomPath.
+ *
+ * @remarks
+ * The Phase-2 Build & SBOM step writes a full NTIA-compliant
+ * CycloneDX document to disk (with supplier metadata, components,
+ * licenses); `Attest.sbom` now accepts a pre-built BOM via the
+ * `bomDocument` field rather than re-deriving an empty-deps BOM.
+ *
+ * Returns `null` (and logs a debug warning) when the file does not
+ * exist or fails to parse — the SBOM-attestation path then falls
+ * back to the legacy `dependencies: []` behaviour so a malformed
+ * BOM file never fails the publish run.
+ */
+const readSbomDocument = (sbomPath: string | null): Record<string, unknown> | null => {
+	if (sbomPath === null) return null;
+	try {
+		if (!existsSync(sbomPath)) return null;
+		const text = readFileSync(sbomPath, "utf-8");
+		const parsed = JSON.parse(text);
+		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+		return parsed as Record<string, unknown>;
+	} catch {
+		return null;
+	}
+};
 
 /**
  * Run provenance + SBOM attestations ONCE for the build directory's tarball.
@@ -386,59 +426,150 @@ interface AttestationsOutcome {
  * `provenance` is derived by the caller from the group: any target in the
  * group with `provenance: true` enables attestation for the whole group.
  */
-const runAttestationsForBuild = (packageName: string, version: string, provenance: boolean, subjectSha256: string) =>
+const runAttestationsForBuild = (
+	packageName: string,
+	version: string,
+	provenance: boolean,
+	subjectSha256: string,
+	sbomPath: string | null,
+) =>
 	Effect.gen(function* () {
 		if (!provenance) {
-			return { attestationUrl: undefined, sbomAttestationUrl: undefined } satisfies AttestationsOutcome;
+			return {
+				attestationUrl: undefined,
+				sbomAttestationUrl: undefined,
+				provenanceRecovered: false,
+				sbomRecovered: false,
+			} satisfies AttestationsOutcome;
 		}
 
 		const attestSvc = yield* Attest;
-		const predicate = yield* buildProvenancePredicate();
 
+		// ── Provenance: skip-on-presence ───────────────────────────────────
 		let attestationUrl: string | undefined;
-		if (predicate !== null) {
-			const provenanceRecord = yield* attestSvc
-				.provenance({
-					subjectName: `pkg:npm/${packageName}@${version}`,
-					subjectSha256,
-					predicate,
-				})
-				.pipe(
-					Effect.catchAll((e: AttestError) =>
-						Effect.gen(function* () {
-							yield* Effect.logWarning(`Provenance attestation failed for ${packageName}@${version}: ${e.message}`);
-							return null;
-						}),
-					),
+		let provenanceRecovered = false;
+
+		const existingProvenance = yield* attestSvc
+			.listForSubject(subjectSha256, { predicateType: SLSA_PROVENANCE_V1 })
+			.pipe(
+				Effect.catchAll((e: AttestError) =>
+					Effect.gen(function* () {
+						yield* Effect.logDebug(
+							`[attest] provenance: listForSubject failed for ${subjectSha256}, will attempt fresh write: ${e.message}`,
+						);
+						return [] as ReadonlyArray<{ readonly attestationUrl: string; readonly predicateType: string }>;
+					}),
+				),
+			);
+
+		if (existingProvenance.length > 0) {
+			const existing = existingProvenance[0];
+			if (existing !== undefined) {
+				yield* Effect.logDebug(
+					`[attest] provenance: reusing existing attestation for ${subjectSha256} → ${existing.attestationUrl}`,
 				);
-			if (provenanceRecord !== null) {
-				attestationUrl = provenanceRecord.attestationUrl;
+				attestationUrl = existing.attestationUrl;
+				provenanceRecovered = true;
 			}
 		} else {
-			yield* Effect.logWarning(
-				`Skipping provenance attestation for ${packageName}@${version}: could not obtain OIDC claims`,
-			);
+			const predicate = yield* buildProvenancePredicate();
+			if (predicate !== null) {
+				yield* Effect.logDebug(`[attest] provenance: writing new attestation for ${subjectSha256}`);
+				const provenanceRecord = yield* attestSvc
+					.provenance({
+						subjectName: `pkg:npm/${packageName}@${version}`,
+						subjectSha256,
+						predicate,
+					})
+					.pipe(
+						Effect.catchAll((e: AttestError) =>
+							Effect.gen(function* () {
+								yield* Effect.logWarning(`Provenance attestation failed for ${packageName}@${version}: ${e.message}`);
+								return null;
+							}),
+						),
+					);
+				if (provenanceRecord !== null) {
+					attestationUrl = provenanceRecord.attestationUrl;
+				}
+			} else {
+				yield* Effect.logWarning(
+					`Skipping provenance attestation for ${packageName}@${version}: could not obtain OIDC claims`,
+				);
+			}
 		}
 
-		const sbomRecord = yield* attestSvc
-			.sbom({
-				rootName: packageName,
-				rootVersion: version,
-				dependencies: [],
-				subjectSha256,
-			})
-			.pipe(
-				Effect.catchAll((e) => {
-					const msg = e instanceof Error ? e.message : String(e);
-					return Effect.gen(function* () {
-						yield* Effect.logWarning(`SBOM attestation failed for ${packageName}@${version}: ${msg}`);
-						return null;
-					});
-				}),
-			);
-		const sbomAttestationUrl = sbomRecord !== null ? sbomRecord.attestationUrl : undefined;
+		// ── SBOM: skip-on-presence + real BOM document ────────────────────
+		let sbomAttestationUrl: string | undefined;
+		let sbomRecovered = false;
 
-		return { attestationUrl, sbomAttestationUrl } satisfies AttestationsOutcome;
+		const existingSbom = yield* attestSvc.listForSubject(subjectSha256, { predicateType: CYCLONEDX_BOM }).pipe(
+			Effect.catchAll((e: AttestError) =>
+				Effect.gen(function* () {
+					yield* Effect.logDebug(
+						`[attest] SBOM: listForSubject failed for ${subjectSha256}, will attempt fresh write: ${e.message}`,
+					);
+					return [] as ReadonlyArray<{ readonly attestationUrl: string; readonly predicateType: string }>;
+				}),
+			),
+		);
+
+		if (existingSbom.length > 0) {
+			const existing = existingSbom[0];
+			if (existing !== undefined) {
+				yield* Effect.logDebug(
+					`[attest] SBOM: reusing existing attestation for ${subjectSha256} → ${existing.attestationUrl}`,
+				);
+				sbomAttestationUrl = existing.attestationUrl;
+				sbomRecovered = true;
+			}
+		} else {
+			// Prefer the Phase-2 Build & SBOM document on disk; the empty-deps
+			// fallback (legacy behaviour) only fires when the file is missing
+			// or malformed. Either way attestation never fails the run.
+			const bomDocument = readSbomDocument(sbomPath);
+			yield* Effect.logDebug(`[attest] SBOM: writing new attestation for ${subjectSha256}`);
+			if (bomDocument === null && sbomPath !== null) {
+				yield* Effect.logDebug(
+					`[attest] SBOM: failed to read ${sbomPath} for ${packageName}@${version}; falling back to empty-deps BOM`,
+				);
+			}
+			const sbomRecord = yield* attestSvc
+				.sbom(
+					bomDocument !== null
+						? {
+								rootName: packageName,
+								rootVersion: version,
+								subjectSha256,
+								bomDocument,
+							}
+						: {
+								rootName: packageName,
+								rootVersion: version,
+								subjectSha256,
+								dependencies: [],
+							},
+				)
+				.pipe(
+					Effect.catchAll((e) => {
+						const msg = e instanceof Error ? e.message : String(e);
+						return Effect.gen(function* () {
+							yield* Effect.logWarning(`SBOM attestation failed for ${packageName}@${version}: ${msg}`);
+							return null;
+						});
+					}),
+				);
+			if (sbomRecord !== null) {
+				sbomAttestationUrl = sbomRecord.attestationUrl;
+			}
+		}
+
+		return {
+			attestationUrl,
+			sbomAttestationUrl,
+			provenanceRecovered,
+			sbomRecovered,
+		} satisfies AttestationsOutcome;
 	});
 
 /**
@@ -746,24 +877,49 @@ const publishDirectoryGroup = (
 			// Failed-mismatch results do not receive the URLs.
 			const anySuccess = results.some((r) => r.status === "published" || r.status === "skipped");
 			const groupProvenance = npmTargets.some((t) => t.provenance);
-			let attestations: AttestationsOutcome = { attestationUrl: undefined, sbomAttestationUrl: undefined };
+			let attestations: AttestationsOutcome = {
+				attestationUrl: undefined,
+				sbomAttestationUrl: undefined,
+				provenanceRecovered: false,
+				sbomRecovered: false,
+			};
+			let attestationsRan = false;
 			if (anySuccess) {
 				attestations = yield* Step.withStep(
 					"attest tarball",
 					Effect.gen(function* () {
 						if (!groupProvenance) {
 							yield* Step.success("skipped (no provenance configured)");
-							return { attestationUrl: undefined, sbomAttestationUrl: undefined } satisfies AttestationsOutcome;
+							return {
+								attestationUrl: undefined,
+								sbomAttestationUrl: undefined,
+								provenanceRecovered: false,
+								sbomRecovered: false,
+							} satisfies AttestationsOutcome;
 						}
-						const outcome = yield* runAttestationsForBuild(packageName, version, groupProvenance, packResult.sha256Hex);
-						yield* Step.success("provenance + SBOM written");
+						const outcome = yield* runAttestationsForBuild(
+							packageName,
+							version,
+							groupProvenance,
+							packResult.sha256Hex,
+							sbomPath,
+						);
+						// One log line summarising provenance + SBOM, including the
+						// idempotent reuse on a recovery run so the build output
+						// shows whether anything new was written this run.
+						const provLabel = outcome.provenanceRecovered ? "provenance reused" : "provenance written";
+						const sbomLabel = outcome.sbomRecovered ? "SBOM reused" : "SBOM written";
+						yield* Step.success(`${provLabel}, ${sbomLabel}`);
 						return outcome;
 					}),
 				);
+				attestationsRan = groupProvenance;
 			}
 
 			// Attach the shared URLs (and the per-package sbomPath, threaded in from
-			// runBuildAndSbom) to every successful target's result.
+			// runBuildAndSbom) to every successful target's result. `recovered`
+			// surfaces only when the per-build attestation step actually ran —
+			// undefined when groupProvenance was false (no attestation attempted).
 			const enrichedResults = results.map((r) =>
 				r.status === "published" || r.status === "skipped"
 					? {
@@ -771,6 +927,14 @@ const publishDirectoryGroup = (
 							attestationUrl: attestations.attestationUrl,
 							sbomAttestationUrl: attestations.sbomAttestationUrl,
 							...(sbomPath !== null ? { sbomPath } : {}),
+							...(attestationsRan
+								? {
+										recovered: {
+											provenance: attestations.provenanceRecovered,
+											sbom: attestations.sbomRecovered,
+										},
+									}
+								: {}),
 						}
 					: r,
 			);

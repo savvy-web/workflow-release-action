@@ -75,6 +75,32 @@ export interface TargetPublishResult {
 	unpackedSize?: number | undefined;
 	/** Number of files in the tarball reported by the publish dry-run */
 	fileCount?: number | undefined;
+	/**
+	 * Recovery state for the per-build attestation step.
+	 *
+	 * @remarks
+	 * Populated when the publish orchestrator probed the GitHub
+	 * attestation store with `Attest.listForSubject` before writing,
+	 * and on a per-attestation-kind basis:
+	 *
+	 *  - `provenance: true` — a SLSA provenance attestation already
+	 *    existed for this tarball's `sha256` and the orchestrator
+	 *    reused the existing URL instead of writing a fresh one.
+	 *  - `sbom: true` — same, but for the CycloneDX SBOM attestation.
+	 *  - `false` (either field) — the attestation was newly written
+	 *    this run.
+	 *
+	 * Absent when no attestation step ran (every target in the group
+	 * had `provenance: false`). The schema projection layer turns
+	 * `undefined` into `null` for the two `*AttestationRecovered`
+	 * fields on `PublishTarget`.
+	 */
+	recovered?:
+		| {
+				readonly provenance: boolean;
+				readonly sbom: boolean;
+		  }
+		| undefined;
 }
 
 /**

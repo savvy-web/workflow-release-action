@@ -282,6 +282,11 @@ export const toPublishingOutput = (input: PublishingInput): PublishingOutput => 
 				t.recovery !== undefined
 					? { localDigest: t.recovery.localDigest, remoteDigest: t.recovery.remoteDigest }
 					: null;
+			// `recovered: undefined` → both fields null (no attestation step
+			// ran for this group). `recovered: { provenance, sbom }` →
+			// project each leg verbatim onto its scalar schema field.
+			const attestationRecovered = t.recovered !== undefined ? t.recovered.provenance : null;
+			const sbomAttestationRecovered = t.recovered !== undefined ? t.recovered.sbom : null;
 			return {
 				registry: t.target.registry ?? "jsr",
 				status,
@@ -289,6 +294,8 @@ export const toPublishingOutput = (input: PublishingInput): PublishingOutput => 
 				recovery,
 				registryUrl: t.registryUrl ?? null,
 				error: status === "failed" ? (t.error ?? null) : null,
+				attestationRecovered,
+				sbomAttestationRecovered,
 			};
 		});
 		// Package status: failed if any target failed; skipped if every target

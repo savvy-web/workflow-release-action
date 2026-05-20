@@ -1039,7 +1039,9 @@
 										"skipReason": null,
 										"recovery": null,
 										"registryUrl": "https://www.npmjs.com/package/@savvy-web/example/v/1.2.0",
-										"error": null
+										"error": null,
+										"attestationRecovered": false,
+										"sbomAttestationRecovered": false
 									},
 									{
 										"registry": "https://npm.pkg.github.com/",
@@ -1047,7 +1049,9 @@
 										"skipReason": null,
 										"recovery": null,
 										"registryUrl": "https://github.com/savvy-web/example-repo/packages/12345",
-										"error": null
+										"error": null,
+										"attestationRecovered": false,
+										"sbomAttestationRecovered": false
 									}
 								],
 								"attestations": {
@@ -1177,7 +1181,16 @@
 		},
 		"PublishTarget": {
 			"type": "object",
-			"required": ["registry", "status", "skipReason", "recovery", "registryUrl", "error"],
+			"required": [
+				"registry",
+				"status",
+				"skipReason",
+				"recovery",
+				"registryUrl",
+				"error",
+				"attestationRecovered",
+				"sbomAttestationRecovered"
+			],
 			"properties": {
 				"registry": {
 					"type": "string",
@@ -1236,6 +1249,30 @@
 							"type": "null"
 						}
 					]
+				},
+				"attestationRecovered": {
+					"anyOf": [
+						{
+							"type": "boolean"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"description": "True when the provenance attestation already existed for this tarball's sha256 and the orchestrator reused the existing URL instead of writing a new one. False when a new attestation was written this run. Null when no attestation step was attempted (provenance: false on every target in the group, or the target itself was not in a successful state).",
+					"title": "Provenance attestation recovered"
+				},
+				"sbomAttestationRecovered": {
+					"anyOf": [
+						{
+							"type": "boolean"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"description": "True when the SBOM attestation already existed for this tarball's sha256 and the orchestrator reused the existing URL instead of writing a new one. False when a new attestation was written this run. Null when no SBOM attestation was attempted.",
+					"title": "SBOM attestation recovered"
 				}
 			},
 			"additionalProperties": false,
