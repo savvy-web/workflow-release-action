@@ -462,6 +462,53 @@ describe("runValidation", () => {
 			expect(report.packages).toHaveLength(0);
 			expect(report.validationPackages).toHaveLength(0);
 		});
+
+		it("emits a warning-severity finding scoped to Publish Validation when zero packages have version diffs", async () => {
+			// A release branch with no version diffs is valid-but-suspicious:
+			// either the release has already merged, or Phase 1 dropped the
+			// version-bump commit. The validation phase must surface a warning
+			// rather than silently emit an empty report.
+			const pkg = makeWsPkg("@test/stable", "2.0.0", "packages/stable");
+
+			const commandResponses = new Map<string, CommandResponse>([
+				[
+					"git show main:packages/stable/package.json",
+					{ exitCode: 0, stdout: JSON.stringify({ name: "@test/stable", version: "2.0.0" }), stderr: "" },
+				],
+			]);
+
+			const { layer: pubLayer } = PackagePublishTest.empty();
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				makeCommandRunnerLayer(commandResponses),
+				pubLayer,
+				npmRegistryLayer,
+				sbomLayer,
+				attestLayer,
+				makeWorkspaceDiscoveryLayer([pkg]),
+				makePublishabilityLayer(new Map([["@test/stable", [makeNpmTarget("@test/stable")]]])),
+			);
+
+			const report = await Effect.runPromise(
+				runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
+			);
+
+			// The run still succeeds — this is a warning, not an error.
+			expect(report.publishOk).toBe(true);
+			expect(report.validationPackages).toHaveLength(0);
+
+			// Exactly one finding (the no-packages warning); scope is global
+			// (null), severity is warning, check is Publish Validation.
+			expect(report.findings).toHaveLength(1);
+			const finding = report.findings[0];
+			expect(finding?.severity).toBe("warning");
+			expect(finding?.check).toBe("Publish Validation");
+			expect(finding?.scope).toBeNull();
+			expect(finding?.message).toMatch(/No packages have version differences/);
+			expect(finding?.message).toMatch(/Phase 1/);
+		});
 	});
 
 	describe("changeset counting (target-branch .changeset directory)", () => {

@@ -506,6 +506,23 @@ export const runValidation = (args: ValidationInputArgs) =>
 
 		if (releasedPackages.length === 0) {
 			yield* Effect.logDebug("runValidation: no packages to validate");
+			// A release branch with zero version diffs against the target branch
+			// is a valid-but-suspicious state. Three causes are possible: the
+			// release has already merged into the target branch (benign), Phase 1
+			// did not commit the expected version bumps (an upstream bug worth
+			// surfacing), or workspace discovery is misconfigured. Emit a
+			// warning finding so the LLM reviewer and the sticky comment surface
+			// the situation — the run still succeeds.
+			const noPackagesWarning: ValidationFinding = {
+				severity: "warning",
+				check: "Publish Validation",
+				scope: null,
+				message:
+					"No packages have version differences against the target branch. " +
+					"This is benign if the release has already merged into the target branch. " +
+					"Otherwise, investigate Phase 1: the version-bump commit may be missing, " +
+					"or workspace discovery may be misconfigured.",
+			};
 			return {
 				publishOk: true,
 				npmReady: true,
@@ -517,7 +534,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 				validationPackages: [],
 				sbomOk: true,
 				sbomSummary: "No packages require SBOM",
-				findings: sbomConfigFindings,
+				findings: [...sbomConfigFindings, noPackagesWarning],
 				resolvedSbomConfig: new Map<string, ResolvedSBOMMetadata>(),
 				sbomConfigSource: sbomConfigResult.source,
 			} satisfies ValidationReport;

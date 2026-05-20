@@ -589,7 +589,7 @@ const ValidationPayload = Schema.Struct({
 		packages: Schema.Array(ValidationPublishPackage).annotations({
 			title: "Released packages",
 			description:
-				"The packages being released this run, with their builds and per-target readiness. Empty array when the validation phase ran on a release branch with no published-target packages (every changing package was version-only or private).",
+				"The packages being released this run, with their builds and per-target readiness. Empty array only when no packages had version differences against the target branch — in that case the run is a noop and a warning-severity finding is emitted to explain why. A release that bumps only private/version-only packages still populates this array, with empty `builds` per package.",
 		}),
 	}).annotations({
 		identifier: "ValidationPublish",
@@ -642,7 +642,7 @@ export const ValidationOutput = Schema.Struct({
 	noop: Schema.Boolean.annotations({
 		title: "No-op",
 		description:
-			"True when the release branch had no packages requiring validation (every changing package was version-only or marked private).",
+			"True when no packages had version differences against the target branch — either the release has already merged into the target branch, or Phase 1 did not commit the expected version bumps. A run with only version-only packages is NOT a noop; those packages still appear in `publish.packages` with empty `builds`. When this flag is true, a warning-severity finding is also emitted on the `Publish Validation` check so the situation is surfaced to reviewers.",
 	}),
 	succeeded: annotatedSucceededField,
 	hasFailures: annotatedHasFailuresField,
