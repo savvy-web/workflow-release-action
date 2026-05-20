@@ -163,6 +163,61 @@ describe("runValidation", () => {
 			expect(pubState.dryRunCalls).toHaveLength(1);
 			expect(pubState.dryRunCalls[0]?.packageDir).toBe("/tmp/dist/alpha");
 		});
+
+		it("detects a single-root-workspace release (relativePath: '.') as a publishable package", async () => {
+			// Regression: `github-action-builder` ships a `pnpm-workspace.yaml`
+			// with `packages: [.]` — the root IS the only workspace, with
+			// `private: true` and `publishConfig.targets`. The version-diff
+			// detector must include root workspaces; the prior
+			// `.filter((p) => !p.isRootWorkspace)` silently dropped the only
+			// thing the action was supposed to release.
+			const rootPkg = new WorkspacePackage({
+				name: "@savvy-web/github-action-builder",
+				version: "0.7.1",
+				path: "/tmp/test-workspace",
+				packageJsonPath: "/tmp/test-workspace/package.json",
+				relativePath: ".", // identifies this as the root workspace
+				private: true,
+			});
+			const target = makeNpmTarget("@savvy-web/github-action-builder", "/tmp/test-workspace/dist/npm");
+
+			const commandResponses = new Map<string, CommandResponse>([
+				[
+					"git show main:package.json",
+					{
+						exitCode: 0,
+						stdout: JSON.stringify({ name: "@savvy-web/github-action-builder", version: "0.7.0" }),
+						stderr: "",
+					},
+				],
+			]);
+
+			const { layer: pubLayer } = PackagePublishTest.empty();
+
+			const layers = Layer.mergeAll(
+				loggerLayer,
+				actionStateLayer,
+				makeCommandRunnerLayer(commandResponses),
+				pubLayer,
+				npmRegistryLayer,
+				sbomLayer,
+				attestLayer,
+				makeWorkspaceDiscoveryLayer([rootPkg]),
+				makePublishabilityLayer(new Map([["@savvy-web/github-action-builder", [target]]])),
+			);
+
+			const report = await Effect.runPromise(
+				runValidation({ packageManager: "pnpm", targetBranch: "main", dryRun: false }).pipe(Effect.provide(layers)),
+			);
+
+			// Root workspace should be detected and counted, not silently dropped.
+			expect(rootPkg.isRootWorkspace).toBe(true);
+			expect(report.validationPackages).toHaveLength(1);
+			expect(report.validationPackages[0]?.name).toBe("@savvy-web/github-action-builder");
+			expect(report.validationPackages[0]?.baseVersion).toBe("0.7.0");
+			expect(report.validationPackages[0]?.version).toBe("0.7.1");
+			expect(report.totalTargets).toBe(1);
+		});
 	});
 
 	describe("dry-run failure", () => {
