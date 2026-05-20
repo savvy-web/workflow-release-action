@@ -124,6 +124,7 @@ describe("ReleaseOutput schema", () => {
 								],
 							},
 						],
+						releaseNotes: { status: "found", content: "### Minor Changes\n\n- something" },
 					},
 				],
 			},

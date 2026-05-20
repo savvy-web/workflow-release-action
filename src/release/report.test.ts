@@ -70,6 +70,7 @@ function pkg(overrides?: Partial<ValidationPublishPackage>): ValidationPublishPa
 		ready: true,
 		versionOnly: false,
 		builds: [build()],
+		releaseNotes: { status: "found", content: "### Patch Changes\n\n- Sample release note." },
 		...overrides,
 	};
 }
@@ -658,7 +659,7 @@ describe("buildReleaseNotesPreviewSummary", () => {
 			}),
 		);
 		expect(md).toContain("## 📋 Release Notes Preview");
-		expect(md).toContain("**1 package(s) ready for release notes generation on merge.**");
+		expect(md).toContain("**1 package(s) ready for release on merge.**");
 		expect(md).toContain("@savvy-web/linked-1");
 		expect(md).toContain("5.0.12 → 5.0.13");
 		expect(md).toContain("\u{1F7E2} patch");
@@ -701,7 +702,7 @@ describe("buildReleaseNotesPreviewSummary", () => {
 
 		const md = buildReleaseNotesPreviewSummary(validationOf({ publish: publishOf([pkgA, pkgB, pkgC]) }));
 
-		expect(md).toContain("**3 package(s) ready for release notes generation on merge.**");
+		expect(md).toContain("**3 package(s) ready for release on merge.**");
 		// Each package's name, version transition, and bump label appear.
 		expect(md).toContain("@org/pkg-a");
 		expect(md).toContain("@org/pkg-b");
@@ -723,6 +724,53 @@ describe("buildReleaseNotesPreviewSummary", () => {
 		const cIdx = md.indexOf("@org/pkg-c");
 		expect(aIdx).toBeLessThan(bIdx);
 		expect(bIdx).toBeLessThan(cIdx);
+	});
+
+	it("renders the extracted CHANGELOG content per package below the summary table", () => {
+		const md = buildReleaseNotesPreviewSummary(
+			validationOf({
+				publish: publishOf([
+					pkg({
+						releaseNotes: { status: "found", content: "### Patch Changes\n\n- A specific fix for a bug" },
+					}),
+				]),
+			}),
+		);
+		expect(md).toContain("### @savvy-web/linked-1");
+		expect(md).toContain("**5.0.12 → 5.0.13**");
+		expect(md).toContain("- A specific fix for a bug");
+		// The Notes column shows ✅ when content was extracted.
+		expect(md).toMatch(/\| ✅ \|/);
+	});
+
+	it("renders a ⚠️ no-CHANGELOG warning when releaseNotes.status is 'no-changelog'", () => {
+		const md = buildReleaseNotesPreviewSummary(
+			validationOf({ publish: publishOf([pkg({ releaseNotes: { status: "no-changelog" } })]) }),
+		);
+		expect(md).toContain("No `CHANGELOG.md` found");
+		expect(md).toMatch(/\| ⚠️ \|/);
+	});
+
+	it("renders a ⚠️ version-not-found warning with the reason", () => {
+		const md = buildReleaseNotesPreviewSummary(
+			validationOf({
+				publish: publishOf([
+					pkg({ releaseNotes: { status: "version-not-found", reason: "Could not find version section in CHANGELOG" } }),
+				]),
+			}),
+		);
+		expect(md).toContain("Could not locate the `5.0.13` section");
+		expect(md).toContain("Could not find version section in CHANGELOG");
+	});
+
+	it("renders a ⚠️ error message when releaseNotes.status is 'error'", () => {
+		const md = buildReleaseNotesPreviewSummary(
+			validationOf({
+				publish: publishOf([pkg({ releaseNotes: { status: "error", message: "EACCES: permission denied" } })]),
+			}),
+		);
+		expect(md).toContain("Failed to read");
+		expect(md).toContain("EACCES: permission denied");
 	});
 });
 

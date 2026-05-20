@@ -298,7 +298,8 @@
 											"changesetCount",
 											"ready",
 											"versionOnly",
-											"builds"
+											"builds",
+											"releaseNotes"
 										],
 										"properties": {
 											"name": {
@@ -429,6 +430,63 @@
 													},
 													"additionalProperties": false
 												}
+											},
+											"releaseNotes": {
+												"anyOf": [
+													{
+														"type": "object",
+														"required": ["status", "content"],
+														"properties": {
+															"status": {
+																"type": "string",
+																"enum": ["found"]
+															},
+															"content": {
+																"type": "string"
+															}
+														},
+														"additionalProperties": false
+													},
+													{
+														"type": "object",
+														"required": ["status"],
+														"properties": {
+															"status": {
+																"type": "string",
+																"enum": ["no-changelog"]
+															}
+														},
+														"additionalProperties": false
+													},
+													{
+														"type": "object",
+														"required": ["status", "reason"],
+														"properties": {
+															"status": {
+																"type": "string",
+																"enum": ["version-not-found"]
+															},
+															"reason": {
+																"type": "string"
+															}
+														},
+														"additionalProperties": false
+													},
+													{
+														"type": "object",
+														"required": ["status", "message"],
+														"properties": {
+															"status": {
+																"type": "string",
+																"enum": ["error"]
+															},
+															"message": {
+																"type": "string"
+															}
+														},
+														"additionalProperties": false
+													}
+												]
 											}
 										},
 										"additionalProperties": false

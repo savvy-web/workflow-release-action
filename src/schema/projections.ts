@@ -166,6 +166,7 @@ const toValidationPublishPackage = (
 				provenance: t.provenance,
 			})),
 		})),
+		releaseNotes: pkg.releaseNotes,
 	};
 };
 

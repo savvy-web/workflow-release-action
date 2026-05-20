@@ -103,6 +103,7 @@ describe("toValidationOutput", () => {
 					baseVersion: "1.1.0",
 					changesetCount: 1,
 					builds: [npmBuild],
+					releaseNotes: { status: "found", content: "### Minor Changes\n\n- something" },
 				},
 				{
 					name: "@savvy-web/bar",
@@ -126,6 +127,7 @@ describe("toValidationOutput", () => {
 							],
 						},
 					],
+					releaseNotes: { status: "no-changelog" },
 				},
 			],
 			checkRun: { url: "https://example.com/check/1", conclusion: "success" },
@@ -170,6 +172,7 @@ describe("toValidationOutput", () => {
 					targets: [{ registry: "https://registry.npmjs.org/", status: "ready", access: "public", provenance: false }],
 				},
 			],
+			releaseNotes: { status: "found", content: "### Minor Changes\n\n- something" },
 		});
 		// A null base version is a brand-new package.
 		expect(bar?.bumpType).toBe("new");
@@ -213,7 +216,14 @@ describe("toValidationOutput", () => {
 			checks: [],
 			findings: [],
 			validationPackages: [
-				{ name: "@savvy-web/foo", version: "1.2.1", baseVersion: "1.2.0", changesetCount: 1, builds: [] },
+				{
+					name: "@savvy-web/foo",
+					version: "1.2.1",
+					baseVersion: "1.2.0",
+					changesetCount: 1,
+					builds: [],
+					releaseNotes: { status: "found", content: "### Patch Changes\n\n- something" },
+				},
 			],
 			checkRun: null,
 			dryRun: false,
@@ -238,7 +248,14 @@ describe("toValidationOutput", () => {
 			findings: [],
 			validationPackages: [
 				// A two-part base version is not a three-part semver string.
-				{ name: "@savvy-web/foo", version: "1.2.0", baseVersion: "1.0", changesetCount: 1, builds: [] },
+				{
+					name: "@savvy-web/foo",
+					version: "1.2.0",
+					baseVersion: "1.0",
+					changesetCount: 1,
+					builds: [],
+					releaseNotes: { status: "found", content: "### Patch Changes\n\n- something" },
+				},
 			],
 			checkRun: null,
 			dryRun: false,
@@ -290,6 +307,7 @@ describe("toValidationOutput", () => {
 							],
 						},
 					],
+					releaseNotes: { status: "no-changelog" },
 				},
 			],
 			checkRun: { url: "https://example.com/check/2", conclusion: "failure" },
@@ -340,6 +358,7 @@ describe("toValidationOutput", () => {
 					baseVersion: "1.1.0",
 					changesetCount: 1,
 					builds: [npmBuild],
+					releaseNotes: { status: "found", content: "### Patch Changes\n\n- something" },
 				},
 			],
 			checkRun: null,

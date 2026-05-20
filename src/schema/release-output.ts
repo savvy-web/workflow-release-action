@@ -146,6 +146,23 @@ const ValidationBuild = Schema.Struct({
 	targets: Schema.Array(ValidationBuildTarget),
 });
 
+/**
+ * The CHANGELOG.md section extracted for the new version.
+ *
+ * @remarks
+ * Discriminated by `status`. The validation phase reads each released
+ * package's `CHANGELOG.md` (already populated by `changeset version`) and
+ * locates the section for the new version. The shape mirrors the
+ * `ReleaseNotesExtraction` type in `utils/extract-release-notes.ts` so the
+ * pure extractor and the schema-encoded output share one wire format.
+ */
+const ValidationReleaseNotes = Schema.Union(
+	Schema.Struct({ status: Schema.Literal("found"), content: Schema.String }),
+	Schema.Struct({ status: Schema.Literal("no-changelog") }),
+	Schema.Struct({ status: Schema.Literal("version-not-found"), reason: Schema.String }),
+	Schema.Struct({ status: Schema.Literal("error"), message: Schema.String }),
+);
+
 /** A released package and the builds it produces. */
 const ValidationPublishPackage = Schema.Struct({
 	name: Schema.String,
@@ -156,6 +173,7 @@ const ValidationPublishPackage = Schema.Struct({
 	ready: Schema.Boolean,
 	versionOnly: Schema.Boolean,
 	builds: Schema.Array(ValidationBuild),
+	releaseNotes: ValidationReleaseNotes,
 });
 
 const ValidationPayload = Schema.Struct({

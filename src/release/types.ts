@@ -207,6 +207,19 @@ export interface ValidationPackageResult {
 	readonly changesetCount: number | null;
 	/** Builds — one per unique target directory. Empty for a version-only package. */
 	readonly builds: ReadonlyArray<PackageBuildResult>;
+	/**
+	 * The extracted `CHANGELOG.md` section for the new version, or a
+	 * discriminated "why nothing was extracted" status.
+	 *
+	 * @remarks
+	 * Computed during `runValidation` by reading the package's `CHANGELOG.md`
+	 * (already written by `changeset version` on the release branch) and
+	 * locating the heading for {@link ValidationPackageResult.version}.
+	 * Rendered on the Release Notes Preview check-run page; also surfaced on
+	 * the canonical `ValidationOutput` so downstream consumers can post the
+	 * extracted notes wherever they like.
+	 */
+	readonly releaseNotes: import("../utils/extract-release-notes.js").ReleaseNotesExtraction;
 }
 
 /**

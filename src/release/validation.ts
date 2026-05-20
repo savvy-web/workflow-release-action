@@ -34,6 +34,7 @@ import { WorkspaceDiscovery } from "workspaces-effect";
 import { GithubPackagesTokenState, STATE_KEYS } from "../state.js";
 import type { EnhancedCycloneDXDocument, ResolvedSBOMMetadata, SBOMMetadataConfig } from "../types/sbom-config.js";
 import { countChangesetsPerPackage } from "../utils/count-changesets.js";
+import { extractReleaseNotes } from "../utils/extract-release-notes.js";
 import { inferSBOMMetadata, resolveSBOMMetadata } from "../utils/infer-sbom-metadata.js";
 import type { ConfigSource } from "../utils/load-release-config.js";
 import { loadSBOMConfig } from "../utils/load-release-config.js";
@@ -543,6 +544,11 @@ export const runValidation = (args: ValidationInputArgs) =>
 			// `private` — validation only exercises what will actually be published.
 			const targets = yield* resolvePublishableTargets(pkg, workspaceRoot);
 
+			// Read the CHANGELOG.md `changeset version` already wrote — the
+			// release branch carries the per-version section. A version-only
+			// package still has a CHANGELOG; the same extractor applies.
+			const releaseNotes = extractReleaseNotes(pkg.path, pkg.version);
+
 			if (targets.length === 0) {
 				yield* Effect.logDebug(`${pkg.name}: no publish targets (version-only)`);
 				validationPackages.push({
@@ -551,6 +557,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 					baseVersion,
 					changesetCount: changesetCounts.get(pkg.name) ?? null,
 					builds: [],
+					releaseNotes,
 				});
 				continue;
 			}
@@ -782,6 +789,7 @@ export const runValidation = (args: ValidationInputArgs) =>
 				baseVersion,
 				changesetCount: changesetCounts.get(pkg.name) ?? null,
 				builds: buildResults,
+				releaseNotes,
 			});
 		}
 

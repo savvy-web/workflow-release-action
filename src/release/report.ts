@@ -577,14 +577,50 @@ export function buildPublishValidationSummary(validation: ValidationPayload): st
 }
 
 /**
+ * Render the per-package release-notes section that follows the summary
+ * table. The shape mirrors what the old GitHub-Actions-summary writer
+ * produced: a `### <package>` heading, a `**oldVersion → newVersion** (type)`
+ * line, and the extracted CHANGELOG section (or an explanatory status).
+ */
+function renderReleaseNotesSection(pkg: ValidationPayload["publish"]["packages"][number]): string {
+	const heading = `### ${pkg.name}`;
+	const transition = `**${renderVersionTransition(pkg)}** · ${renderBumpCell(pkg)}`;
+
+	const notes = pkg.releaseNotes;
+	let body: string;
+	switch (notes.status) {
+		case "found":
+			body = notes.content;
+			break;
+		case "no-changelog":
+			body = "_⚠️ No `CHANGELOG.md` found for this package._";
+			break;
+		case "version-not-found":
+			body = `_⚠️ Could not locate the \`${pkg.version}\` section in \`CHANGELOG.md\`._\n\n_Reason:_ ${notes.reason}`;
+			break;
+		case "error":
+			body = `_⚠️ Failed to read \`CHANGELOG.md\`:_ ${notes.message}`;
+			break;
+	}
+
+	return [heading, transition, body].join("\n\n");
+}
+
+/**
  * Build the Release Notes Preview check-run markdown summary from the
  * canonical {@link ValidationOutput} validation payload.
  *
  * @remarks
- * Pure function — no I/O. Renders the released-packages summary table the
- * sticky comment's summary section also shows (current → next, bump,
- * changeset count). When the consumer ever grows a rich release-notes module
- * this is the natural surface for it.
+ * Pure function — no I/O. Renders:
+ *
+ * 1. A header.
+ * 2. The "N package(s) ready" intro line.
+ * 3. The released-packages summary table (current → next, bump, changeset
+ *    count, release-notes status icon).
+ * 4. A per-package section with the extracted CHANGELOG body — or an
+ *    explanatory ⚠️ status when no notes could be extracted (the package has
+ *    no `CHANGELOG.md`, the new version's heading was missing, or the file
+ *    failed to read).
  *
  * @param validation - The canonical build-centric validation payload.
  * @returns Markdown string for the check-run summary.
@@ -599,15 +635,20 @@ export function buildReleaseNotesPreviewSummary(validation: ValidationPayload): 
 		return `${header}\n\n_No packages are being released._`;
 	}
 
+	const notesIcon = (notes: ValidationPayload["publish"]["packages"][number]["releaseNotes"]): string =>
+		notes.status === "found" ? "✅" : "⚠️";
+
 	const tableRows: ReadonlyArray<ReadonlyArray<string>> = packages.map((pkg) => {
 		const changesets = pkg.changesetCount === null ? "—" : String(pkg.changesetCount);
-		return [pkg.name, renderVersionTransition(pkg), renderBumpCell(pkg), changesets];
+		return [pkg.name, renderVersionTransition(pkg), renderBumpCell(pkg), changesets, notesIcon(pkg.releaseNotes)];
 	});
-	const table = GithubMarkdown.table(["Package", "Current → Next", "Bump", "Changesets"], tableRows);
+	const table = GithubMarkdown.table(["Package", "Current → Next", "Bump", "Changesets", "Notes"], tableRows);
 
-	const intro = `**${packages.length} package(s) ready for release notes generation on merge.**`;
+	const intro = `**${packages.length} package(s) ready for release on merge.**`;
 
-	return [header, intro, table].join("\n\n");
+	const sections = packages.map(renderReleaseNotesSection);
+
+	return [header, intro, table, "---", ...sections].join("\n\n");
 }
 
 /**
