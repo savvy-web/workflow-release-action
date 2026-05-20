@@ -426,12 +426,13 @@ describe("toPublishingOutput", () => {
 		expect(output.publishing.packages[0]?.status).toBe("published");
 		expect(output.publishing.packages[0]?.targets[0]?.registry).toBe("https://npm.pkg.github.com/");
 		expect(output.publishing.packages[0]?.attestations.githubAttestationUrl).toBe("https://example.com/att/1");
-		expect(output.publishing.tags[0]).toEqual({ name: "@savvy-web/foo@1.2.0", sha: "abc123" });
+		expect(output.publishing.tags[0]).toEqual({ name: "@savvy-web/foo@1.2.0", sha: "abc123", packageName: null });
 		expect(output.dryRun).toBe(false);
 		expect(output.publishing.releases[0]).toEqual({
 			tag: "@savvy-web/foo@1.2.0",
 			url: "https://example.com/r/1",
 			id: 999,
+			packageName: null,
 		});
 		expect(output.publishing.packages[0]?.attestations.provenanceUrl).toBe("https://example.com/prov/1");
 		expect(output.publishing.packages[0]?.attestations.sbomUrl).toBe("https://example.com/sbom/1");
@@ -520,7 +521,7 @@ describe("toPublishingOutput", () => {
 
 		expect(output.publishing.packages[0]?.status).toBe("published");
 		expect(output.publishing.packages[0]?.targets).toEqual([]);
-		expect(output.publishing.tags[0]).toEqual({ name: "@savvy-web/foo@1.2.0", sha: "" });
+		expect(output.publishing.tags[0]).toEqual({ name: "@savvy-web/foo@1.2.0", sha: "", packageName: null });
 	});
 
 	it("falls back to the 'jsr' string when a target registry is null", () => {

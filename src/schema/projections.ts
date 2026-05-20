@@ -101,7 +101,10 @@ export interface ValidationInput {
 	/** Build-centric per-package validation results (builds → SBOM + targets). */
 	readonly validationPackages: ReadonlyArray<ValidationPackageResult>;
 	/** The unified validation check run, or `null` when none was created. */
-	readonly checkRun: { readonly url: string; readonly conclusion: string } | null;
+	readonly checkRun: {
+		readonly url: string;
+		readonly conclusion: "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required";
+	} | null;
 	readonly dryRun: boolean;
 }
 
@@ -250,6 +253,13 @@ const firstNonEmpty = (
 /**
  * Project a publishing run into a {@link PublishingOutput}.
  *
+ * @remarks
+ * The `packageName` field on each emitted tag and release is provisionally
+ * `null`: the publishing pipeline does not yet propagate the package-to-tag
+ * association through the internal `TagInfo` and `ReleaseInfo` types. The
+ * schema's `packageName: NullOr(string)` admits this, and the publish-chain
+ * port will populate it once the upstream plumbing carries the association.
+ *
  * @param input - The publishing run results to project.
  * @returns The phase-discriminated publishing output struct.
  */
@@ -311,8 +321,10 @@ export const toPublishingOutput = (input: PublishingInput): PublishingOutput => 
 		dryRun: input.dryRun,
 		publishing: {
 			packages,
-			tags: input.tags.map((t) => ({ name: t.name, sha: input.tagShas[t.name] ?? "" })),
-			releases: input.releases.map((r) => ({ tag: r.tag, url: r.url, id: r.id })),
+			// `packageName` is provisionally null: the publish-chain port will
+			// thread the per-tag/per-release package association once upstream.
+			tags: input.tags.map((t) => ({ name: t.name, sha: input.tagShas[t.name] ?? "", packageName: null })),
+			releases: input.releases.map((r) => ({ tag: r.tag, url: r.url, id: r.id, packageName: null })),
 		},
 	};
 };

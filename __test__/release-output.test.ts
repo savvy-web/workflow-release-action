@@ -75,8 +75,10 @@ describe("ReleaseOutput schema", () => {
 					tarballDigest: "sha256:abc",
 				},
 			],
-			tags: [{ name: "@savvy-web/foo@1.2.0", sha: "abc123" }],
-			releases: [{ tag: "@savvy-web/foo@1.2.0", url: "https://example.com/r/1", id: 999 }],
+			tags: [{ name: "@savvy-web/foo@1.2.0", sha: "abc123", packageName: "@savvy-web/foo" }],
+			releases: [
+				{ tag: "@savvy-web/foo@1.2.0", url: "https://example.com/r/1", id: 999, packageName: "@savvy-web/foo" },
+			],
 		},
 	};
 

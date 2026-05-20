@@ -84,12 +84,6 @@ const annotatedSchemaVersionField = Schema.Literal(SCHEMA_VERSION).annotations({
 		"In-band schema version. Bumped only on a breaking JSON-shape change (removed/renamed field, changed type) — additive fields do not bump it.",
 });
 
-const annotatedNoopField = Schema.Boolean.annotations({
-	title: "No-op",
-	description:
-		"True when the phase had nothing to do (no changesets, no release branch updates, no targets to publish).",
-});
-
 const annotatedSucceededField = Schema.Boolean.annotations({
 	title: "Succeeded",
 	description: "True when the phase completed cleanly with no failures.",
@@ -130,7 +124,7 @@ const BranchManagementPayload = Schema.Struct({
 		hasConflicts: Schema.Boolean.annotations({
 			title: "Has conflicts",
 			description:
-				"True when the release branch could not be cleanly fast-forwarded over the target branch and a merge conflict was detected.",
+				"True when the release branch could not be cleanly fast-forwarded over the target branch and a merge conflict was detected. When true, the release branch needs manual conflict resolution before subsequent runs can complete; the action will keep failing on this branch until the conflict is resolved.",
 		}),
 	}).annotations({
 		identifier: "BranchManagementReleaseBranch",
@@ -174,7 +168,8 @@ const BranchManagementPayload = Schema.Struct({
 				bumpType: Schema.Literal("major", "minor", "patch").annotations({
 					identifier: "ChangesetsBumpType",
 					title: "Changeset bump type",
-					description: "The semver bump derived from the changeset(s) for this package: `major`, `minor`, or `patch`.",
+					description:
+						"Phase 1's declared bump type, read from changeset frontmatter: `major`, `minor`, or `patch`. The validation phase emits an extended set under `ValidationBumpType` that adds `new` and `unknown`.",
 				}),
 			}).annotations({
 				identifier: "BranchManagementChangesetPackage",
@@ -183,7 +178,8 @@ const BranchManagementPayload = Schema.Struct({
 			}),
 		).annotations({
 			title: "Changeset packages",
-			description: "The set of packages the observed changesets bump, with the derived semver bump per package.",
+			description:
+				"The set of packages the observed changesets bump, with the derived semver bump per package. Empty array when no changesets were found; the action emits a no-op in that case.",
 		}),
 	}).annotations({
 		identifier: "BranchManagementChangesets",
@@ -205,7 +201,11 @@ export const BranchManagementOutput = Schema.Struct({
 		description: "`branch-management` identifies this as a Phase 1 output.",
 	}),
 	status: StatusLiteral,
-	noop: annotatedNoopField,
+	noop: Schema.Boolean.annotations({
+		title: "No-op",
+		description:
+			"True when no changesets were found and no release-branch updates were necessary; the phase exits without touching the branch or opening a PR.",
+	}),
 	succeeded: annotatedSucceededField,
 	hasFailures: annotatedHasFailuresField,
 	dryRun: annotatedDryRunField,
@@ -215,6 +215,36 @@ export const BranchManagementOutput = Schema.Struct({
 	title: "Branch Management output (Phase 1)",
 	description:
 		"The structured `result` output emitted when the action runs in the branch-management phase (Phase 1). Triggered by a push to the target branch; ensures/creates the release branch and the release PR.",
+	examples: [
+		{
+			$schema: SCHEMA_URL,
+			schemaVersion: SCHEMA_VERSION,
+			phase: "branch-management",
+			status: "success",
+			noop: false,
+			succeeded: true,
+			hasFailures: false,
+			dryRun: false,
+			branchManagement: {
+				releaseBranch: {
+					name: "changeset-release/main",
+					existed: true,
+					created: false,
+					updated: true,
+					hasConflicts: false,
+				},
+				releasePr: {
+					number: 42,
+					url: "https://github.com/savvy-web/example-repo/pull/42",
+					action: "updated",
+				},
+				changesets: {
+					count: 1,
+					packages: [{ name: "@savvy-web/example", bumpType: "minor" }],
+				},
+			},
+		},
+	],
 });
 export type BranchManagementOutput = Schema.Schema.Type<typeof BranchManagementOutput>;
 
@@ -224,8 +254,9 @@ export type BranchManagementOutput = Schema.Schema.Type<typeof BranchManagementO
 const ValidationCheck = Schema.Struct({
 	name: Schema.String.annotations({
 		title: "Check name",
-		description: "Row label for the Validation Checks table.",
-		examples: ["Build Validation", "Publish Validation", "Link Issues from Commits"],
+		description:
+			"Row label for the Validation Checks table. Canonical five-row set today: 'Build Validation', 'Link Issues', 'Publish Validation', 'Release Notes Preview', 'SBOM Preview'.",
+		examples: ["Build Validation", "Link Issues", "Publish Validation", "Release Notes Preview", "SBOM Preview"],
 	}),
 	status: Schema.Literal("pass", "warning", "error").annotations({
 		title: "Check status",
@@ -255,14 +286,15 @@ const ValidationFindingScope = Schema.Struct({
 	package: Schema.NullOr(
 		Schema.String.annotations({
 			title: "Package name",
-			description: "The npm package name the finding concerns. Null for global (non-package-specific) findings.",
+			description:
+				"The npm package name the finding concerns. When non-null, equals the `name` of an entry in `publish.packages[]`. When null, the finding is global to the validation run rather than tied to a specific package.",
 		}),
 	),
 	directory: Schema.NullOr(
 		Schema.String.annotations({
 			title: "Build directory",
 			description:
-				"The build output directory the finding concerns, package-relative. Null for findings not tied to a specific build directory.",
+				"The build output directory the finding concerns, package-relative. When non-null, equals the `directory` of an entry in the owning package's `builds[]`. When null, the finding concerns the package as a whole rather than a specific build.",
 			examples: ["dist/npm", "dist/jsr"],
 		}),
 	),
@@ -277,11 +309,13 @@ const ValidationFindingScope = Schema.Struct({
 const ValidationFinding = Schema.Struct({
 	severity: Schema.Literal("error", "warning").annotations({
 		title: "Finding severity",
-		description: "`error` — fails the check and blocks the release; `warning` — advisory only, does not block.",
+		description:
+			"`error` — fails the validation phase; the release PR is blocked from merging until resolved. `warning` — advisory only and does not block the release; the comment surfaces it for the author to read.",
 	}),
 	check: Schema.String.annotations({
 		title: "Owning check",
-		description: "The validation check that produced this finding (e.g. `Build Validation`, `Publish Validation`).",
+		description:
+			"The validation check that produced this finding (e.g. `Build Validation`, `Publish Validation`). Equal to the `name` of an entry in `checks[]`. Consumers can group findings under their owning check by joining on this value.",
 	}),
 	scope: Schema.NullOr(ValidationFindingScope),
 	message: Schema.String.annotations({
@@ -448,7 +482,8 @@ const ValidationReleaseNotes = Schema.Union(
 	}).annotations({
 		identifier: "ReleaseNotesError",
 		title: "Release notes — error",
-		description: "An error occurred while attempting to read or parse the CHANGELOG.md.",
+		description:
+			"An error occurred while attempting to read or parse the CHANGELOG.md. Non-fatal — the release still proceeds; the GitHub Release body falls back to an auto-generated bump summary.",
 	}),
 ).annotations({
 	identifier: "ValidationReleaseNotes",
@@ -478,7 +513,7 @@ const ValidationPublishPackage = Schema.Struct({
 		identifier: "ValidationBumpType",
 		title: "Bump type",
 		description:
-			"`major`/`minor`/`patch` — standard semver bump derived from the changesets; `new` — the package has never been published before; `unknown` — the bump could not be derived (e.g. changesets unreadable).",
+			"The validation phase's package bump type, derived by diffing the release-branch version against the target-branch version. A superset of `ChangesetsBumpType` (Phase 1 declared bumps): `major`/`minor`/`patch` are the standard semver bumps, and this enum adds `new` (no prior published version exists on the target branch) and `unknown` (could not be determined, typically when the prior version was a pre-release tag).",
 	}),
 	changesetCount: Schema.NullOr(
 		Schema.Number.annotations({
@@ -526,11 +561,13 @@ const ValidationPayload = Schema.Struct({
 	}),
 	checks: Schema.Array(ValidationCheck).annotations({
 		title: "Validation checks",
-		description: "The five-row Validation Checks table — one entry per validation step run this phase.",
+		description:
+			"The five-row Validation Checks table — one entry per validation step run this phase. Canonical names: 'Build Validation', 'Link Issues', 'Publish Validation', 'Release Notes Preview', 'SBOM Preview'.",
 	}),
 	findings: Schema.Array(ValidationFinding).annotations({
 		title: "Findings",
-		description: "Every non-pass outcome surfaced by the validation checks, projected for the release PR comment.",
+		description:
+			"Every non-pass outcome surfaced by the validation checks, projected for the release PR comment. Empty array when no checks produced an error or warning. Findings preserve the order the checks ran in; the comment renderer reorders errors-before-warnings for display.",
 	}),
 	publish: Schema.Struct({
 		npmReady: Schema.Boolean.annotations({
@@ -551,7 +588,8 @@ const ValidationPayload = Schema.Struct({
 		}),
 		packages: Schema.Array(ValidationPublishPackage).annotations({
 			title: "Released packages",
-			description: "The packages being released this run, with their builds and per-target readiness.",
+			description:
+				"The packages being released this run, with their builds and per-target readiness. Empty array when the validation phase ran on a release branch with no published-target packages (every changing package was version-only or private).",
 		}),
 	}).annotations({
 		identifier: "ValidationPublish",
@@ -566,9 +604,18 @@ const ValidationPayload = Schema.Struct({
 				description: "The HTML URL of the unified Release Validation Summary check-run.",
 				examples: ["https://github.com/owner/repo/runs/123456789"],
 			}),
-			conclusion: Schema.String.annotations({
+			conclusion: Schema.Literal(
+				"success",
+				"failure",
+				"neutral",
+				"cancelled",
+				"skipped",
+				"timed_out",
+				"action_required",
+			).annotations({
 				title: "Check-run conclusion",
-				description: "The check-run conclusion (`success`, `failure`, `neutral`, ...).",
+				description:
+					"The GitHub check-run conclusion enum: `success`, `failure`, `neutral`, `cancelled`, `skipped`, `timed_out`, or `action_required`.",
 			}),
 		}).annotations({
 			identifier: "ValidationCheckRun",
@@ -592,7 +639,11 @@ export const ValidationOutput = Schema.Struct({
 		description: "`validation` identifies this as a Phase 2 output.",
 	}),
 	status: StatusLiteral,
-	noop: annotatedNoopField,
+	noop: Schema.Boolean.annotations({
+		title: "No-op",
+		description:
+			"True when the release branch had no packages requiring validation (every changing package was version-only or marked private).",
+	}),
 	succeeded: annotatedSucceededField,
 	hasFailures: annotatedHasFailuresField,
 	dryRun: annotatedDryRunField,
@@ -602,6 +653,101 @@ export const ValidationOutput = Schema.Struct({
 	title: "Validation output (Phase 2)",
 	description:
 		"The structured `result` output emitted when the action runs in the validation phase (Phase 2). Triggered by a push to the release branch; runs build validation, publish dry-runs, release-notes extraction, and emits the unified Release Validation Summary check-run.",
+	examples: [
+		{
+			$schema: SCHEMA_URL,
+			schemaVersion: SCHEMA_VERSION,
+			phase: "validation",
+			status: "success",
+			noop: false,
+			succeeded: true,
+			hasFailures: false,
+			dryRun: false,
+			validation: {
+				buildValidation: { passed: true, packageCount: 1 },
+				checks: [
+					{ name: "Build Validation", status: "pass", outcome: "1/1 package(s) built", url: null },
+					{
+						name: "Link Issues",
+						status: "pass",
+						outcome: "Linked 2 issue(s)",
+						url: "https://github.com/savvy-web/example-repo/runs/123",
+					},
+					{
+						name: "Publish Validation",
+						status: "pass",
+						outcome: "2/2 target(s) ready",
+						url: "https://github.com/savvy-web/example-repo/runs/123",
+					},
+					{
+						name: "Release Notes Preview",
+						status: "pass",
+						outcome: "Found release notes for 1 package(s)",
+						url: "https://github.com/savvy-web/example-repo/runs/123",
+					},
+					{
+						name: "SBOM Preview",
+						status: "pass",
+						outcome: "1/1 SBOM(s) NTIA-compliant",
+						url: "https://github.com/savvy-web/example-repo/runs/123",
+					},
+				],
+				findings: [],
+				publish: {
+					npmReady: true,
+					githubPackagesReady: true,
+					totalTargets: 2,
+					readyTargets: 2,
+					packages: [
+						{
+							name: "@savvy-web/example",
+							version: "1.2.0",
+							baseVersion: "1.1.0",
+							bumpType: "minor",
+							changesetCount: 1,
+							ready: true,
+							versionOnly: false,
+							builds: [
+								{
+									directory: "dist/npm",
+									packedBytes: 716,
+									unpackedBytes: 2300,
+									fileCount: 5,
+									sbom: {
+										componentCount: 3,
+										ntiaCompliant: true,
+										missingNtiaFields: [],
+									},
+									targets: [
+										{
+											registry: "https://registry.npmjs.org/",
+											status: "ready",
+											access: "public",
+											provenance: true,
+										},
+										{
+											registry: "https://npm.pkg.github.com/",
+											status: "ready",
+											access: "public",
+											provenance: false,
+										},
+									],
+								},
+							],
+							releaseNotes: {
+								status: "found",
+								content: "### Minor Changes\n\n- Added the springLaunch API.",
+							},
+						},
+					],
+				},
+				checkRun: {
+					url: "https://github.com/savvy-web/example-repo/runs/124",
+					conclusion: "success",
+				},
+			},
+		},
+	],
 });
 export type ValidationOutput = Schema.Schema.Type<typeof ValidationOutput>;
 
@@ -616,7 +762,7 @@ const PublishTarget = Schema.Struct({
 	status: Schema.Literal("published", "skipped", "failed").annotations({
 		title: "Publish status",
 		description:
-			"`published` — the package was successfully published to this target; `skipped` — the publish was intentionally not attempted (e.g. dry-run, no token, already-published); `failed` — the publish was attempted and failed.",
+			"`published` — the package was successfully published to this target; `skipped` — the publish was intentionally not attempted (e.g. dry-run, no token, already-published); `failed` — the publish call returned an error and the package was not published to this target. A `failed` target means the underlying error is in the per-target `error` field, and the run's overall `hasFailures` flag is set.",
 	}),
 	registryUrl: Schema.NullOr(
 		Schema.String.annotations({
@@ -657,7 +803,7 @@ const PublishPackage = Schema.Struct({
 			identifier: "PublishPackageSkipReason",
 			title: "Skip reason",
 			description:
-				"`already-published-identical` — the version is already published and the tarball digest matches what would be published; `already-published-unknown` — the version is already published but the on-registry tarball digest could not be compared. Null when the package was not skipped.",
+				"`already-published-identical` — the version is already published and the tarball digest matches what would be published; `already-published-unknown` — the version is already published but the on-registry tarball digest could not be confirmed (advisory only — verify by hand if tarball-digest parity matters; the publish was skipped because the registry has the version but its identity could not be confirmed). Null when the package was not skipped.",
 		}),
 	),
 	targets: Schema.Array(PublishTarget).annotations({
@@ -695,7 +841,8 @@ const PublishPackage = Schema.Struct({
 		Schema.String.annotations({
 			title: "Tarball digest",
 			description:
-				"Integrity hash of the tarball as published (the `dist.integrity` field on the npm registry, typically `sha512-...`). Null when the publish did not produce a comparable digest (failed/skipped).",
+				"Integrity hash of the published tarball, expressed as Subresource-Integrity-style `sha512-<base64>`. `null` for skipped or failed publishes.",
+			examples: ["sha512-Vb1g8tXp4l8a9bC..."],
 		}),
 	),
 }).annotations({
@@ -705,54 +852,72 @@ const PublishPackage = Schema.Struct({
 		"A package that was processed by the publishing phase, with its per-target outcomes, attestation URLs, and the integrity digest of the published tarball.",
 });
 
+/** A git tag created by the publishing phase. */
+export const PublishingTag = Schema.Struct({
+	name: Schema.String.annotations({
+		title: "Tag name",
+		description: "The git tag name created for the release.",
+		examples: ["v1.2.3", "@savvy-web/example@1.2.3"],
+	}),
+	sha: Schema.String.annotations({
+		title: "Tag SHA",
+		description: "The commit SHA the tag points at.",
+	}),
+	packageName: Schema.NullOr(
+		Schema.String.annotations({
+			title: "Package name",
+			description:
+				"The package name this tag belongs to. Non-null for per-package tags in multi-package release mode (the tag name itself is the npm-style `@scope/pkg@version`). Null for an aggregated tag covering every released package (the `vSEMVER` shape in fixed-release mode).",
+		}),
+	),
+}).annotations({
+	identifier: "PublishingTag",
+	title: "Release tag",
+	description: "A git tag created for the release.",
+});
+
+/** A GitHub release created by the publishing phase. */
+export const PublishingRelease = Schema.Struct({
+	tag: Schema.String.annotations({
+		title: "Tag",
+		description: "The git tag the GitHub release is attached to.",
+	}),
+	url: Schema.String.annotations({
+		title: "Release URL",
+		description: "The HTML URL of the GitHub release.",
+	}),
+	id: Schema.Number.annotations({
+		title: "Release ID",
+		description: "The numeric GitHub release ID.",
+	}),
+	packageName: Schema.NullOr(
+		Schema.String.annotations({
+			title: "Package name",
+			description:
+				"The package name this release belongs to. Non-null for per-package releases in multi-package release mode (the release pairs with the tag of the same `tag` value). Null for an aggregated release covering every released package (the `vSEMVER` shape in fixed-release mode).",
+		}),
+	),
+}).annotations({
+	identifier: "PublishingRelease",
+	title: "GitHub release",
+	description: "A GitHub release created by the publishing phase.",
+});
+
 const PublishingPayload = Schema.Struct({
 	packages: Schema.Array(PublishPackage).annotations({
 		title: "Published packages",
-		description: "The packages processed by the publishing phase, with their per-target outcomes.",
+		description:
+			"The packages processed by the publishing phase, with their per-target outcomes. Empty array when there were no packages to publish (the action emits a no-op). In a dry-run, the array is populated with simulated results — each package's `status` is the outcome the action would produce on a real run.",
 	}),
-	tags: Schema.Array(
-		Schema.Struct({
-			name: Schema.String.annotations({
-				title: "Tag name",
-				description: "The git tag name created for the release.",
-				examples: ["v1.2.3", "@savvy-web/example@1.2.3"],
-			}),
-			sha: Schema.String.annotations({
-				title: "Tag SHA",
-				description: "The commit SHA the tag points at.",
-			}),
-		}).annotations({
-			identifier: "PublishingTag",
-			title: "Release tag",
-			description: "A git tag created for the release.",
-		}),
-	).annotations({
+	tags: Schema.Array(PublishingTag).annotations({
 		title: "Release tags",
 		description:
-			"Git tags created by the publishing phase (one per released package or one for the whole release, depending on workflow).",
+			"Git tags created by the publishing phase (one per released package or one for the whole release, depending on workflow). Empty array when no git tags were created — either the run was a no-op, or it failed before reaching the tagging step. A populated array means tags were created on the release commit.",
 	}),
-	releases: Schema.Array(
-		Schema.Struct({
-			tag: Schema.String.annotations({
-				title: "Tag",
-				description: "The git tag the GitHub release is attached to.",
-			}),
-			url: Schema.String.annotations({
-				title: "Release URL",
-				description: "The HTML URL of the GitHub release.",
-			}),
-			id: Schema.Number.annotations({
-				title: "Release ID",
-				description: "The numeric GitHub release ID.",
-			}),
-		}).annotations({
-			identifier: "PublishingRelease",
-			title: "GitHub release",
-			description: "A GitHub release created by the publishing phase.",
-		}),
-	).annotations({
+	releases: Schema.Array(PublishingRelease).annotations({
 		title: "GitHub releases",
-		description: "GitHub releases created by the publishing phase.",
+		description:
+			"GitHub releases created by the publishing phase. Empty array when no GitHub Releases were created — same conditions as `tags`. The release entries pair 1:1 with tags by `tag` name (and `packageName`).",
 	}),
 }).annotations({
 	identifier: "PublishingPayload",
@@ -769,7 +934,11 @@ export const PublishingOutput = Schema.Struct({
 		description: "`publishing` identifies this as a Phase 3 output.",
 	}),
 	status: StatusLiteral,
-	noop: annotatedNoopField,
+	noop: Schema.Boolean.annotations({
+		title: "No-op",
+		description:
+			"True when there were no publish targets resolved — every released package was version-only or was already published at the same digest; nothing was sent to any registry.",
+	}),
 	succeeded: annotatedSucceededField,
 	hasFailures: annotatedHasFailuresField,
 	dryRun: annotatedDryRunField,
@@ -779,6 +948,63 @@ export const PublishingOutput = Schema.Struct({
 	title: "Publishing output (Phase 3)",
 	description:
 		"The structured `result` output emitted when the action runs in the publishing phase (Phase 3). Triggered by the merge of the release PR; publishes to every configured registry, generates SBOM/provenance attestations, and creates GitHub releases and tags.",
+	examples: [
+		{
+			$schema: SCHEMA_URL,
+			schemaVersion: SCHEMA_VERSION,
+			phase: "publishing",
+			status: "success",
+			noop: false,
+			succeeded: true,
+			hasFailures: false,
+			dryRun: false,
+			publishing: {
+				packages: [
+					{
+						name: "@savvy-web/example",
+						version: "1.2.0",
+						status: "published",
+						skipReason: null,
+						targets: [
+							{
+								registry: "https://registry.npmjs.org/",
+								status: "published",
+								registryUrl: "https://www.npmjs.com/package/@savvy-web/example/v/1.2.0",
+								error: null,
+							},
+							{
+								registry: "https://npm.pkg.github.com/",
+								status: "published",
+								registryUrl: "https://github.com/savvy-web/example-repo/packages/12345",
+								error: null,
+							},
+						],
+						attestations: {
+							provenanceUrl: "https://search.sigstore.dev/?logIndex=12345",
+							sbomUrl: "https://github.com/savvy-web/example-repo/attestations/123",
+							githubAttestationUrl: "https://github.com/savvy-web/example-repo/attestations/124",
+						},
+						tarballDigest: "sha512-Vb1g8tXp4l8a9bC...",
+					},
+				],
+				tags: [
+					{
+						name: "@savvy-web/example@1.2.0",
+						sha: "abc123def456abc123def456abc123def456abc1",
+						packageName: "@savvy-web/example",
+					},
+				],
+				releases: [
+					{
+						tag: "@savvy-web/example@1.2.0",
+						url: "https://github.com/savvy-web/example-repo/releases/tag/@savvy-web/example@1.2.0",
+						id: 12345678,
+						packageName: "@savvy-web/example",
+					},
+				],
+			},
+		},
+	],
 });
 export type PublishingOutput = Schema.Schema.Type<typeof PublishingOutput>;
 
@@ -789,6 +1015,6 @@ export const ReleaseOutput = Schema.Union(BranchManagementOutput, ValidationOutp
 	identifier: "ReleaseOutput",
 	title: "Silk Release Action output",
 	description:
-		"The structured `result` action output. Discriminated by `phase` into three variants: Phase 1 (`branch-management`) on a push to the target branch, Phase 2 (`validation`) on a push to the release branch, and Phase 3 (`publishing`) on the merge of the release PR. Every variant carries the same shared top-level fields (`$schema`, `schemaVersion`, `phase`, `status`, `noop`, `succeeded`, `hasFailures`, `dryRun`) plus a phase-specific payload.",
+		'The phase-discriminated release output contract. Use `phase` to discriminate to the right variant. Four orthogonal state signals (`status`, `noop`, `succeeded`, `hasFailures`) are derived from the same underlying outcome and obey a fixed relationship: `noop` is true when the phase had nothing to do (no changesets, no release-branch updates pending, or no publish targets resolved) — in this case `succeeded` is true and `hasFailures` is false; `status` is `"no-op"`. When the phase produced its intended work without errors, `noop` is false, `succeeded` is true, `hasFailures` is false, and `status` is `"success"`. When the phase produced any failure, `noop` is false, `succeeded` is false, `hasFailures` is true, and `status` is `"partial"`. The `status` value `"failed"` is reserved for an impossible flag combination and is never emitted by the current projections; treat `"partial"` as the canonical failure label. `status` is a coarse label for logs and summaries; the three booleans are the machine contract. Every variant carries the same shared top-level fields (`$schema`, `schemaVersion`, `phase`, `status`, `noop`, `succeeded`, `hasFailures`, `dryRun`) plus a phase-specific payload.',
 });
 export type ReleaseOutput = Schema.Schema.Type<typeof ReleaseOutput>;
