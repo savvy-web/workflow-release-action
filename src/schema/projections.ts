@@ -256,11 +256,11 @@ const firstNonEmpty = (
  * Project a publishing run into a {@link PublishingOutput}.
  *
  * @remarks
- * The `packageName` field on each emitted tag and release is provisionally
- * `null`: the publishing pipeline does not yet propagate the package-to-tag
- * association through the internal `TagInfo` and `ReleaseInfo` types. The
- * schema's `packageName: NullOr(string)` admits this, and the publish-chain
- * port will populate it once the upstream plumbing carries the association.
+ * Each emitted tag carries its `packageName` from the internal `TagInfo`
+ * (a single name, or a comma-joined list for fixed/linked groups). Each
+ * release inherits the `packageName` of the tag it shares a name with; a
+ * release with no matching tag falls back to `null`, which the schema's
+ * `packageName: NullOr(string)` admits.
  *
  * @param input - The publishing run results to project.
  * @returns The phase-discriminated publishing output struct.
@@ -347,10 +347,14 @@ export const toPublishingOutput = (input: PublishingInput): PublishingOutput => 
 		dryRun: input.dryRun,
 		publishing: {
 			packages,
-			// `packageName` is provisionally null: the publish-chain port will
-			// thread the per-tag/per-release package association once upstream.
-			tags: input.tags.map((t) => ({ name: t.name, sha: input.tagShas[t.name] ?? "", packageName: null })),
-			releases: input.releases.map((r) => ({ tag: r.tag, url: r.url, id: r.id, packageName: null })),
+			// `TagInfo` carries the per-tag package association (a single name, or
+			// a comma-joined list for fixed/linked groups). Releases key on the tag
+			// name, so each release inherits its tag's `packageName` via that join.
+			tags: input.tags.map((t) => ({ name: t.name, sha: input.tagShas[t.name] ?? "", packageName: t.packageName })),
+			releases: input.releases.map((r) => {
+				const matchingTag = input.tags.find((t) => t.name === r.tag);
+				return { tag: r.tag, url: r.url, id: r.id, packageName: matchingTag?.packageName ?? null };
+			}),
 		},
 	};
 };
